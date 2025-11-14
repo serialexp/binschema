@@ -2138,10 +2138,10 @@ function generateDecodeFieldCoreImpl(
     ? field.endianness
     : globalEndianness;
 
-  // Determine target: array item variables (containing '_item') are used directly,
-  // otherwise they're accessed as properties of 'value'
+  // Determine target: array item variables (ending with '_item' or containing '_item.')
+  // are used directly, otherwise they're accessed as properties of 'value'
   // E.g., "shapes_item" or "shapes_item.vertices" should not be prefixed with "value."
-  const isArrayItem = fieldName.includes("_item");
+  const isArrayItem = fieldName.endsWith("_item") || fieldName.includes("_item.");
   const target = isArrayItem ? fieldName : `value.${fieldName}`;
 
   switch (field.type) {
@@ -2434,8 +2434,9 @@ function generateDecodeOptional(
  * Get the target path for a field (handles array item variables)
  */
 function getTargetPath(fieldName: string): string {
-  // Array item variables contain '_item' and should not be prefixed with 'value.'
-  return fieldName.includes("_item") ? fieldName : `value.${fieldName}`;
+  // Array item variables (ending with '_item' or containing '_item.') should not be prefixed with 'value.'
+  const isArrayItem = fieldName.endsWith("_item") || fieldName.includes("_item.");
+  return isArrayItem ? fieldName : `value.${fieldName}`;
 }
 
 /**

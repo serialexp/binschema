@@ -42,6 +42,36 @@ TEST_REPORT=json go test -v ./test            # JSON output for scripting
 
 **⚠️ Important**: Please use the environment variable flags above for analyzing test results and filtering tests. Custom shell commands are fragile and hard to maintain. If you need a report format that doesn't exist, add it to `go/test/test_summary.go` and document it here.
 
+## Commit Messages
+
+Use conventional commits format for all commits:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+
+**Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `refactor`: Code refactoring without changing behavior
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks (deps, build, etc.)
+
+**Examples:**
+```bash
+feat(computed-fields): add first/last array selector parsing
+fix(schema): preserve getters in Zod 4 recursive schemas
+docs(zod): document recursive schema behavior in Zod 4
+refactor(generator): extract array encoding to separate module
+test(zip): add tests for empty array correlation
+chore(deps): update zod to 4.1.12
+```
+
 ## Build Commands
 
 ```bash
