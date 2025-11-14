@@ -44,17 +44,46 @@ TEST_REPORT=json go test -v ./test            # JSON output for scripting
 
 ### TypeScript Test Debugging
 
+**IMPORTANT: Always use DEBUG_TEST for debugging test failures before making code changes.**
+
 For verbose test output with detailed encoding/decoding information:
 ```bash
-DEBUG_TEST=1 npm test                           # Debug all tests
-DEBUG_TEST=1 npm test -- --filter=test_name    # Debug specific test
+DEBUG_TEST=1 npm test                           # Debug all tests (very verbose)
+DEBUG_TEST=1 npm test -- --filter=test_name    # Debug specific test (recommended)
 ```
 
-This will output:
+**Output includes:**
 - Input values being encoded
 - Expected vs actual bytes/bits
-- Match status
-- Exception stack traces
+- Match status (true/false)
+- Full exception stack traces
+
+**When to use DEBUG_TEST:**
+1. **Before fixing a failing test** - Always run with DEBUG_TEST to understand the failure
+2. **When test output is unclear** - "Exception: Error: X" messages need stack traces
+3. **Investigating byte mismatches** - See exactly what was encoded vs expected
+4. **Validating assumptions** - Check if encoding works but decoding fails (or vice versa)
+5. **After making generator changes** - Verify the generated code produces correct output
+
+**Best practices:**
+- Always filter to a specific test (`--filter=test_name`) to avoid overwhelming output
+- Compare expected vs actual bytes first - often reveals the root cause immediately
+- Check if exception happens during encoding or decoding
+- Look for off-by-one errors in byte positions (common with discriminator fields)
+
+**Example workflow:**
+```bash
+# 1. Identify failing test
+npm test | grep "✗"
+
+# 2. Debug with verbose output
+DEBUG_TEST=1 npm test -- --filter=first_element_position
+
+# 3. Analyze output to find root cause
+# 4. Make targeted fix
+# 5. Verify fix works
+npm test -- --filter=first_element_position
+```
 
 ## Commit Messages
 
