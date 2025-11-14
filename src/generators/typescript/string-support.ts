@@ -4,6 +4,7 @@
  */
 
 import { Endianness } from "../../schema/binary-schema.js";
+import { ARRAY_ITER_SUFFIX } from "./shared.js";
 
 /**
  * Generate encoding code for string field (class-based style).
@@ -194,8 +195,8 @@ export function generateDecodeString(
     } else {
       // Regular field reference - need to account for inline type decoding and array items
       // If fieldName is "local_file.filename", lengthField should be resolved relative to "local_file"
-      // If fieldName is "entries_item.filename", use "entries_item" directly (no "value." prefix)
-      const isArrayItem = fieldName.includes('_item');
+      // If fieldName is "entries__iter.filename", use "entries__iter" directly (no "value." prefix)
+      const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
       const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
       const fullLengthPath = parentPath + lengthField;
 

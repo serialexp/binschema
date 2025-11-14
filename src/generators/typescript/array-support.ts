@@ -6,6 +6,7 @@
 import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
 import { sanitizeVarName } from "./type-utils.js";
 import { detectSameIndexTracking } from "./computed-fields.js";
+import { ARRAY_ITER_SUFFIX } from "./shared.js";
 
 /**
  * Calculate the size of a fixed-size primitive type item for length_prefixed_items.
@@ -94,7 +95,7 @@ export function generateEncodeArray(
 
   // Write array elements
   // Use unique variable name to avoid shadowing in nested arrays
-  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + "_item";
+  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
 
   // Track if we encounter a terminal variant (to skip null terminator)
   const hasTerminalVariants = field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants) && field.terminal_variants.length > 0;
@@ -338,7 +339,7 @@ export function generateDecodeArray(
       // Regular field reference - need to account for inline type decoding and array items
       // If fieldName is "local_file.entries", lengthField should be resolved relative to "local_file"
       // If fieldName is "entries_item.data", use "entries_item" directly (no "value." prefix)
-      const isArrayItem = fieldName.includes('_item');
+      const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
       const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
       const fullLengthPath = parentPath + lengthField;
 
@@ -416,7 +417,7 @@ export function generateDecodeArray(
 
   // Read array item
   // Use unique variable name to avoid shadowing in nested arrays
-  const itemVar = fieldName.replace(/[.\[\]]/g, "_") + "_item";
+  const itemVar = fieldName.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
   const itemDecodeCode = generateDecodeFieldCore(
     field.items as Field,
     schema,
@@ -488,7 +489,7 @@ export function generateFunctionalEncodeArray(
   }
 
   // Write array elements
-  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + "_item";
+  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
   code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
   const itemType = field.items?.type || "unknown";
   if (itemType === "uint8") {

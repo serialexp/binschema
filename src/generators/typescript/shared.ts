@@ -52,6 +52,12 @@ export const JS_RESERVED_KEYWORDS = new Set([
 export const BACK_REFERENCE_TYPE_NAMES = new Set(["back_reference"]);
 
 /**
+ * Suffix for generated array iterator variables
+ * Using double underscore to avoid conflicts with user-defined field names
+ */
+export const ARRAY_ITER_SUFFIX = "__iter";
+
+/**
  * Field type metadata extracted from FieldSchema
  */
 export const FIELD_TYPE_METADATA: Map<string, ExtractedMetadata> = (() => {

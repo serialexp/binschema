@@ -1,5 +1,6 @@
 import { BinarySchema, TypeDef, Field, Endianness } from "../schema/binary-schema.js";
 import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
+import { ARRAY_ITER_SUFFIX } from "./typescript/shared.js";
 import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName } from "./typescript/type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation.js";
 import { generateRuntimeHelpers } from "./typescript/runtime-helpers.js";
@@ -2138,10 +2139,10 @@ function generateDecodeFieldCoreImpl(
     ? field.endianness
     : globalEndianness;
 
-  // Determine target: array item variables (ending with '_item' or containing '_item.')
+  // Determine target: array item variables (ending with ARRAY_ITER_SUFFIX or containing ARRAY_ITER_SUFFIX.)
   // are used directly, otherwise they're accessed as properties of 'value'
-  // E.g., "shapes_item" or "shapes_item.vertices" should not be prefixed with "value."
-  const isArrayItem = fieldName.endsWith("_item") || fieldName.includes("_item.");
+  // E.g., "shapes__iter" or "shapes__iter.vertices" should not be prefixed with "value."
+  const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
   const target = isArrayItem ? fieldName : `value.${fieldName}`;
 
   switch (field.type) {
@@ -2434,8 +2435,8 @@ function generateDecodeOptional(
  * Get the target path for a field (handles array item variables)
  */
 function getTargetPath(fieldName: string): string {
-  // Array item variables (ending with '_item' or containing '_item.') should not be prefixed with 'value.'
-  const isArrayItem = fieldName.endsWith("_item") || fieldName.includes("_item.");
+  // Array item variables (ending with ARRAY_ITER_SUFFIX or containing ARRAY_ITER_SUFFIX.) should not be prefixed with 'value.'
+  const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
   return isArrayItem ? fieldName : `value.${fieldName}`;
 }
 
@@ -2570,7 +2571,7 @@ function generateDecodeTypeReference(
 
     // Read all sequence fields to pass to decoder
     const sequenceFields = getTypeFields(typeDef);
-    const isArrayItem = fieldName.includes("_item");
+    const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
 
     // Create a temporary variable for the decoded data
     const tempVar = fieldName.replace(/\./g, "_") + "_data";

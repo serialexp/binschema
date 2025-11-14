@@ -5,6 +5,7 @@
 
 import { BinarySchema, Field, Endianness } from "../../schema/binary-schema.js";
 import { getTypeFields } from "./type-utils.js";
+import { ARRAY_ITER_SUFFIX } from "./shared.js";
 
 /**
  * Resolve a computed field target path to the actual value path.
@@ -343,9 +344,9 @@ export function generateEncodeComputedField(
       // For inlined encoding, look for the parent object variable (e.g., value_sections_item)
 
       // Try to infer the item variable name from the schema context
-      // For computed fields in choice types, the valuePath pattern is typically: value_arrayname_item
+      // For computed fields in choice types, the valuePath pattern is typically: value_arrayname__iter
       // We can infer this from the arrayPath
-      const itemVarPattern = `value_${arrayPath}_item`;
+      const itemVarPattern = `value_${arrayPath}${ARRAY_ITER_SUFFIX}`;
 
       code += `${indent}// Determine current item type to use correct correlation index\n`;
       code += `${indent}const currentType = ${itemVarPattern}.type;\n`;
