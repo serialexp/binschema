@@ -10,6 +10,7 @@
  */
 
 import { BinarySchema, Field, TypeDef } from "./binary-schema.js";
+import { ARRAY_ITER_SUFFIX } from "../generators/typescript/shared.js";
 
 export interface ValidationError {
   path: string;
@@ -28,6 +29,14 @@ const BUILT_IN_TYPES = [
   "bit", "int", "uint8", "uint16", "uint32", "uint64",
   "int8", "int16", "int32", "int64", "float32", "float64",
   "string", "array", "optional", "bitfield", "discriminated_union", "back_reference"
+];
+
+/**
+ * Reserved patterns that cannot appear in user-defined field names
+ * These are used internally by code generators
+ */
+const RESERVED_FIELD_PATTERNS = [
+  ARRAY_ITER_SUFFIX  // Used by TypeScript generator for array iterator variables
 ];
 
 /**
@@ -144,11 +153,22 @@ function validateTypeDef(
   const fields = getTypeFields(typeDef);
   const fieldsKey = 'sequence';
 
-  // Check for duplicate field names (sequence)
+  // Check for duplicate field names and reserved patterns (sequence)
   const fieldNames = new Set<string>();
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
     if ('name' in field && field.name) {
+      // Check for reserved patterns
+      for (const reservedPattern of RESERVED_FIELD_PATTERNS) {
+        if (field.name.includes(reservedPattern)) {
+          errors.push({
+            path: `types.${typeName}.${fieldsKey}[${i}]`,
+            message: `Field name '${field.name}' contains reserved pattern '${reservedPattern}' (reserved for internal use by code generators)`
+          });
+        }
+      }
+
+      // Check for duplicates
       if (fieldNames.has(field.name)) {
         errors.push({
           path: `types.${typeName}.${fieldsKey}[${i}]`,
@@ -177,14 +197,26 @@ function validateTypeDef(
     for (let i = 0; i < typeDefAny.instances.length; i++) {
       const instance = typeDefAny.instances[i];
 
-      // Check for duplicate instance names (with sequence fields)
-      if (instance.name && fieldNames.has(instance.name)) {
-        errors.push({
-          path: `types.${typeName}.instances[${i}]`,
-          message: `Duplicate field name '${instance.name}' conflicts with sequence field (field names must be unique)`
-        });
+      if (instance.name) {
+        // Check for reserved patterns
+        for (const reservedPattern of RESERVED_FIELD_PATTERNS) {
+          if (instance.name.includes(reservedPattern)) {
+            errors.push({
+              path: `types.${typeName}.instances[${i}]`,
+              message: `Instance field name '${instance.name}' contains reserved pattern '${reservedPattern}' (reserved for internal use by code generators)`
+            });
+          }
+        }
+
+        // Check for duplicate instance names (with sequence fields)
+        if (fieldNames.has(instance.name)) {
+          errors.push({
+            path: `types.${typeName}.instances[${i}]`,
+            message: `Duplicate field name '${instance.name}' conflicts with sequence field (field names must be unique)`
+          });
+        }
+        fieldNames.add(instance.name);
       }
-      fieldNames.add(instance.name);
 
       validatePositionField(instance, `types.${typeName}.instances[${i}]`, schema, errors, typeName, fields, typeDefAny.instances);
     }
