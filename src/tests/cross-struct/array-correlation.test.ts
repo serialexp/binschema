@@ -203,6 +203,7 @@ export const firstElementPositionTestSuite = defineTestSuite({
     types: {
       "FileData": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
           { name: "file_id", type: "uint8" },
           {
             name: "content",
@@ -215,6 +216,7 @@ export const firstElementPositionTestSuite = defineTestSuite({
       },
       "Directory": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
           { name: "dir_id", type: "uint8" },
           {
             name: "first_file_offset",
@@ -253,16 +255,19 @@ export const firstElementPositionTestSuite = defineTestSuite({
         sections: [
           {
             type: "Directory",
+            type_tag: 0x01,
             dir_id: 1
             // first_file_offset computed to point to first FileData
           },
           {
             type: "FileData",
+            type_tag: 0x02,
             file_id: 10,
             content: [0xAA, 0xBB, 0xCC]
           },
           {
             type: "FileData",
+            type_tag: 0x02,
             file_id: 20,
             content: [0xDD, 0xEE, 0xFF]
           }
@@ -272,16 +277,19 @@ export const firstElementPositionTestSuite = defineTestSuite({
         sections: [
           {
             type: "Directory",
+            type_tag: 0x01,
             dir_id: 1,
-            first_file_offset: 5  // Position of first FileData (after Directory: 1 + 4 bytes)
+            first_file_offset: 6  // Position of first FileData (after Directory: 1 type_tag + 1 dir_id + 4 first_file_offset bytes)
           },
           {
             type: "FileData",
+            type_tag: 0x02,
             file_id: 10,
             content: [0xAA, 0xBB, 0xCC]
           },
           {
             type: "FileData",
+            type_tag: 0x02,
             file_id: 20,
             content: [0xDD, 0xEE, 0xFF]
           }
@@ -289,12 +297,15 @@ export const firstElementPositionTestSuite = defineTestSuite({
       },
       bytes: [
         // sections[0]: Directory (starts at position 0)
+        0x01,  // type_tag (discriminator)
         1,  // dir_id
-        5, 0, 0, 0,  // first_file_offset = 5 (AUTO-COMPUTED)
-        // sections[1]: FileData (starts at position 5)
+        6, 0, 0, 0,  // first_file_offset = 6 (AUTO-COMPUTED)
+        // sections[1]: FileData (starts at position 6)
+        0x02,  // type_tag (discriminator)
         10,  // file_id
         0xAA, 0xBB, 0xCC,  // content
-        // sections[2]: FileData (starts at position 9)
+        // sections[2]: FileData (starts at position 11)
+        0x02,  // type_tag (discriminator)
         20,  // file_id
         0xDD, 0xEE, 0xFF  // content
       ]
