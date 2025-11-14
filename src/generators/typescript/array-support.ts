@@ -280,8 +280,8 @@ export function generateEncodeArray(
     code += `${indent}  }\n`;
   }
 
-  // Increment correlation index counter for same_index tracking
-  if (trackingTypes && field.items?.type === "choice") {
+  // Increment correlation index counter for same_index tracking only
+  if (sameIndexTypes.size > 0 && field.items?.type === "choice") {
     code += `${indent}  // Increment correlation index for this choice type\n`;
     const choices = field.items.choices || [];
     for (const choice of choices) {
