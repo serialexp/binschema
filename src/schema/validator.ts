@@ -902,8 +902,80 @@ function validateChoice(
     }
   }
 
-  // TODO: Validate that all choice types have a common discriminator field
-  // This will be implemented when we add the auto-detection logic
+  // Validate that all choice types have a common discriminator field
+  // This is required for the decoder to determine which variant to decode
+  const firstChoiceType = element.choices[0].type;
+  const firstChoiceTypeDef = schema.types[firstChoiceType];
+
+  if (!firstChoiceTypeDef || isTypeAlias(firstChoiceTypeDef)) {
+    // If first type doesn't exist or is an alias, skip discriminator validation
+    // (error already reported above)
+    return;
+  }
+
+  const firstTypeFields = getTypeFields(firstChoiceTypeDef);
+  if (firstTypeFields.length === 0) {
+    errors.push({
+      path,
+      message: `Choice type '${firstChoiceType}' has no fields. Choice variant types must have a common discriminator field as their first field (e.g., type_tag: uint8)`
+    });
+    return;
+  }
+
+  const discriminatorField = firstTypeFields[0];
+  if (!('name' in discriminatorField) || !discriminatorField.name) {
+    errors.push({
+      path,
+      message: `First field of choice type '${firstChoiceType}' has no name. Choice variants must have a named discriminator field as their first field (e.g., type_tag: uint8)`
+    });
+    return;
+  }
+
+  const discriminatorName = discriminatorField.name;
+  const discriminatorType = (discriminatorField as any).type;
+
+  if (discriminatorType !== 'uint8') {
+    errors.push({
+      path,
+      message: `Discriminator field '${discriminatorName}' in choice type '${firstChoiceType}' must be of type 'uint8', got '${discriminatorType}'`
+    });
+  }
+
+  // Validate all other choice types have the same discriminator field
+  for (let i = 1; i < element.choices.length; i++) {
+    const choiceType = element.choices[i].type;
+    const choiceTypeDef = schema.types[choiceType];
+
+    if (!choiceTypeDef || isTypeAlias(choiceTypeDef)) {
+      continue; // Error already reported
+    }
+
+    const choiceFields = getTypeFields(choiceTypeDef);
+    if (choiceFields.length === 0) {
+      errors.push({
+        path: `${path}.choices[${i}]`,
+        message: `Choice type '${choiceType}' has no fields. All choice variants must have the same discriminator field '${discriminatorName}' as their first field`
+      });
+      continue;
+    }
+
+    const choiceDiscriminator = choiceFields[0];
+    if (!('name' in choiceDiscriminator) || choiceDiscriminator.name !== discriminatorName) {
+      errors.push({
+        path: `${path}.choices[${i}]`,
+        message: `Choice type '${choiceType}' must have '${discriminatorName}' as its first field (to match other choice variants). Got '${choiceDiscriminator.name || '(unnamed)'}'`
+      });
+      continue;
+    }
+
+    const choiceDiscriminatorType = (choiceDiscriminator as any).type;
+    if (choiceDiscriminatorType !== discriminatorType) {
+      errors.push({
+        path: `${path}.choices[${i}]`,
+        message: `Discriminator field '${discriminatorName}' in choice type '${choiceType}' must be of type '${discriminatorType}', got '${choiceDiscriminatorType}'`
+      });
+    }
+  }
 }
 
 function validateBackReference(
