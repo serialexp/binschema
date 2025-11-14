@@ -150,23 +150,50 @@ const SignedIntFieldSchema = z.object({
 /**
  * Fixed-width unsigned integers (syntactic sugar for bit fields)
  */
-const Uint8FieldSchema = z.object({
-  name: z.string().meta({
-    description: "Field name"
+const Uint8FieldSchema = z.union([
+  // Const field (discriminator) - mutually exclusive with computed
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint8").meta({
+      description: "Field type (always 'uint8')"
+    }),
+    const: z.number().int().min(0).max(0xFF).meta({
+      description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   }),
-  type: z.literal("uint8").meta({
-    description: "Field type (always 'uint8')"
+  // Computed field - mutually exclusive with const
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint8").meta({
+      description: "Field type (always 'uint8')"
+    }),
+    computed: ComputedFieldSchema.meta({
+      description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   }),
-  const: z.number().int().min(0).max(0xFF).optional().meta({
-    description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
-  }),
-  computed: ComputedFieldSchema.optional().meta({
-    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
-  }),
-  description: z.string().optional().meta({
-    description: "Human-readable description of this field"
-  }),
-}).meta({
+  // Plain field (neither const nor computed)
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint8").meta({
+      description: "Field type (always 'uint8')"
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
+  })
+]).meta({
   title: "8-bit Unsigned Integer",
   description: "Fixed-width 8-bit unsigned integer (0-255). Single byte, no endianness concerns.",
   use_for: "Message type codes, flags, single-byte counters, status codes",
@@ -210,26 +237,59 @@ const Uint8FieldSchema = z.object({
   }
 });
 
-const Uint16FieldSchema = z.object({
-  name: z.string().meta({
-    description: "Field name"
+const Uint16FieldSchema = z.union([
+  // Const field (discriminator) - mutually exclusive with computed
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint16").meta({
+      description: "Field type (always 'uint16')"
+    }),
+    const: z.number().int().min(0).max(0xFFFF).meta({
+      description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   }),
-  type: z.literal("uint16").meta({
-    description: "Field type (always 'uint16')"
+  // Computed field - mutually exclusive with const
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint16").meta({
+      description: "Field type (always 'uint16')"
+    }),
+    computed: ComputedFieldSchema.meta({
+      description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   }),
-  const: z.number().int().min(0).max(0xFFFF).optional().meta({
-    description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
-  }),
-  endianness: EndiannessSchema.optional().meta({
-    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
-  }),
-  computed: ComputedFieldSchema.optional().meta({
-    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
-  }),
-  description: z.string().optional().meta({
-    description: "Human-readable description of this field"
-  }),
-}).meta({
+  // Plain field (neither const nor computed)
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint16").meta({
+      description: "Field type (always 'uint16')"
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
+  })
+]).meta({
   title: "16-bit Unsigned Integer",
   description: "Fixed-width 16-bit unsigned integer (0-65535). Respects endianness configuration (big-endian or little-endian).",
   use_for: "Port numbers, message lengths, medium-range counters, message IDs",
@@ -261,26 +321,59 @@ const Uint16FieldSchema = z.object({
   ]
 });
 
-const Uint32FieldSchema = z.object({
-  name: z.string().meta({
-    description: "Field name"
+const Uint32FieldSchema = z.union([
+  // Const field (discriminator) - mutually exclusive with computed
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint32").meta({
+      description: "Field type (always 'uint32')"
+    }),
+    const: z.number().int().min(0).max(0xFFFFFFFF).meta({
+      description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   }),
-  type: z.literal("uint32").meta({
-    description: "Field type (always 'uint32')"
+  // Computed field - mutually exclusive with const
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint32").meta({
+      description: "Field type (always 'uint32')"
+    }),
+    computed: ComputedFieldSchema.meta({
+      description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
   }),
-  const: z.number().int().min(0).max(0xFFFFFFFF).optional().meta({
-    description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
-  }),
-  endianness: EndiannessSchema.optional().meta({
-    description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
-  }),
-  computed: ComputedFieldSchema.optional().meta({
-    description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
-  }),
-  description: z.string().optional().meta({
-    description: "Human-readable description of this field"
-  }),
-}).meta({
+  // Plain field (neither const nor computed)
+  z.object({
+    name: z.string().meta({
+      description: "Field name"
+    }),
+    type: z.literal("uint32").meta({
+      description: "Field type (always 'uint32')"
+    }),
+    endianness: EndiannessSchema.optional().meta({
+      description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
+    }),
+    description: z.string().optional().meta({
+      description: "Human-readable description of this field"
+    }),
+  })
+]).meta({
   title: "32-bit Unsigned Integer",
   description: "Fixed-width 32-bit unsigned integer (0-4294967295). Respects endianness configuration.",
   use_for: "Timestamps, large counters, IP addresses, file sizes, CRCs",
