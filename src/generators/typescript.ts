@@ -1542,10 +1542,16 @@ function generateEncoder(
         code += `    // Pre-pass: track positions for ${fieldName} array (first/last selectors)\n`;
         code += `    this._positions_${fieldName}_${[...firstLastTypes][0]} = [];\n`;
 
-        // Compute offset by encoding all preceding fields to temp encoder
+        // Compute offset by encoding all preceding NON-COMPUTED fields to temp encoder
         code += `    let value_${fieldName}_offset = this.byteOffset;\n`;
         for (let j = 0; j < i; j++) {
           const precedingField = fields[j];
+
+          // Skip computed fields - they reference other fields, not actual data
+          if ((precedingField as any).computed) {
+            continue;
+          }
+
           const precedingFieldType = (precedingField as any).type;
           if (precedingFieldType && schema.types[precedingFieldType]) {
             // Nested struct - encode to measure size
