@@ -107,6 +107,7 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
     types: {
       "DataBlock": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
           { name: "block_id", type: "uint8" },
           {
             name: "data",
@@ -119,6 +120,7 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
       },
       "MetadataBlock": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
           { name: "meta_id", type: "uint8" },
           { name: "flags", type: "uint16" }
         ]
@@ -176,21 +178,25 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 1,
             data: [0xAA, 0xBB, 0xCC, 0xDD]
           },
           {
             type: "MetadataBlock",
+            type_tag: 0x02,
             meta_id: 2,
             flags: 0x1234
           },
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 3,
             data: [0xEE, 0xFF, 0x00, 0x11]
           },
           {
             type: "MetadataBlock",
+            type_tag: 0x02,
             meta_id: 4,
             flags: 0x5678
           }
@@ -198,27 +204,31 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
       },
       decoded_value: {
         summary: {
-          total_data_blocks_size: 10,  // 2 DataBlocks × 5 bytes each (1 id + 4 data)
-          total_metadata_blocks_size: 6  // 2 MetadataBlocks × 3 bytes each (1 id + 2 flags)
+          total_data_blocks_size: 12,  // 2 DataBlocks × 6 bytes each (1 type_tag + 1 id + 4 data)
+          total_metadata_blocks_size: 8  // 2 MetadataBlocks × 4 bytes each (1 type_tag + 1 id + 2 flags)
         },
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 1,
             data: [0xAA, 0xBB, 0xCC, 0xDD]
           },
           {
             type: "MetadataBlock",
+            type_tag: 0x02,
             meta_id: 2,
             flags: 0x1234
           },
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 3,
             data: [0xEE, 0xFF, 0x00, 0x11]
           },
           {
             type: "MetadataBlock",
+            type_tag: 0x02,
             meta_id: 4,
             flags: 0x5678
           }
@@ -226,18 +236,22 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
       },
       bytes: [
         // summary
-        10, 0, 0, 0,  // total_data_blocks_size = 10 (AUTO-COMPUTED)
-        6, 0, 0, 0,   // total_metadata_blocks_size = 6 (AUTO-COMPUTED)
-        // sections[0]: DataBlock (5 bytes)
+        12, 0, 0, 0,  // total_data_blocks_size = 12 (AUTO-COMPUTED)
+        8, 0, 0, 0,   // total_metadata_blocks_size = 8 (AUTO-COMPUTED)
+        // sections[0]: DataBlock (6 bytes)
+        0x01,  // type_tag (discriminator)
         1,  // block_id
         0xAA, 0xBB, 0xCC, 0xDD,  // data
-        // sections[1]: MetadataBlock (3 bytes)
+        // sections[1]: MetadataBlock (4 bytes)
+        0x02,  // type_tag (discriminator)
         2,  // meta_id
         0x34, 0x12,  // flags
-        // sections[2]: DataBlock (5 bytes)
+        // sections[2]: DataBlock (6 bytes)
+        0x01,  // type_tag (discriminator)
         3,  // block_id
         0xEE, 0xFF, 0x00, 0x11,  // data
-        // sections[3]: MetadataBlock (3 bytes)
+        // sections[3]: MetadataBlock (4 bytes)
+        0x02,  // type_tag (discriminator)
         4,  // meta_id
         0x78, 0x56  // flags
       ]
@@ -249,42 +263,78 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 1,
             data: [0x01, 0x02, 0x03, 0x04]
           },
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 2,
             data: [0x05, 0x06, 0x07, 0x08]
+          },
+          {
+            type: "DataBlock",
+            type_tag: 0x01,
+            block_id: 3,
+            data: [0x09, 0x0A, 0x0B, 0x0C]
+          },
+          {
+            type: "DataBlock",
+            type_tag: 0x01,
+            block_id: 4,
+            data: [0x0D, 0x0E, 0x0F, 0x10]
           }
         ]
       },
       decoded_value: {
         summary: {
-          total_data_blocks_size: 10,  // 2 DataBlocks × 5 bytes
+          total_data_blocks_size: 24,  // 4 DataBlocks × 6 bytes each (1 type_tag + 1 id + 4 data)
           total_metadata_blocks_size: 0  // No MetadataBlocks
         },
         sections: [
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 1,
             data: [0x01, 0x02, 0x03, 0x04]
           },
           {
             type: "DataBlock",
+            type_tag: 0x01,
             block_id: 2,
             data: [0x05, 0x06, 0x07, 0x08]
+          },
+          {
+            type: "DataBlock",
+            type_tag: 0x01,
+            block_id: 3,
+            data: [0x09, 0x0A, 0x0B, 0x0C]
+          },
+          {
+            type: "DataBlock",
+            type_tag: 0x01,
+            block_id: 4,
+            data: [0x0D, 0x0E, 0x0F, 0x10]
           }
         ]
       },
       bytes: [
         // summary
-        10, 0, 0, 0,  // total_data_blocks_size = 10
+        24, 0, 0, 0,  // total_data_blocks_size = 24
         0, 0, 0, 0,   // total_metadata_blocks_size = 0
-        // sections[0]: DataBlock
+        // sections[0]: DataBlock (6 bytes)
+        0x01,  // type_tag (discriminator)
         1, 0x01, 0x02, 0x03, 0x04,
-        // sections[1]: DataBlock
-        2, 0x05, 0x06, 0x07, 0x08
+        // sections[1]: DataBlock (6 bytes)
+        0x01,  // type_tag (discriminator)
+        2, 0x05, 0x06, 0x07, 0x08,
+        // sections[2]: DataBlock (6 bytes)
+        0x01,  // type_tag (discriminator)
+        3, 0x09, 0x0A, 0x0B, 0x0C,
+        // sections[3]: DataBlock (6 bytes)
+        0x01,  // type_tag (discriminator)
+        4, 0x0D, 0x0E, 0x0F, 0x10
       ]
     }
   ]
