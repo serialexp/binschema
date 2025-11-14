@@ -5,7 +5,7 @@
 
 import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
 import { sanitizeVarName } from "./type-utils.js";
-import { detectSameIndexTracking } from "./computed-fields.js";
+import { detectSameIndexTracking, detectFirstLastTracking } from "./computed-fields.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
 
 /**
@@ -74,18 +74,23 @@ export function generateEncodeArray(
     return `${indent}// ERROR: Array field '${valuePath}' has undefined or invalid items\n`;
   }
 
-  // Check if this array needs same_index position tracking
-  const trackingTypes = detectSameIndexTracking(field, schema);
   const fieldName = field.name || valuePath.split('.').pop() || 'array';
 
+  // Check if this array needs position tracking (same_index, first/last)
+  const sameIndexTypes = detectSameIndexTracking(field, schema) || new Set();
+  const firstLastTypes = detectFirstLastTracking(fieldName, schema);
+
+  // Merge all types that need position tracking
+  const trackingTypes = new Set([...sameIndexTypes, ...firstLastTypes]);
+
   // Initialize position tracking if needed
-  if (trackingTypes) {
-    code += `${indent}// Initialize same_index position tracking\n`;
+  if (trackingTypes.size > 0) {
+    code += `${indent}// Initialize position tracking (same_index, first/last)\n`;
     for (const typeName of trackingTypes) {
       code += `${indent}this._positions_${fieldName}_${typeName} = [];\n`;
     }
-    // Also initialize index counters for ALL choice types (not just tracked ones)
-    if (field.items?.type === "choice") {
+    // Also initialize index counters for same_index in choice arrays
+    if (sameIndexTypes.size > 0 && field.items?.type === "choice") {
       const choices = field.items.choices || [];
       for (const choice of choices) {
         code += `${indent}this._index_${fieldName}_${choice.type} = 0;\n`;
@@ -97,6 +102,48 @@ export function generateEncodeArray(
   // Use unique variable name to avoid shadowing in nested arrays
   const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
 
+  // Pre-pass: compute positions before encoding (only for first/last selectors)
+  // Note: same_index requires inline tracking during encoding because it needs iteration context
+  if (firstLastTypes.size > 0) {
+    code += `${indent}// Pre-pass: compute item positions for first/last selectors\n`;
+    code += `${indent}let ${itemVar}_offset = this.byteOffset;\n`;
+    code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
+
+    if (field.items?.type === "choice") {
+      // Choice array: track position based on item type
+      for (const typeName of firstLastTypes) {
+        code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
+        code += `${indent}    this._positions_${fieldName}_${typeName}.push(${itemVar}_offset);\n`;
+        code += `${indent}  }\n`;
+      }
+      // After tracking position, advance offset by item size
+      code += `${indent}  // Advance offset by item size\n`;
+      const choices = field.items.choices || [];
+      for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        const ifOrElseIf = i === 0 ? "if" : "else if";
+        code += `${indent}  ${ifOrElseIf} (${itemVar}.type === '${choice.type}') {\n`;
+        code += `${indent}    // Encode to temporary encoder to measure size\n`;
+        code += `${indent}    const temp_encoder = new ${choice.type}Encoder();\n`;
+        code += `${indent}    const temp_bytes = temp_encoder.encode(${itemVar} as ${choice.type});\n`;
+        code += `${indent}    ${itemVar}_offset += temp_bytes.length;\n`;
+        code += `${indent}  }\n`;
+      }
+    } else {
+      // Non-choice array: track position for the single item type
+      const itemType = field.items?.type;
+      if (itemType && firstLastTypes.has(itemType)) {
+        code += `${indent}  this._positions_${fieldName}_${itemType}.push(${itemVar}_offset);\n`;
+        // Advance offset by item size
+        code += `${indent}  // Encode to temporary encoder to measure size\n`;
+        code += `${indent}  const temp_encoder = new ${itemType}Encoder();\n`;
+        code += `${indent}  const temp_bytes = temp_encoder.encode(${itemVar});\n`;
+        code += `${indent}  ${itemVar}_offset += temp_bytes.length;\n`;
+      }
+    }
+    code += `${indent}}\n\n`;
+  }
+
   // Track if we encounter a terminal variant (to skip null terminator)
   const hasTerminalVariants = field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants) && field.terminal_variants.length > 0;
   if (hasTerminalVariants) {
@@ -106,13 +153,23 @@ export function generateEncodeArray(
 
   code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
 
-  // Track position for same_index correlation (if tracking is enabled)
-  if (trackingTypes && field.items?.type === "choice") {
-    code += `${indent}  // Track position for same_index correlation\n`;
-    for (const typeName of trackingTypes) {
-      code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
-      code += `${indent}    this._positions_${fieldName}_${typeName}.push(this.byteOffset);\n`;
-      code += `${indent}  }\n`;
+  // Track position inline for same_index (requires iteration context)
+  if (sameIndexTypes.size > 0) {
+    if (field.items?.type === "choice") {
+      // Choice array: track position based on item type
+      code += `${indent}  // Track position for same_index correlation\n`;
+      for (const typeName of sameIndexTypes) {
+        code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
+        code += `${indent}    this._positions_${fieldName}_${typeName}.push(this.byteOffset);\n`;
+        code += `${indent}  }\n`;
+      }
+    } else {
+      // Non-choice array: track position for the single item type
+      const itemType = field.items?.type;
+      if (itemType && sameIndexTypes.has(itemType)) {
+        code += `${indent}  // Track position for same_index correlation\n`;
+        code += `${indent}  this._positions_${fieldName}_${itemType}.push(this.byteOffset);\n`;
+      }
     }
   }
 

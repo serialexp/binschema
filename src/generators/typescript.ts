@@ -14,7 +14,8 @@ import {
   generateEncodeComputedField,
   resolveComputedFieldPath,
   parseSameIndexTarget,
-  detectSameIndexTracking
+  detectSameIndexTracking,
+  detectFirstLastTracking
 } from "./typescript/computed-fields.js";
 import {
   generateEncodeBackReference,
@@ -1483,19 +1484,26 @@ function generateEncoder(
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
   code += `  private compressionDict: Map<string, number> = new Map();\n`;
 
-  // Detect if any fields need same_index tracking and declare tracking variables
+  // Detect if any fields need position tracking (same_index, first/last) and declare tracking variables
   for (const field of fields) {
     if ('type' in field && field.type === 'array') {
-      const trackingTypes = detectSameIndexTracking(field as any, schema);
-      if (trackingTypes) {
-        const fieldName = field.name;
+      const fieldName = field.name;
+      const sameIndexTypes = detectSameIndexTracking(field as any, schema) || new Set();
+      const firstLastTypes = detectFirstLastTracking(fieldName, schema);
+
+      // Merge all types that need position tracking
+      const trackingTypes = new Set([...sameIndexTypes, ...firstLastTypes]);
+
+      if (trackingTypes.size > 0) {
         for (const typeName of trackingTypes) {
           code += `  private _positions_${fieldName}_${typeName}: number[] = [];\n`;
         }
-        // Declare index counters for all choice types
-        const choices = (field as any).items?.choices || [];
-        for (const choice of choices) {
-          code += `  private _index_${fieldName}_${choice.type}: number = 0;\n`;
+        // Declare index counters for same_index in choice arrays
+        if (sameIndexTypes.size > 0) {
+          const choices = (field as any).items?.choices || [];
+          for (const choice of choices) {
+            code += `  private _index_${fieldName}_${choice.type}: number = 0;\n`;
+          }
         }
       }
     }
