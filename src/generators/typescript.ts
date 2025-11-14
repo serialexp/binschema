@@ -1530,6 +1530,46 @@ function generateEncoder(
     code += `\n`;
   }
 
+  // Pre-pass: track positions for all arrays with first/last selectors BEFORE encoding any fields
+  // This ensures forward references work (e.g., field1 referencing positions in field2)
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    if ('type' in field && field.type === 'array') {
+      const fieldName = field.name;
+      const firstLastTypes = detectFirstLastTracking(fieldName, schema);
+
+      if (firstLastTypes.size > 0) {
+        code += `    // Pre-pass: track positions for ${fieldName} array (first/last selectors)\n`;
+        code += `    this._positions_${fieldName}_${[...firstLastTypes][0]} = [];\n`;
+
+        // Compute offset by encoding all preceding fields to temp encoder
+        code += `    let value_${fieldName}_offset = this.byteOffset;\n`;
+        for (let j = 0; j < i; j++) {
+          const precedingField = fields[j];
+          const precedingFieldType = (precedingField as any).type;
+          if (precedingFieldType && schema.types[precedingFieldType]) {
+            // Nested struct - encode to measure size
+            code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
+            code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}).length;\n`;
+          }
+        }
+
+        // Generate position tracking code for non-choice arrays
+        if ((field as any).items?.type !== 'choice') {
+          const itemType = (field as any).items?.type;
+          if (itemType && firstLastTypes.has(itemType)) {
+            code += `    for (const item of value.${fieldName}) {\n`;
+            code += `      this._positions_${fieldName}_${itemType}.push(value_${fieldName}_offset);\n`;
+            code += `      // Encode to temp to measure size\n`;
+            code += `      const temp_enc = new ${itemType}Encoder();\n`;
+            code += `      value_${fieldName}_offset += temp_enc.encode(item).length;\n`;
+            code += `    }\n\n`;
+          }
+        }
+      }
+    }
+  }
+
   for (const field of fields) {
     code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields);
   }
