@@ -157,6 +157,9 @@ const Uint8FieldSchema = z.object({
   type: z.literal("uint8").meta({
     description: "Field type (always 'uint8')"
   }),
+  const: z.number().int().min(0).max(0xFF).optional().meta({
+    description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
+  }),
   computed: ComputedFieldSchema.optional().meta({
     description: "Marks this field as automatically computed (e.g., length_of, crc32_of)"
   }),
@@ -214,6 +217,9 @@ const Uint16FieldSchema = z.object({
   type: z.literal("uint16").meta({
     description: "Field type (always 'uint16')"
   }),
+  const: z.number().int().min(0).max(0xFFFF).optional().meta({
+    description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
+  }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."
   }),
@@ -261,6 +267,9 @@ const Uint32FieldSchema = z.object({
   }),
   type: z.literal("uint32").meta({
     description: "Field type (always 'uint32')"
+  }),
+  const: z.number().int().min(0).max(0xFFFFFFFF).optional().meta({
+    description: "Constant value for this field (used as discriminator in choice types). Field must have this exact value."
   }),
   endianness: EndiannessSchema.optional().meta({
     description: "Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified."

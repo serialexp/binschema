@@ -72,6 +72,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
       },
       "LocalFile": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
           { name: "signature", type: "uint32" },  // 0x04034b50
           { name: "header", type: "LocalFileHeader" },
           {
@@ -85,6 +86,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
           { name: "signature", type: "uint32" },  // 0x02014b50
           { name: "version_made_by", type: "uint16" },
           { name: "version_needed", type: "uint16" },
@@ -149,6 +151,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
       },
       "EndOfCentralDir": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x03
           { name: "signature", type: "uint32" },  // 0x06054b50
           { name: "disk_number", type: "uint16" },
           { name: "disk_with_central_dir", type: "uint16" },
@@ -203,6 +206,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // Local file
           {
             type: "LocalFile",
+            type_tag: 0x01,
             signature: 0x04034b50,
             header: {
               version: 20,
@@ -219,6 +223,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // Central directory entry
           {
             type: "CentralDirEntry",
+            type_tag: 0x02,
             signature: 0x02014b50,
             version_made_by: 20,
             version_needed: 20,
@@ -237,6 +242,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // End of central directory
           {
             type: "EndOfCentralDir",
+            type_tag: 0x03,
             signature: 0x06054b50,
             disk_number: 0,
             disk_with_central_dir: 0,
@@ -251,6 +257,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         sections: [
           {
             type: "LocalFile",
+            type_tag: 0x01,
             signature: 0x04034b50,
             header: {
               version: 20,
@@ -269,6 +276,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
+            type_tag: 0x02,
             signature: 0x02014b50,
             version_made_by: 20,
             version_needed: 20,
@@ -290,13 +298,14 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           },
           {
             type: "EndOfCentralDir",
+            type_tag: 0x03,
             signature: 0x06054b50,
             disk_number: 0,
             disk_with_central_dir: 0,
             num_entries_this_disk: 1,
             num_entries_total: 1,
-            len_central_dir: 51,  // Size of CentralDirEntry
-            ofs_central_dir: 52,  // Position of CentralDirEntry
+            len_central_dir: 52,  // Size of CentralDirEntry (51 + 1 for type_tag)
+            ofs_central_dir: 53,  // Position of CentralDirEntry (52 + 1 for LocalFile type_tag)
             len_comment: 0
           }
         ]

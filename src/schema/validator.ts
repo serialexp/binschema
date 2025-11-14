@@ -933,12 +933,30 @@ function validateChoice(
 
   const discriminatorName = discriminatorField.name;
   const discriminatorType = (discriminatorField as any).type;
+  const discriminatorConst = (discriminatorField as any).const;
 
-  if (discriminatorType !== 'uint8') {
+  // Validate discriminator is a type that supports peek (uint8, uint16, uint32)
+  // Note: The generator uses peek methods which are currently available for these types
+  const validDiscriminatorTypes = ['uint8', 'uint16', 'uint32'];
+  if (!validDiscriminatorTypes.includes(discriminatorType)) {
     errors.push({
       path,
-      message: `Discriminator field '${discriminatorName}' in choice type '${firstChoiceType}' must be of type 'uint8', got '${discriminatorType}'`
+      message: `Discriminator field '${discriminatorName}' in choice type '${firstChoiceType}' must be uint8, uint16, or uint32 (types with peek support), got '${discriminatorType}'`
     });
+  }
+
+  // Validate discriminator has a const value (required for choice discrimination)
+  if (discriminatorConst === undefined || discriminatorConst === null) {
+    errors.push({
+      path,
+      message: `Discriminator field '${discriminatorName}' in choice type '${firstChoiceType}' must have a 'const' value to enable discrimination during decoding`
+    });
+  }
+
+  // Track discriminator values to check for duplicates
+  const discriminatorValues = new Map<number, string>();
+  if (discriminatorConst !== undefined && discriminatorConst !== null) {
+    discriminatorValues.set(discriminatorConst, firstChoiceType);
   }
 
   // Validate all other choice types have the same discriminator field
@@ -974,6 +992,26 @@ function validateChoice(
         path: `${path}.choices[${i}]`,
         message: `Discriminator field '${discriminatorName}' in choice type '${choiceType}' must be of type '${discriminatorType}', got '${choiceDiscriminatorType}'`
       });
+    }
+
+    // Validate this choice has a const value
+    const choiceDiscriminatorConst = (choiceDiscriminator as any).const;
+    if (choiceDiscriminatorConst === undefined || choiceDiscriminatorConst === null) {
+      errors.push({
+        path: `${path}.choices[${i}]`,
+        message: `Discriminator field '${discriminatorName}' in choice type '${choiceType}' must have a 'const' value to enable discrimination during decoding`
+      });
+    } else {
+      // Check for duplicate discriminator values
+      if (discriminatorValues.has(choiceDiscriminatorConst)) {
+        const duplicateType = discriminatorValues.get(choiceDiscriminatorConst);
+        errors.push({
+          path: `${path}.choices[${i}]`,
+          message: `Discriminator value 0x${choiceDiscriminatorConst.toString(16)} in choice type '${choiceType}' conflicts with '${duplicateType}' (discriminator values must be unique)`
+        });
+      } else {
+        discriminatorValues.set(choiceDiscriminatorConst, choiceType);
+      }
     }
   }
 }

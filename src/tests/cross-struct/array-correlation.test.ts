@@ -474,6 +474,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
     types: {
       "LocalFileHeader": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
           { name: "signature", type: "uint32" },  // 0x04034b50
           { name: "version", type: "uint16" },
           {
@@ -496,6 +497,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
+          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
           { name: "signature", type: "uint32" },  // 0x02014b50
           {
             name: "filename_length",
@@ -551,12 +553,14 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           // Local file headers
           {
             type: "LocalFileHeader",
+            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename: "a.txt"
           },
           {
             type: "LocalFileHeader",
+            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename: "b.txt"
@@ -564,12 +568,14 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           // Central directory entries (reference corresponding local headers)
           {
             type: "CentralDirEntry",
+            type_tag: 0x02,
             signature: 0x02014b50,
             filename: "a.txt"
             // local_header_offset computed
           },
           {
             type: "CentralDirEntry",
+            type_tag: 0x02,
             signature: 0x02014b50,
             filename: "b.txt"
             // local_header_offset computed
@@ -580,6 +586,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "LocalFileHeader",
+            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename_length: 5,
@@ -587,6 +594,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           },
           {
             type: "LocalFileHeader",
+            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename_length: 5,
@@ -594,6 +602,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
+            type_tag: 0x02,
             signature: 0x02014b50,
             filename_length: 5,
             local_header_offset: 0,  // Position of first LocalFileHeader
@@ -601,36 +610,41 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
+            type_tag: 0x02,
             signature: 0x02014b50,
             filename_length: 5,
-            local_header_offset: 13,  // Position of second LocalFileHeader
+            local_header_offset: 14,  // Position of second LocalFileHeader (after 14-byte first header)
             filename: "b.txt"
           }
         ]
       },
       bytes: [
-        // sections[0]: LocalFileHeader for "a.txt" (starts at position 0)
+        // sections[0]: LocalFileHeader for "a.txt" (starts at position 0, 14 bytes)
+        0x01,  // type_tag (discriminator)
         0x50, 0x4b, 0x03, 0x04,  // signature
         20, 0,  // version
         5, 0,  // filename_length (AUTO-COMPUTED)
         0x61, 0x2e, 0x74, 0x78, 0x74,  // "a.txt"
 
-        // sections[1]: LocalFileHeader for "b.txt" (starts at position 13)
+        // sections[1]: LocalFileHeader for "b.txt" (starts at position 14, 14 bytes)
+        0x01,  // type_tag (discriminator)
         0x50, 0x4b, 0x03, 0x04,  // signature
         20, 0,  // version
         5, 0,  // filename_length (AUTO-COMPUTED)
         0x62, 0x2e, 0x74, 0x78, 0x74,  // "b.txt"
 
-        // sections[2]: CentralDirEntry for "a.txt" (starts at position 26)
+        // sections[2]: CentralDirEntry for "a.txt" (starts at position 28, 16 bytes)
+        0x02,  // type_tag (discriminator)
         0x50, 0x4b, 0x01, 0x02,  // signature
         5, 0,  // filename_length (AUTO-COMPUTED)
         0, 0, 0, 0,  // local_header_offset = 0 (AUTO-COMPUTED)
         0x61, 0x2e, 0x74, 0x78, 0x74,  // "a.txt"
 
-        // sections[3]: CentralDirEntry for "b.txt" (starts at position 37)
+        // sections[3]: CentralDirEntry for "b.txt" (starts at position 44, 16 bytes)
+        0x02,  // type_tag (discriminator)
         0x50, 0x4b, 0x01, 0x02,  // signature
         5, 0,  // filename_length (AUTO-COMPUTED)
-        13, 0, 0, 0,  // local_header_offset = 13 (AUTO-COMPUTED)
+        14, 0, 0, 0,  // local_header_offset = 14 (AUTO-COMPUTED)
         0x62, 0x2e, 0x74, 0x78, 0x74  // "b.txt"
       ]
     }
