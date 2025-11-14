@@ -72,8 +72,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
       },
       "LocalFile": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
-          { name: "signature", type: "uint32" },  // 0x04034b50
+          { name: "signature", type: "uint32", const: 0x04034b50 },  // PK\x03\x04
           { name: "header", type: "LocalFileHeader" },
           {
             name: "body",
@@ -86,8 +85,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
-          { name: "signature", type: "uint32" },  // 0x02014b50
+          { name: "signature", type: "uint32", const: 0x02014b50 },  // PK\x01\x02
           { name: "version_made_by", type: "uint16" },
           { name: "version_needed", type: "uint16" },
           { name: "flags", type: "uint16" },
@@ -151,8 +149,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
       },
       "EndOfCentralDir": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x03
-          { name: "signature", type: "uint32" },  // 0x06054b50
+          { name: "signature", type: "uint32", const: 0x06054b50 },  // PK\x05\x06
           { name: "disk_number", type: "uint16" },
           { name: "disk_with_central_dir", type: "uint16" },
           { name: "num_entries_this_disk", type: "uint16" },
