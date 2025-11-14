@@ -334,11 +334,17 @@ async function runTestCase(
 
   // Normal test case (not error test)
   const format = testCase.bytes ? "bytes" : "bits";
+  const debugTest = process.env.DEBUG_TEST === "1" || process.env.DEBUG_TEST === "true";
 
   try {
     // Test encoding (skip for types with instance fields - they're decode-only)
     if (!skipEncoding) {
       const encoder = new EncoderClass();
+
+      if (debugTest) {
+        console.log(`\n=== DEBUG: ${testCase.description} ===`);
+        console.log("Input value:", JSON.stringify(testCase.value, null, 2));
+      }
 
       let encoded: number[];
       let expected: number[];
@@ -347,11 +353,23 @@ async function runTestCase(
         // Byte-level encoding
         encoded = Array.from(encoder.encode(testCase.value));
         expected = testCase.bytes!;
+
+        if (debugTest) {
+          console.log("Expected bytes:", expected);
+          console.log("Encoded bytes:", encoded);
+          console.log("Match:", arraysEqual(encoded, expected));
+        }
       } else {
         // Bit-level encoding - use finishBits() method
         encoder.encode(testCase.value);
         encoded = encoder.finishBits();
         expected = testCase.bits!;
+
+        if (debugTest) {
+          console.log("Expected bits:", expected);
+          console.log("Encoded bits:", encoded);
+          console.log("Match:", arraysEqual(encoded, expected));
+        }
       }
 
       if (!arraysEqual(encoded, expected)) {
@@ -384,6 +402,12 @@ async function runTestCase(
       }
     }
   } catch (error) {
+    if (debugTest) {
+      console.log("Exception during test:", error);
+      if (error instanceof Error) {
+        console.log("Stack trace:", error.stack);
+      }
+    }
     failures.push({
       description: testCase.description,
       type: "encode",

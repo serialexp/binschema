@@ -42,6 +42,20 @@ TEST_REPORT=json go test -v ./test            # JSON output for scripting
 
 **⚠️ Important**: Please use the environment variable flags above for analyzing test results and filtering tests. Custom shell commands are fragile and hard to maintain. If you need a report format that doesn't exist, add it to `go/test/test_summary.go` and document it here.
 
+### TypeScript Test Debugging
+
+For verbose test output with detailed encoding/decoding information:
+```bash
+DEBUG_TEST=1 npm test                           # Debug all tests
+DEBUG_TEST=1 npm test -- --filter=test_name    # Debug specific test
+```
+
+This will output:
+- Input values being encoded
+- Expected vs actual bytes/bits
+- Match status
+- Exception stack traces
+
 ## Commit Messages
 
 Use conventional commits format for all commits:
