@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.generated/
+.generated-examples/
+.typedoc-output/
+tests-json/
+*.log
+tmp-go/
+test_output.txt
