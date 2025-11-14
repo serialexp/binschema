@@ -91,31 +91,8 @@ export const sumOfFieldSizesTestSuite = defineTestSuite({
         // payload3 (2 bytes)
         0x09, 0x0A
       ]
-    },
-    {
-      description: "Empty payloads produce zero sum",
-      value: {
-        header: {
-          magic: 0x12345678
-        },
-        payload1: [],
-        payload2: [],
-        payload3: []
-      },
-      decoded_value: {
-        header: {
-          magic: 0x12345678,
-          total_payload_size: 0
-        },
-        payload1: [],
-        payload2: [],
-        payload3: []
-      },
-      bytes: [
-        0x78, 0x56, 0x34, 0x12,  // magic
-        0, 0, 0, 0  // total_payload_size = 0
-      ]
     }
+    // Note: "Empty payloads" test case removed - fixed-length arrays cannot be empty by definition
   ]
 });
 

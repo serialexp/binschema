@@ -98,6 +98,14 @@ export function generateEncodeArray(
     }
   }
 
+  // Validate fixed-length arrays have correct length
+  if (field.kind === "fixed" && field.length !== undefined) {
+    code += `${indent}// Validate fixed-length array\n`;
+    code += `${indent}if (${valuePath}.length !== ${field.length}) {\n`;
+    code += `${indent}  throw new Error(\`Array '${fieldName}' must have exactly ${field.length} elements, got \${${valuePath}.length}\`);\n`;
+    code += `${indent}}\n`;
+  }
+
   // Write array elements
   // Use unique variable name to avoid shadowing in nested arrays
   const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
