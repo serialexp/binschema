@@ -447,8 +447,7 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
     types: {
       "LocalFileHeader": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x04034b50 },  // PK\x03\x04
           { name: "version", type: "uint16" },
           {
             name: "filename_length",
@@ -470,8 +469,7 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x02014b50 },  // PK\x01\x02
           {
             name: "filename_length",
             type: "uint16",
@@ -492,8 +490,7 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
       },
       "EndOfCentralDir": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x03
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x06054b50 },  // PK\x05\x06
           {
             name: "central_dir_offset",
             type: "uint32",
@@ -542,36 +539,31 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
           // Local file headers
           {
             type: "LocalFileHeader",
-            type_tag: 0x01,
-            signature: 0x04034b50,
             version: 20,
             filename: "a.txt"
+            // signature auto-filled: 0x04034b50
           },
           {
             type: "LocalFileHeader",
-            type_tag: 0x01,
-            signature: 0x04034b50,
             version: 20,
             filename: "b.txt"
+            // signature auto-filled: 0x04034b50
           },
           // Central directory entries
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
-            signature: 0x02014b50,
             filename: "a.txt"
+            // signature auto-filled: 0x02014b50
           },
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
-            signature: 0x02014b50,
             filename: "b.txt"
+            // signature auto-filled: 0x02014b50
           },
           // End of central directory
           {
-            type: "EndOfCentralDir",
-            type_tag: 0x03,
-            signature: 0x06054b50
+            type: "EndOfCentralDir"
+            // signature auto-filled: 0x06054b50
             // central_dir_offset and central_dir_size are computed
           }
         ]
@@ -580,7 +572,6 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
         sections: [
           {
             type: "LocalFileHeader",
-            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename_length: 5,
@@ -588,7 +579,6 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
           },
           {
             type: "LocalFileHeader",
-            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename_length: 5,
@@ -596,59 +586,51 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
             signature: 0x02014b50,
             filename_length: 5,
             filename: "a.txt"
           },
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
             signature: 0x02014b50,
             filename_length: 5,
             filename: "b.txt"
           },
           {
             type: "EndOfCentralDir",
-            type_tag: 0x03,
             signature: 0x06054b50,
-            central_dir_offset: 28,  // Position of first CentralDirEntry (after 2×14 byte LocalFileHeaders)
-            central_dir_size: 24     // 2 CentralDirEntry × 12 bytes each
+            central_dir_offset: 26,  // Position of first CentralDirEntry (after 2×13 byte LocalFileHeaders)
+            central_dir_size: 22     // 2 CentralDirEntry × 11 bytes each
           }
         ]
       },
       bytes: [
-        // sections[0]: LocalFileHeader "a.txt" (14 bytes)
-        0x01,  // type_tag (discriminator)
-        0x50, 0x4b, 0x03, 0x04,  // signature
+        // sections[0]: LocalFileHeader "a.txt" (13 bytes)
+        0x50, 0x4b, 0x03, 0x04,  // signature (const, auto-filled)
         20, 0,  // version
         5, 0,   // filename_length (AUTO-COMPUTED)
         0x61, 0x2e, 0x74, 0x78, 0x74,  // "a.txt"
 
-        // sections[1]: LocalFileHeader "b.txt" (14 bytes)
-        0x01,  // type_tag (discriminator)
-        0x50, 0x4b, 0x03, 0x04,  // signature
+        // sections[1]: LocalFileHeader "b.txt" (13 bytes, starts at position 13)
+        0x50, 0x4b, 0x03, 0x04,  // signature (const, auto-filled)
         20, 0,  // version
         5, 0,   // filename_length (AUTO-COMPUTED)
         0x62, 0x2e, 0x74, 0x78, 0x74,  // "b.txt"
 
-        // sections[2]: CentralDirEntry "a.txt" (12 bytes, starts at position 28)
-        0x02,  // type_tag (discriminator)
-        0x50, 0x4b, 0x01, 0x02,  // signature
+        // sections[2]: CentralDirEntry "a.txt" (11 bytes, starts at position 26)
+        0x50, 0x4b, 0x01, 0x02,  // signature (const, auto-filled)
         5, 0,   // filename_length (AUTO-COMPUTED)
         0x61, 0x2e, 0x74, 0x78, 0x74,  // "a.txt"
 
-        // sections[3]: CentralDirEntry "b.txt" (12 bytes)
-        0x02,  // type_tag (discriminator)
-        0x50, 0x4b, 0x01, 0x02,  // signature
+        // sections[3]: CentralDirEntry "b.txt" (11 bytes, starts at position 37)
+        0x50, 0x4b, 0x01, 0x02,  // signature (const, auto-filled)
         5, 0,   // filename_length (AUTO-COMPUTED)
         0x62, 0x2e, 0x74, 0x78, 0x74,  // "b.txt"
 
-        // sections[4]: EndOfCentralDir (13 bytes, starts at position 52)
-        0x03,  // type_tag (discriminator)
-        0x50, 0x4b, 0x05, 0x06,  // signature
-        28, 0, 0, 0,  // central_dir_offset = 28 (AUTO-COMPUTED)
-        24, 0, 0, 0   // central_dir_size = 24 (AUTO-COMPUTED)
+        // sections[4]: EndOfCentralDir (12 bytes, starts at position 48)
+        0x50, 0x4b, 0x05, 0x06,  // signature (const, auto-filled)
+        26, 0, 0, 0,  // central_dir_offset = 26 (AUTO-COMPUTED)
+        22, 0, 0, 0   // central_dir_size = 22 (AUTO-COMPUTED)
       ]
     }
   ]
