@@ -87,7 +87,7 @@ export const parentFieldReferenceLengthTestSuite = defineTestSuite({
         body: []
       },
       bytes: [
-        1, 0,  // version
+        2, 0,  // version
         0, 0, 0, 0,  // body_length = 0
       ]
     }

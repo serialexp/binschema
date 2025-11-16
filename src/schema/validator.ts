@@ -168,6 +168,15 @@ function validateTypeDef(
         }
       }
 
+      // Check for const + computed mutual exclusivity
+      const fieldAny = field as any;
+      if (fieldAny.const !== undefined && fieldAny.computed !== undefined) {
+        errors.push({
+          path: `types.${typeName}.${fieldsKey}[${i}]`,
+          message: `Field '${field.name}' cannot have both 'const' and 'computed' properties (they are mutually exclusive)`
+        });
+      }
+
       // Check for duplicates
       if (fieldNames.has(field.name)) {
         errors.push({

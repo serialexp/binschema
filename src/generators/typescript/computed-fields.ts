@@ -16,12 +16,27 @@ export function resolveComputedFieldPath(target: string, baseObjectPath: string 
     return `${baseObjectPath}.${target}`;
   }
 
+  // Count how many levels to go up
+  let levelsUp = 0;
   let remainingPath = target;
   while (remainingPath.startsWith('../')) {
+    levelsUp++;
     remainingPath = remainingPath.slice(3);
   }
 
-  return `value.${remainingPath}`;
+  // Go up 'levelsUp' levels in the baseObjectPath
+  let currentPath = baseObjectPath;
+  for (let i = 0; i < levelsUp; i++) {
+    const lastDot = currentPath.lastIndexOf('.');
+    if (lastDot > 0) {
+      currentPath = currentPath.substring(0, lastDot);
+    } else {
+      // Already at root (e.g., "value"), can't go up further
+      break;
+    }
+  }
+
+  return `${currentPath}.${remainingPath}`;
 }
 
 /**
@@ -165,14 +180,31 @@ function generateRuntimeSizeComputation(
 /**
  * Helper function to compute the size of a field in bytes
  */
-function getFieldSize(field: any): number {
+function getFieldSize(field: any, schema?: BinarySchema): number {
   const fieldSizeMap: Record<string, number> = {
     "uint8": 1, "int8": 1,
     "uint16": 2, "int16": 2,
     "uint32": 4, "int32": 4, "float32": 4,
     "uint64": 8, "int64": 8, "float64": 8
   };
-  return fieldSizeMap[field.type as string] || 0;
+
+  // Check if it's a primitive type
+  if (fieldSizeMap[field.type as string]) {
+    return fieldSizeMap[field.type as string];
+  }
+
+  // Check if it's a type reference (user-defined type)
+  if (schema && field.type && schema.types[field.type]) {
+    const typeDef = schema.types[field.type];
+    const typeFields = getTypeFields(typeDef);
+    let totalSize = 0;
+    for (const f of typeFields) {
+      totalSize += getFieldSize(f, schema);
+    }
+    return totalSize;
+  }
+
+  return 0;
 }
 
 /**
@@ -281,22 +313,93 @@ export function generateEncodeComputedField(
     }
   } else if (computed.type === "length_of") {
     const targetField = computed.target;
-    const targetPath = resolveComputedFieldPath(targetField, baseObjectPath);
+
+    // Check if this is a same_index or first/last selector
+    const sameIndexInfo = parseSameIndexTarget(targetField);
+    const firstLastInfo = parseFirstLastTarget(targetField);
 
     // Compute the length value
     code += `${indent}// Computed field '${fieldName}': auto-compute length_of '${targetField}'\n`;
     code += `${indent}let ${fieldName}_computed: number;\n`;
 
-    // Check if encoding is specified (for string byte length)
-    if (computed.encoding) {
-      // String byte length with specific encoding
-      code += `${indent}{\n`;
-      code += `${indent}  const encoder = new TextEncoder();\n`;
-      code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
-      code += `${indent}}\n`;
+    if (sameIndexInfo) {
+      // same_index reference - need to look up the correlated item
+      const { arrayPath, filterType } = sameIndexInfo;
+      const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
+
+      // Check if we're in an array iteration context
+      const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
+
+      if (iterSuffixPos < 0) {
+        // Not in array iteration context - same_index cannot be resolved
+        // This happens when generating standalone encoders for types that are meant to be used in arrays
+        // Throw an error at runtime
+        code += `${indent}// ERROR: same_index reference requires array iteration context\n`;
+        code += `${indent}throw new Error("Field '${fieldName}' uses same_index correlation which requires encoding within an array context");\n`;
+      } else {
+        code += `${indent}// Look up correlated item using same_index\n`;
+
+        // Parse baseObjectPath to find root and current array
+        // E.g., "value_sections__iter" -> root="value", currentArray="sections"
+        const parts = baseObjectPath.substring(0, iterSuffixPos).split('_');
+        const rootObjectPath = parts[0]; // Usually "value"
+
+        const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
+        code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
+        code += `${indent}// Use context to get correlation index for same_index reference\n`;
+        code += `${indent}const ${fieldName}_correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
+        code += `${indent}if (${fieldName}_correlationIndex < 0) {\n`;
+        code += `${indent}  throw new Error("Field '${fieldName}' uses same_index correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+        code += `${indent}}\n`;
+        code += `${indent}const ${fieldName}_targetItem = ${rootObjectPath}.${arrayPath}[${fieldName}_correlationIndex];\n`;
+
+        const targetPath = `${fieldName}_targetItem${remainingPath}`;
+
+        if (computed.encoding) {
+          code += `${indent}{\n`;
+          code += `${indent}  const encoder = new TextEncoder();\n`;
+          code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
+          code += `${indent}}\n`;
+        } else {
+          code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
+        }
+      }
+    } else if (firstLastInfo) {
+      // first/last selector - need to look up from tracking array
+      const { arrayPath, filterType, selector } = firstLastInfo;
+      const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
+
+      code += `${indent}// Look up ${selector} item from position tracking\n`;
+      const positionsArray = `this._positions_${arrayPath}_${filterType}`;
+      code += `${indent}const targetIndex = ${positionsArray} && ${positionsArray}.length > 0 ? ${selector === "first" ? "0" : `${positionsArray}.length - 1`} : undefined;\n`;
+      code += `${indent}if (targetIndex === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
+      code += `${indent}const targetItem = ${baseObjectPath}.${arrayPath}[targetIndex];\n`;
+
+      const targetPath = `targetItem${remainingPath}`;
+
+      if (computed.encoding) {
+        code += `${indent}{\n`;
+        code += `${indent}  const encoder = new TextEncoder();\n`;
+        code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
+        code += `${indent}}\n`;
+      } else {
+        code += `${fieldName}_computed = ${targetPath}.length;\n`;
+      }
     } else {
-      // Array element count or string character count
-      code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
+      // Regular path resolution
+      const targetPath = resolveComputedFieldPath(targetField, baseObjectPath);
+
+      // Check if encoding is specified (for string byte length)
+      if (computed.encoding) {
+        // String byte length with specific encoding
+        code += `${indent}{\n`;
+        code += `${indent}  const encoder = new TextEncoder();\n`;
+        code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
+        code += `${indent}}\n`;
+      } else {
+        // Array element count or string character count
+        code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
+      }
     }
 
     // Write the computed value using appropriate write method
@@ -318,11 +421,64 @@ export function generateEncodeComputedField(
     }
   } else if (computed.type === "crc32_of") {
     const targetField = computed.target;
-    const targetPath = resolveComputedFieldPath(targetField, baseObjectPath);
+
+    // Check if this is a same_index or first/last selector
+    const sameIndexInfo = parseSameIndexTarget(targetField);
+    const firstLastInfo = parseFirstLastTarget(targetField);
 
     // Compute CRC32 checksum
     code += `${indent}// Computed field '${fieldName}': auto-compute CRC32 of '${targetField}'\n`;
-    code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
+
+    if (sameIndexInfo) {
+      // same_index reference - need to look up the correlated item
+      const { arrayPath, filterType } = sameIndexInfo;
+      const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
+
+      // Check if we're in an array iteration context
+      const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
+
+      if (iterSuffixPos < 0) {
+        // Not in array iteration context - same_index cannot be resolved
+        code += `${indent}// ERROR: same_index reference requires array iteration context\n`;
+        code += `${indent}throw new Error("Field '${fieldName}' uses same_index correlation which requires encoding within an array context");\n`;
+      } else {
+        code += `${indent}// Look up correlated item using same_index\n`;
+
+        // Parse baseObjectPath to find root and current array
+        const parts = baseObjectPath.substring(0, iterSuffixPos).split('_');
+        const rootObjectPath = parts[0]; // Usually "value"
+
+        const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
+        code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
+        code += `${indent}// Use context to get correlation index for same_index reference\n`;
+        code += `${indent}const ${fieldName}_correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
+        code += `${indent}if (${fieldName}_correlationIndex < 0) {\n`;
+        code += `${indent}  throw new Error("Field '${fieldName}' uses same_index correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+        code += `${indent}}\n`;
+        code += `${indent}const ${fieldName}_targetItem = ${rootObjectPath}.${arrayPath}[${fieldName}_correlationIndex];\n`;
+
+        const targetPath = `${fieldName}_targetItem${remainingPath}`;
+        code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
+      }
+    } else if (firstLastInfo) {
+      // first/last selector - need to look up from tracking array
+      const { arrayPath, filterType, selector } = firstLastInfo;
+      const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
+
+      code += `${indent}// Look up ${selector} item from position tracking\n`;
+      const positionsArray = `this._positions_${arrayPath}_${filterType}`;
+      code += `${indent}const targetIndex = ${positionsArray} && ${positionsArray}.length > 0 ? ${selector === "first" ? "0" : `${positionsArray}.length - 1`} : undefined;\n`;
+      code += `${indent}if (targetIndex === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
+      code += `${indent}const targetItem = ${baseObjectPath}.${arrayPath}[targetIndex];\n`;
+
+      const targetPath = `targetItem${remainingPath}`;
+      code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
+    } else {
+      // Regular path resolution
+      const targetPath = resolveComputedFieldPath(targetField, baseObjectPath);
+      code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
+    }
+
     code += `${indent}this.writeUint32(${fieldName}_computed, "${endianness}");\n`;
   } else if (computed.type === "position_of") {
     const targetField = computed.target;
@@ -350,7 +506,11 @@ export function generateEncodeComputedField(
 
       code += `${indent}// Determine current item type to use correct correlation index\n`;
       code += `${indent}const currentType = ${itemVarPattern}.type;\n`;
-      code += `${indent}const correlationIndex = (this as any)[\`_index_${arrayPath}_\${currentType}\`];\n`;
+      code += `${indent}// Use context to get correlation index for same_index reference\n`;
+      code += `${indent}const correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
+      code += `${indent}if (correlationIndex < 0) {\n`;
+      code += `${indent}  throw new Error("Field '${fieldName}' uses same_index correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+      code += `${indent}}\n`;
       code += `${indent}const ${fieldName}_computed = this._positions_${arrayPath}_${filterType}[correlationIndex];\n`;
       code += `${indent}if (${fieldName}_computed === undefined) {\n`;
       code += `${indent}  throw new Error(\`same_index correlation failed: no ${filterType} at correlation index \${correlationIndex} for type \${currentType}\`);\n`;
@@ -373,28 +533,33 @@ export function generateEncodeComputedField(
       // Regular position_of - compute from current offset
       code += `${indent}// Computed field '${fieldName}': auto-compute position of '${targetField}'\n`;
 
-      // If we have containing fields info, compute size of all remaining fields
-      let totalRemainingSize = 0;
+      // Find the target field and compute its position
+      let sizeToTarget = 0;
       if (containingFields) {
-        // Find the current field's index
+        // Find the current field's index and the target field's index
         const currentFieldIndex = containingFields.findIndex(f => f.name === fieldName);
-        if (currentFieldIndex >= 0) {
-          // Sum sizes of all fields from current field onwards
-          for (let i = currentFieldIndex; i < containingFields.length; i++) {
-            const f = containingFields[i];
-            totalRemainingSize += getFieldSize(f);
-          }
-        }
-      }
+        const targetFieldIndex = containingFields.findIndex(f => f.name === targetField);
 
-      // If we couldn't determine from containing fields, fall back to adding just this field's size
-      if (totalRemainingSize === 0) {
-        totalRemainingSize = getFieldSize(field);
+        if (currentFieldIndex >= 0 && targetFieldIndex >= 0) {
+          // Sum sizes of current field + fields between current and target
+          // This gives us the offset from current byteOffset to target field start
+          for (let i = currentFieldIndex; i < targetFieldIndex; i++) {
+            const f = containingFields[i];
+            sizeToTarget += getFieldSize(f, schema);
+          }
+        } else {
+          // Target field not found in containing fields - this shouldn't happen in valid schemas
+          // Fall back to current offset + this field's size
+          sizeToTarget = getFieldSize(field, schema);
+        }
+      } else {
+        // No containing fields info - fall back to current offset + this field's size
+        sizeToTarget = getFieldSize(field, schema);
       }
 
       code += `${indent}const ${fieldName}_computed = this.byteOffset`;
-      if (totalRemainingSize > 0) {
-        code += ` + ${totalRemainingSize}`;
+      if (sizeToTarget > 0) {
+        code += ` + ${sizeToTarget}`;
       }
       code += `;\n`;
     }

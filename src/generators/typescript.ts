@@ -38,6 +38,7 @@ import {
   generateFunctionalDecodeArray,
   getItemSize
 } from "./typescript/array-support.js";
+import { generateContextInterface, schemaRequiresContext } from "./typescript/context-analysis.js";
 
 /**
  * TypeScript Code Generator
@@ -107,6 +108,12 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
 
   // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
   code += generateRuntimeHelpers();
+
+  // Generate context interface if schema requires it
+  const contextInterface = generateContextInterface(schema);
+  if (contextInterface) {
+    code += contextInterface;
+  }
 
   // Generate code for each type (skip generic templates like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
@@ -1192,7 +1199,10 @@ function generateTypeAliasEncoder(
   code += `  constructor() {\n`;
   code += `    super("${globalBitOrder}");\n`;
   code += `  }\n\n`;
-  code += `  encode(value: ${typeName}): Uint8Array {\n`;
+  // Add context parameter if schema uses context threading
+  const hasContext = schemaRequiresContext(schema);
+  const contextParam = hasContext ? ', context: EncodingContext = EMPTY_CONTEXT' : '';
+  code += `  encode(value: ${typeName}${contextParam}): Uint8Array {\n`;
   code += `    // Reset compression dictionary for each encode\n`;
   code += `    this.compressionDict.clear();\n\n`;
 
@@ -1514,7 +1524,10 @@ function generateEncoder(
   code += `  }\n\n`;
 
   // Generate encode method
-  code += `  encode(value: ${typeName}): Uint8Array {\n`;
+  // Add context parameter if schema uses context threading
+  const hasContext = schemaRequiresContext(schema);
+  const contextParam = hasContext ? ', context: EncodingContext = EMPTY_CONTEXT' : '';
+  code += `  encode(value: ${typeName}${contextParam}): Uint8Array {\n`;
   code += `    // Reset compression dictionary for each encode\n`;
   code += `    this.compressionDict.clear();\n\n`;
 
@@ -1556,7 +1569,8 @@ function generateEncoder(
           if (precedingFieldType && schema.types[precedingFieldType]) {
             // Nested struct - encode to measure size
             code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
-            code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}).length;\n`;
+            const contextParam = schemaRequiresContext(schema) ? ', context' : '';
+            code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}${contextParam}).length;\n`;
           }
         }
 
@@ -1564,11 +1578,34 @@ function generateEncoder(
         if ((field as any).items?.type !== 'choice') {
           const itemType = (field as any).items?.type;
           if (itemType && firstLastTypes.has(itemType)) {
-            code += `    for (const item of value.${fieldName}) {\n`;
+            code += `    for (let ${fieldName}_prepass_i = 0; ${fieldName}_prepass_i < value.${fieldName}.length; ${fieldName}_prepass_i++) {\n`;
+            code += `      const item = value.${fieldName}[${fieldName}_prepass_i];\n`;
+
+            // Generate context extension for this array iteration (if schema requires it)
+            if (schemaRequiresContext(schema)) {
+              code += `      // Extend context for array iteration\n`;
+              code += `      const itemContext: EncodingContext = {\n`;
+              code += `        ...context,\n`;
+              code += `        parents: [\n`;
+              code += `          ...context.parents,\n`;
+              code += `          { ${fieldName}: value.${fieldName} }\n`;
+              code += `        ],\n`;
+              code += `        arrayIterations: {\n`;
+              code += `          ...context.arrayIterations,\n`;
+              code += `          ${fieldName}: {\n`;
+              code += `            items: value.${fieldName},\n`;
+              code += `            index: ${fieldName}_prepass_i,\n`;
+              code += `            fieldName: '${fieldName}'\n`;
+              code += `          }\n`;
+              code += `        }\n`;
+              code += `      };\n`;
+            }
+
             code += `      this._positions_${fieldName}_${itemType}.push(value_${fieldName}_offset);\n`;
             code += `      // Encode to temp to measure size\n`;
             code += `      const temp_enc = new ${itemType}Encoder();\n`;
-            code += `      value_${fieldName}_offset += temp_enc.encode(item).length;\n`;
+            const contextParam = schemaRequiresContext(schema) ? ', itemContext' : '';
+            code += `      value_${fieldName}_offset += temp_enc.encode(item${contextParam}).length;\n`;
             code += `    }\n\n`;
           }
         }
@@ -1620,6 +1657,12 @@ function generateEncodeField(
     return generateEncodeComputedField(field, schema, globalEndianness, indent, undefined, typeName, allFields);
   }
 
+  // Handle const fields - write the constant value directly
+  if (fieldAny.const !== undefined) {
+    const constValue = fieldAny.const;
+    return generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent);
+  }
+
   const valuePath = `value.${fieldName}`;
 
   // generateEncodeFieldCore handles both conditional and non-conditional fields
@@ -1648,6 +1691,12 @@ function generateEncodeFieldCore(
     const lastDotIndex = valuePath.lastIndexOf('.');
     const baseObjectPath = lastDotIndex > 0 ? valuePath.substring(0, lastDotIndex) : "value";
     return generateEncodeComputedField(field, schema, globalEndianness, indent, baseObjectPath, typeName, containingFields);
+  }
+
+  // Handle const fields - write the constant value directly
+  if (fieldAny.const !== undefined) {
+    const constValue = fieldAny.const;
+    return generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent);
   }
 
   // Handle conditional fields

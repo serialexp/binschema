@@ -474,7 +474,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
     types: {
       "LocalFileHeader": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
+          { name: "type_tag", type: "uint8", const: 0x01 },  // Discriminator: 0x01
           { name: "signature", type: "uint32" },  // 0x04034b50
           { name: "version", type: "uint16" },
           {
@@ -497,7 +497,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
+          { name: "type_tag", type: "uint8", const: 0x02 },  // Discriminator: 0x02
           { name: "signature", type: "uint32" },  // 0x02014b50
           {
             name: "filename_length",
@@ -553,14 +553,12 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           // Local file headers
           {
             type: "LocalFileHeader",
-            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename: "a.txt"
           },
           {
             type: "LocalFileHeader",
-            type_tag: 0x01,
             signature: 0x04034b50,
             version: 20,
             filename: "b.txt"
@@ -568,14 +566,12 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
           // Central directory entries (reference corresponding local headers)
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
             signature: 0x02014b50,
             filename: "a.txt"
             // local_header_offset computed
           },
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
             signature: 0x02014b50,
             filename: "b.txt"
             // local_header_offset computed

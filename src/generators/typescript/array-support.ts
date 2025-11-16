@@ -7,6 +7,7 @@ import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
 import { sanitizeVarName } from "./type-utils.js";
 import { detectSameIndexTracking, detectFirstLastTracking } from "./computed-fields.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
+import { generateArrayContextExtension, getContextParam } from "./context-extension.js";
 
 /**
  * Calculate the size of a fixed-size primitive type item for length_prefixed_items.
@@ -115,7 +116,11 @@ export function generateEncodeArray(
   if (firstLastTypes.size > 0) {
     code += `${indent}// Pre-pass: compute item positions for first/last selectors\n`;
     code += `${indent}let ${itemVar}_offset = this.byteOffset;\n`;
-    code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
+    code += `${indent}for (let ${itemVar}_prepass_index = 0; ${itemVar}_prepass_index < ${valuePath}.length; ${itemVar}_prepass_index++) {\n`;
+    code += `${indent}  const ${itemVar} = ${valuePath}[${itemVar}_prepass_index];\n`;
+
+    // Generate context extension for pre-pass iteration
+    code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_prepass_index`, indent + "  ", schema);
 
     if (field.items?.type === "choice") {
       // Choice array: track position based on item type
@@ -133,7 +138,7 @@ export function generateEncodeArray(
         code += `${indent}  ${ifOrElseIf} (${itemVar}.type === '${choice.type}') {\n`;
         code += `${indent}    // Encode to temporary encoder to measure size\n`;
         code += `${indent}    const temp_encoder = new ${choice.type}Encoder();\n`;
-        code += `${indent}    const temp_bytes = temp_encoder.encode(${itemVar} as ${choice.type});\n`;
+        code += `${indent}    const temp_bytes = temp_encoder.encode(${itemVar} as ${choice.type}${getContextParam(schema, true)});\n`;
         code += `${indent}    ${itemVar}_offset += temp_bytes.length;\n`;
         code += `${indent}  }\n`;
       }
@@ -145,7 +150,7 @@ export function generateEncodeArray(
         // Advance offset by item size
         code += `${indent}  // Encode to temporary encoder to measure size\n`;
         code += `${indent}  const temp_encoder = new ${itemType}Encoder();\n`;
-        code += `${indent}  const temp_bytes = temp_encoder.encode(${itemVar});\n`;
+        code += `${indent}  const temp_bytes = temp_encoder.encode(${itemVar}${getContextParam(schema, true)});\n`;
         code += `${indent}  ${itemVar}_offset += temp_bytes.length;\n`;
       }
     }
@@ -159,7 +164,11 @@ export function generateEncodeArray(
     code += `${indent}let ${terminatedVar} = false;\n`;
   }
 
-  code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
+  code += `${indent}for (let ${itemVar}_index = 0; ${itemVar}_index < ${valuePath}.length; ${itemVar}_index++) {\n`;
+  code += `${indent}  const ${itemVar} = ${valuePath}[${itemVar}_index];\n`;
+
+  // Generate context extension for array iteration
+  code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_index`, indent + "  ", schema);
 
   // Track position inline for same_index (requires iteration context)
   if (sameIndexTypes.size > 0) {
