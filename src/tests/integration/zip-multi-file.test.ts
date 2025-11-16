@@ -96,7 +96,7 @@ export const multiFileZipTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "crc32_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           },
           {
@@ -104,7 +104,7 @@ export const multiFileZipTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "length_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           },
           {
@@ -112,7 +112,7 @@ export const multiFileZipTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "length_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           },
           {
@@ -134,7 +134,7 @@ export const multiFileZipTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../sections[same_index<LocalFile>]"
+              target: "../sections[corresponding<LocalFile>]"
             }
           },
           {
@@ -629,17 +629,17 @@ export const multiFileUtf8FilenamesTestSuite = defineTestSuite({
           {
             name: "crc32",
             type: "uint32",
-            computed: { type: "crc32_of", target: "../sections[same_index<LocalFile>].body" }
+            computed: { type: "crc32_of", target: "../sections[corresponding<LocalFile>].body" }
           },
           {
             name: "len_body_compressed",
             type: "uint32",
-            computed: { type: "length_of", target: "../sections[same_index<LocalFile>].body" }
+            computed: { type: "length_of", target: "../sections[corresponding<LocalFile>].body" }
           },
           {
             name: "len_body_uncompressed",
             type: "uint32",
-            computed: { type: "length_of", target: "../sections[same_index<LocalFile>].body" }
+            computed: { type: "length_of", target: "../sections[corresponding<LocalFile>].body" }
           },
           {
             name: "len_file_name",
@@ -654,7 +654,7 @@ export const multiFileUtf8FilenamesTestSuite = defineTestSuite({
           {
             name: "ofs_local_header",
             type: "uint32",
-            computed: { type: "position_of", target: "../sections[same_index<LocalFile>]" }
+            computed: { type: "position_of", target: "../sections[corresponding<LocalFile>]" }
           },
           {
             name: "file_name",

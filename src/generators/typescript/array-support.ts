@@ -5,7 +5,7 @@
 
 import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
 import { sanitizeVarName } from "./type-utils.js";
-import { detectSameIndexTracking, detectFirstLastTracking } from "./computed-fields.js";
+import { detectCorrespondingTracking, detectFirstLastTracking } from "./computed-fields.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
 import { generateArrayContextExtension, getContextParam } from "./context-extension.js";
 
@@ -38,7 +38,7 @@ export function getItemSize(itemDef: any, schema: BinarySchema, globalEndianness
 
 /**
  * Generate encoding code for arrays (class-based style).
- * Handles all array kinds with same_index position tracking for choice arrays.
+ * Handles all array kinds with corresponding position tracking for choice arrays.
  */
 export function generateEncodeArray(
   field: any,
@@ -77,21 +77,21 @@ export function generateEncodeArray(
 
   const fieldName = field.name || valuePath.split('.').pop() || 'array';
 
-  // Check if this array needs position tracking (same_index, first/last)
-  const sameIndexTypes = detectSameIndexTracking(field, schema) || new Set();
+  // Check if this array needs position tracking (corresponding, first/last)
+  const correspondingTypes = detectCorrespondingTracking(field, schema) || new Set();
   const firstLastTypes = detectFirstLastTracking(fieldName, schema);
 
   // Merge all types that need position tracking
-  const trackingTypes = new Set([...sameIndexTypes, ...firstLastTypes]);
+  const trackingTypes = new Set([...correspondingTypes, ...firstLastTypes]);
 
   // Initialize position tracking if needed
   if (trackingTypes.size > 0) {
-    code += `${indent}// Initialize position tracking (same_index, first/last)\n`;
+    code += `${indent}// Initialize position tracking (corresponding, first/last)\n`;
     for (const typeName of trackingTypes) {
       code += `${indent}this._positions_${fieldName}_${typeName} = [];\n`;
     }
-    // Also initialize index counters for same_index in choice arrays
-    if (sameIndexTypes.size > 0 && field.items?.type === "choice") {
+    // Also initialize index counters for corresponding in choice arrays
+    if (correspondingTypes.size > 0 && field.items?.type === "choice") {
       const choices = field.items.choices || [];
       for (const choice of choices) {
         code += `${indent}this._index_${fieldName}_${choice.type} = 0;\n`;
@@ -112,7 +112,7 @@ export function generateEncodeArray(
   const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
 
   // Pre-pass: compute positions before encoding (only for first/last selectors)
-  // Note: same_index requires inline tracking during encoding because it needs iteration context
+  // Note: corresponding requires inline tracking during encoding because it needs iteration context
   if (firstLastTypes.size > 0) {
     code += `${indent}// Pre-pass: compute item positions for first/last selectors\n`;
     code += `${indent}let ${itemVar}_offset = this.byteOffset;\n`;
@@ -170,12 +170,12 @@ export function generateEncodeArray(
   // Generate context extension for array iteration
   code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_index`, indent + "  ", schema);
 
-  // Track position inline for same_index (requires iteration context)
-  if (sameIndexTypes.size > 0) {
+  // Track position inline for corresponding (requires iteration context)
+  if (correspondingTypes.size > 0) {
     if (field.items?.type === "choice") {
       // Choice array: track position based on item type
-      code += `${indent}  // Track position for same_index correlation\n`;
-      for (const typeName of sameIndexTypes) {
+      code += `${indent}  // Track position for corresponding correlation\n`;
+      for (const typeName of correspondingTypes) {
         code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
         code += `${indent}    this._positions_${fieldName}_${typeName}.push(this.byteOffset);\n`;
         code += `${indent}  }\n`;
@@ -183,8 +183,8 @@ export function generateEncodeArray(
     } else {
       // Non-choice array: track position for the single item type
       const itemType = field.items?.type;
-      if (itemType && sameIndexTypes.has(itemType)) {
-        code += `${indent}  // Track position for same_index correlation\n`;
+      if (itemType && correspondingTypes.has(itemType)) {
+        code += `${indent}  // Track position for corresponding correlation\n`;
         code += `${indent}  this._positions_${fieldName}_${itemType}.push(this.byteOffset);\n`;
       }
     }
@@ -297,8 +297,8 @@ export function generateEncodeArray(
     code += `${indent}  }\n`;
   }
 
-  // Increment correlation index counter for same_index tracking only
-  if (sameIndexTypes.size > 0 && field.items?.type === "choice") {
+  // Increment correlation index counter for corresponding tracking only
+  if (correspondingTypes.size > 0 && field.items?.type === "choice") {
     code += `${indent}  // Increment correlation index for this choice type\n`;
     const choices = field.items.choices || [];
     for (const choice of choices) {

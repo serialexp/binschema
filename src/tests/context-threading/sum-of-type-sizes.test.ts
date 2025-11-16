@@ -208,7 +208,7 @@ export const zipStyleSumOfTypeSizesTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../sections[same_index<LocalFileHeader>]"
+              target: "../sections[corresponding<LocalFileHeader>]"
             }
           },
           {

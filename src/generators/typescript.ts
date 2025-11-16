@@ -14,7 +14,7 @@ import {
   generateEncodeComputedField,
   resolveComputedFieldPath,
   parseSameIndexTarget,
-  detectSameIndexTracking,
+  detectCorrespondingTracking,
   detectFirstLastTracking
 } from "./typescript/computed-fields.js";
 import {
@@ -1498,7 +1498,7 @@ function generateEncoder(
   for (const field of fields) {
     if ('type' in field && field.type === 'array') {
       const fieldName = field.name;
-      const sameIndexTypes = detectSameIndexTracking(field as any, schema) || new Set();
+      const sameIndexTypes = detectCorrespondingTracking(field as any, schema) || new Set();
       const firstLastTypes = detectFirstLastTracking(fieldName, schema);
 
       // Merge all types that need position tracking

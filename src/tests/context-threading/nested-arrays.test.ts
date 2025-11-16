@@ -64,7 +64,7 @@ export const nestedArraysTestSuite = defineTestSuite({
  * Test: Inner array element referencing outer array
  *
  * Element in inner array needs to reference the outer array iteration context.
- * Uses ../../outerArray[same_index<Type>] pattern.
+ * Uses ../../outerArray[corresponding<Type>] pattern.
  */
 export const innerReferencesOuterArrayTestSuite = defineTestSuite({
   name: "context_inner_references_outer_array",
@@ -86,7 +86,7 @@ export const innerReferencesOuterArrayTestSuite = defineTestSuite({
             type: "uint8",
             computed: {
               type: "length_of",
-              target: "../../outer_items[same_index<OuterData>].value"
+              target: "../../outer_items[corresponding<OuterData>].value"
             }
           }
         ]
@@ -280,7 +280,7 @@ export const deepNestingCrossReferenceTestSuite = defineTestSuite({
             type: "uint8",
             computed: {
               type: "length_of",
-              target: "../../../root_nodes[same_index<DataNode>].size"
+              target: "../../../root_nodes[corresponding<DataNode>].size"
             }
           }
         ]
@@ -402,7 +402,7 @@ export const siblingArrayCrossReferenceTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../primaries[same_index<Primary>].primary_value"
+              target: "../primaries[corresponding<Primary>].primary_value"
             }
           }
         ]

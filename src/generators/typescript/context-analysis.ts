@@ -11,7 +11,7 @@ export interface ContextRequirements {
   // Fields referenced via ../field_name
   needsParentFields: Set<string>;
 
-  // Arrays referenced via [same_index<Type>], [first<Type>], [last<Type>]
+  // Arrays referenced via [corresponding<Type>], [first<Type>], [last<Type>]
   needsArrayIterations: Set<string>;
 
   // Uses ../ parent navigation at all
@@ -123,10 +123,10 @@ function analyzeComputedPath(path: string, requirements: ContextRequirements): v
   }
 
   // Check for array correlation patterns
-  if (path.includes('[same_index<') || path.includes('[first<') || path.includes('[last<')) {
+  if (path.includes('[corresponding<') || path.includes('[first<') || path.includes('[last<')) {
     // Extract array name that precedes the correlation selector
-    // Pattern: array_name[same_index<Type>] or ../array_name[first<Type>]
-    const arrayMatches = path.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\[(?:same_index|first|last)</g);
+    // Pattern: array_name[corresponding<Type>] or ../array_name[first<Type>]
+    const arrayMatches = path.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\[(?:corresponding|first|last)</g);
     for (const match of arrayMatches) {
       requirements.needsArrayIterations.add(match[1]);
     }

@@ -40,11 +40,11 @@ export function resolveComputedFieldPath(target: string, baseObjectPath: string 
 }
 
 /**
- * Parse same_index correlation syntax from computed field target
- * Example: "../sections[same_index<DataBlock>]" -> { arrayPath: "sections", filterType: "DataBlock" }
+ * Parse corresponding<Type> correlation syntax from computed field target
+ * Example: "../sections[corresponding<DataBlock>]" -> { arrayPath: "sections", filterType: "DataBlock" }
  */
-export function parseSameIndexTarget(target: string): { arrayPath: string; filterType: string } | null {
-  const match = target.match(/(?:\.\.\/)*([^[]+)\[same_index<(\w+)>\]/);
+export function parseCorrespondingTarget(target: string): { arrayPath: string; filterType: string } | null {
+  const match = target.match(/(?:\.\.\/)*([^[]+)\[corresponding<(\w+)>\]/);
   if (!match) return null;
   return {
     arrayPath: match[1],
@@ -67,17 +67,17 @@ export function parseFirstLastTarget(target: string): { arrayPath: string; filte
 }
 
 /**
- * Check if an array field contains choice types with same_index position_of references
+ * Check if an array field contains choice types with corresponding<Type> position_of references
  * Returns map of types that need position tracking
  */
-export function detectSameIndexTracking(field: any, schema: BinarySchema): Set<string> | null {
+export function detectCorrespondingTracking(field: any, schema: BinarySchema): Set<string> | null {
   const itemsType = field.items?.type;
   if (itemsType !== "choice") return null;
 
   const choices = field.items?.choices || [];
   const typesNeedingTracking = new Set<string>();
 
-  // Check each choice type for computed position_of fields using same_index
+  // Check each choice type for computed position_of fields using corresponding<Type>
   for (const choice of choices) {
     const choiceTypeDef = schema.types[choice.type];
     if (!choiceTypeDef) continue;
@@ -86,9 +86,9 @@ export function detectSameIndexTracking(field: any, schema: BinarySchema): Set<s
     for (const f of fields) {
       const fAny = f as any;
       if (fAny.computed?.type === "position_of") {
-        const sameIndexInfo = parseSameIndexTarget(fAny.computed.target);
+        const sameIndexInfo = parseCorrespondingTarget(fAny.computed.target);
         if (sameIndexInfo) {
-          // This choice type uses same_index - add the filter type to tracking set
+          // This choice type uses corresponding - add the filter type to tracking set
           typesNeedingTracking.add(sameIndexInfo.filterType);
         }
       }
@@ -314,8 +314,8 @@ export function generateEncodeComputedField(
   } else if (computed.type === "length_of") {
     const targetField = computed.target;
 
-    // Check if this is a same_index or first/last selector
-    const sameIndexInfo = parseSameIndexTarget(targetField);
+    // Check if this is a corresponding or first/last selector
+    const sameIndexInfo = parseCorrespondingTarget(targetField);
     const firstLastInfo = parseFirstLastTarget(targetField);
 
     // Compute the length value
@@ -323,7 +323,7 @@ export function generateEncodeComputedField(
     code += `${indent}let ${fieldName}_computed: number;\n`;
 
     if (sameIndexInfo) {
-      // same_index reference - need to look up the correlated item
+      // corresponding reference - need to look up the correlated item
       const { arrayPath, filterType } = sameIndexInfo;
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
@@ -331,13 +331,13 @@ export function generateEncodeComputedField(
       const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
 
       if (iterSuffixPos < 0) {
-        // Not in array iteration context - same_index cannot be resolved
+        // Not in array iteration context - corresponding cannot be resolved
         // This happens when generating standalone encoders for types that are meant to be used in arrays
         // Throw an error at runtime
-        code += `${indent}// ERROR: same_index reference requires array iteration context\n`;
-        code += `${indent}throw new Error("Field '${fieldName}' uses same_index correlation which requires encoding within an array context");\n`;
+        code += `${indent}// ERROR: corresponding reference requires array iteration context\n`;
+        code += `${indent}throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context");\n`;
       } else {
-        code += `${indent}// Look up correlated item using same_index\n`;
+        code += `${indent}// Look up correlated item using corresponding<Type>\n`;
 
         // Parse baseObjectPath to find root and current array
         // E.g., "value_sections__iter" -> root="value", currentArray="sections"
@@ -346,10 +346,10 @@ export function generateEncodeComputedField(
 
         const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
         code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
-        code += `${indent}// Use context to get correlation index for same_index reference\n`;
+        code += `${indent}// Use context to get correlation index for corresponding reference\n`;
         code += `${indent}const ${fieldName}_correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
         code += `${indent}if (${fieldName}_correlationIndex < 0) {\n`;
-        code += `${indent}  throw new Error("Field '${fieldName}' uses same_index correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+        code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation on '${arrayPath}' which requires encoding within an array context");\n`;
         code += `${indent}}\n`;
         code += `${indent}const ${fieldName}_targetItem = ${rootObjectPath}.${arrayPath}[${fieldName}_correlationIndex];\n`;
 
@@ -422,15 +422,15 @@ export function generateEncodeComputedField(
   } else if (computed.type === "crc32_of") {
     const targetField = computed.target;
 
-    // Check if this is a same_index or first/last selector
-    const sameIndexInfo = parseSameIndexTarget(targetField);
+    // Check if this is a corresponding or first/last selector
+    const sameIndexInfo = parseCorrespondingTarget(targetField);
     const firstLastInfo = parseFirstLastTarget(targetField);
 
     // Compute CRC32 checksum
     code += `${indent}// Computed field '${fieldName}': auto-compute CRC32 of '${targetField}'\n`;
 
     if (sameIndexInfo) {
-      // same_index reference - need to look up the correlated item
+      // corresponding reference - need to look up the correlated item
       const { arrayPath, filterType } = sameIndexInfo;
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
@@ -438,11 +438,11 @@ export function generateEncodeComputedField(
       const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
 
       if (iterSuffixPos < 0) {
-        // Not in array iteration context - same_index cannot be resolved
-        code += `${indent}// ERROR: same_index reference requires array iteration context\n`;
-        code += `${indent}throw new Error("Field '${fieldName}' uses same_index correlation which requires encoding within an array context");\n`;
+        // Not in array iteration context - corresponding cannot be resolved
+        code += `${indent}// ERROR: corresponding reference requires array iteration context\n`;
+        code += `${indent}throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context");\n`;
       } else {
-        code += `${indent}// Look up correlated item using same_index\n`;
+        code += `${indent}// Look up correlated item using corresponding<Type>\n`;
 
         // Parse baseObjectPath to find root and current array
         const parts = baseObjectPath.substring(0, iterSuffixPos).split('_');
@@ -450,10 +450,10 @@ export function generateEncodeComputedField(
 
         const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
         code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
-        code += `${indent}// Use context to get correlation index for same_index reference\n`;
+        code += `${indent}// Use context to get correlation index for corresponding reference\n`;
         code += `${indent}const ${fieldName}_correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
         code += `${indent}if (${fieldName}_correlationIndex < 0) {\n`;
-        code += `${indent}  throw new Error("Field '${fieldName}' uses same_index correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+        code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation on '${arrayPath}' which requires encoding within an array context");\n`;
         code += `${indent}}\n`;
         code += `${indent}const ${fieldName}_targetItem = ${rootObjectPath}.${arrayPath}[${fieldName}_correlationIndex];\n`;
 
@@ -483,16 +483,16 @@ export function generateEncodeComputedField(
   } else if (computed.type === "position_of") {
     const targetField = computed.target;
 
-    // Check if this is a same_index correlation
-    const sameIndexInfo = parseSameIndexTarget(targetField);
+    // Check if this is a corresponding correlation
+    const sameIndexInfo = parseCorrespondingTarget(targetField);
     // Check if this is a first/last selector
     const firstLastInfo = parseFirstLastTarget(targetField);
 
     if (sameIndexInfo) {
-      // same_index correlation - look up position from tracking map
+      // corresponding correlation - look up position from tracking map
       const { arrayPath, filterType } = sameIndexInfo;
       code += `${indent}// Computed field '${fieldName}': auto-compute position of '${targetField}'\n`;
-      code += `${indent}// Look up position using same_index correlation\n`;
+      code += `${indent}// Look up position using corresponding correlation\n`;
 
       // Need to determine the current item type to use the correct index counter
       // The computed field is being encoded within a specific type's fields
@@ -506,14 +506,14 @@ export function generateEncodeComputedField(
 
       code += `${indent}// Determine current item type to use correct correlation index\n`;
       code += `${indent}const currentType = ${itemVarPattern}.type;\n`;
-      code += `${indent}// Use context to get correlation index for same_index reference\n`;
+      code += `${indent}// Use context to get correlation index for corresponding reference\n`;
       code += `${indent}const correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
       code += `${indent}if (correlationIndex < 0) {\n`;
-      code += `${indent}  throw new Error("Field '${fieldName}' uses same_index correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+      code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation on '${arrayPath}' which requires encoding within an array context");\n`;
       code += `${indent}}\n`;
       code += `${indent}const ${fieldName}_computed = this._positions_${arrayPath}_${filterType}[correlationIndex];\n`;
       code += `${indent}if (${fieldName}_computed === undefined) {\n`;
-      code += `${indent}  throw new Error(\`same_index correlation failed: no ${filterType} at correlation index \${correlationIndex} for type \${currentType}\`);\n`;
+      code += `${indent}  throw new Error(\`corresponding correlation failed: no ${filterType} at correlation index \${correlationIndex} for type \${currentType}\`);\n`;
       code += `${indent}}\n`;
     } else if (firstLastInfo) {
       // first/last selector - look up position from tracking array

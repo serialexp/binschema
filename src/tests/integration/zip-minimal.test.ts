@@ -97,7 +97,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "crc32_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           },
           {
@@ -105,7 +105,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "length_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           },
           {
@@ -113,7 +113,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "length_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           },
           {
@@ -135,7 +135,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../sections[same_index<LocalFile>]"
+              target: "../sections[corresponding<LocalFile>]"
             }
           },
           {

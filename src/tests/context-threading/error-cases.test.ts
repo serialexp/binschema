@@ -6,12 +6,12 @@ import { defineTestSuite } from "../../schema/test-schema.js";
 /**
  * Test: Missing array iteration context
  *
- * Type requires same_index correlation but is encoded standalone without array context.
+ * Type requires corresponding correlation but is encoded standalone without array context.
  * Should throw clear error indicating context is required.
  */
 export const missingArrayContextErrorTestSuite = defineTestSuite({
   name: "context_error_missing_array_context",
-  description: "Error when same_index used without array iteration context",
+  description: "Error when corresponding used without array iteration context",
   schema: {
     config: { endianness: "little_endian" },
     types: {
@@ -29,7 +29,7 @@ export const missingArrayContextErrorTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../blocks[same_index<DataBlock>]"
+              target: "../blocks[corresponding<DataBlock>]"
             }
           }
         ]
@@ -62,7 +62,7 @@ export const missingArrayContextErrorTestSuite = defineTestSuite({
         // data_position would need blocks array context
       },
       should_error_on_encode: true,
-      error_message: "same_index correlation which requires encoding within an array context"
+      error_message: "corresponding correlation which requires encoding within an array context"
     }
   ]
 });
@@ -118,12 +118,12 @@ export const missingParentFieldErrorTestSuite = defineTestSuite({
 /**
  * Test: Array index out of bounds
  *
- * same_index references array element but current index exceeds array length.
+ * corresponding references array element but current index exceeds array length.
  * This shouldn't happen in normal usage but validates error handling.
  */
 export const arrayIndexOutOfBoundsErrorTestSuite = defineTestSuite({
   name: "context_error_array_index_out_of_bounds",
-  description: "Error when same_index references non-existent array element",
+  description: "Error when corresponding references non-existent array element",
   schema: {
     config: { endianness: "little_endian" },
     types: {
@@ -141,7 +141,7 @@ export const arrayIndexOutOfBoundsErrorTestSuite = defineTestSuite({
             type: "uint8",
             computed: {
               type: "length_of",
-              target: "../items[same_index<Data>].value"
+              target: "../items[corresponding<Data>].value"
             }
           }
         ]
@@ -182,14 +182,14 @@ export const arrayIndexOutOfBoundsErrorTestSuite = defineTestSuite({
 });
 
 /**
- * Test: Type mismatch at same_index
+ * Test: Type mismatch at corresponding
  *
- * same_index<TypeA> expects TypeA at that index, but finds TypeB instead.
+ * corresponding<TypeA> expects TypeA at that index, but finds TypeB instead.
  * Should throw error indicating type mismatch.
  */
 export const typeMismatchAtSameIndexErrorTestSuite = defineTestSuite({
-  name: "context_error_type_mismatch_same_index",
-  description: "Error when same_index finds wrong type at target index",
+  name: "context_error_type_mismatch_corresponding",
+  description: "Error when corresponding finds wrong type at target index",
   schema: {
     config: { endianness: "little_endian" },
     types: {
@@ -213,7 +213,7 @@ export const typeMismatchAtSameIndexErrorTestSuite = defineTestSuite({
             type: "uint8",
             computed: {
               type: "length_of",
-              target: "../items[same_index<TypeA>].a_value"
+              target: "../items[corresponding<TypeA>].a_value"
             }
           }
         ]
@@ -241,7 +241,7 @@ export const typeMismatchAtSameIndexErrorTestSuite = defineTestSuite({
   test_type: "Container",
   test_cases: [
     {
-      description: "RefToA expects TypeA at same_index but finds TypeB",
+      description: "RefToA expects TypeA at corresponding but finds TypeB",
       value: {
         items: [
           { type: "TypeB", b_value: 50 },  // Index 0 is TypeB

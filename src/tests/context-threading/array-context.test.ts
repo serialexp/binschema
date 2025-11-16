@@ -1,17 +1,17 @@
-// ABOUTME: Tests for array iteration context (same_index, first, last selectors)
+// ABOUTME: Tests for array iteration context (corresponding, first, last selectors)
 // ABOUTME: Validates context extension when entering arrays and proper correlation
 
 import { defineTestSuite } from "../../schema/test-schema.js";
 
 /**
- * Test: same_index correlation within single array
+ * Test: corresponding correlation within single array
  *
  * Array contains choice types. One variant references another variant
  * at the same array index. Context must track current iteration index.
  */
 export const sameIndexSingleArrayTestSuite = defineTestSuite({
-  name: "context_same_index_single_array",
-  description: "Choice variant references same_index element for correlation",
+  name: "context_corresponding_single_array",
+  description: "Choice variant references corresponding element for correlation",
   schema: {
     config: { endianness: "little_endian" },
     types: {
@@ -36,7 +36,7 @@ export const sameIndexSingleArrayTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../blocks[same_index<DataBlock>]"
+              target: "../blocks[corresponding<DataBlock>]"
             }
           },
           {
@@ -44,7 +44,7 @@ export const sameIndexSingleArrayTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../blocks[same_index<DataBlock>].payload"
+              target: "../blocks[corresponding<DataBlock>].payload"
             }
           }
         ]
@@ -81,7 +81,7 @@ export const sameIndexSingleArrayTestSuite = defineTestSuite({
           },
           {
             type: "MetaBlock"
-            // data_position and data_id computed from blocks[same_index<DataBlock>]
+            // data_position and data_id computed from blocks[corresponding<DataBlock>]
           },
           {
             type: "DataBlock",
@@ -129,7 +129,7 @@ export const sameIndexSingleArrayTestSuite = defineTestSuite({
 
         // blocks[1]: MetaBlock (position 7)
         0x02,              // type_tag
-        0, 0, 0, 0,        // data_position = 0 (same_index → blocks[0])
+        0, 0, 0, 0,        // data_position = 0 (corresponding → blocks[0])
         4, 0,              // data_id = 4
 
         // blocks[2]: DataBlock (position 14)
@@ -139,7 +139,7 @@ export const sameIndexSingleArrayTestSuite = defineTestSuite({
 
         // blocks[3]: MetaBlock (position 21)
         0x02,              // type_tag
-        14, 0, 0, 0,       // data_position = 14 (same_index → blocks[2])
+        14, 0, 0, 0,       // data_position = 14 (corresponding → blocks[2])
         4, 0               // data_id = 4
       ]
     }
@@ -383,13 +383,13 @@ export const lastSelectorTestSuite = defineTestSuite({
 });
 
 /**
- * Test: Multiple choice variants using same_index
+ * Test: Multiple choice variants using corresponding
  *
  * Similar to ZIP format: multiple variants reference each other at same index.
  */
 export const multipleVariantsSameIndexTestSuite = defineTestSuite({
-  name: "context_multiple_variants_same_index",
-  description: "Multiple choice variants cross-reference via same_index",
+  name: "context_multiple_variants_corresponding",
+  description: "Multiple choice variants cross-reference via corresponding",
   schema: {
     config: { endianness: "little_endian" },
     types: {
@@ -414,7 +414,7 @@ export const multipleVariantsSameIndexTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../sections[same_index<LocalFile>]"
+              target: "../sections[corresponding<LocalFile>]"
             }
           },
           {
@@ -422,7 +422,7 @@ export const multipleVariantsSameIndexTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../sections[same_index<LocalFile>].body"
+              target: "../sections[corresponding<LocalFile>].body"
             }
           }
         ]
@@ -490,13 +490,13 @@ export const multipleVariantsSameIndexTestSuite = defineTestSuite({
           {
             type: "CentralDir",
             type_tag: 0x02,
-            local_offset: 0,     // Position of sections[0] (same_index)
+            local_offset: 0,     // Position of sections[0] (corresponding)
             compressed_size: 3   // Length of sections[0].body
           },
           {
             type: "CentralDir",
             type_tag: 0x02,
-            local_offset: 7,     // Position of sections[1] (same_index)
+            local_offset: 7,     // Position of sections[1] (corresponding)
             compressed_size: 3
           },
           {
