@@ -10,7 +10,8 @@
     "watch": "tsc --watch",
     "cli": "bun run src/cli/index.ts",
     "dns:query": "bun run src/examples/dns-query-simple.ts",
-    "docs:types": "bun run src/generate-type-reference.ts"
+    "docs:types": "bun run src/generate-type-reference.ts",
+    "prepare": "husky"
   },
   "keywords": [
     "binary",
@@ -22,6 +23,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^24.7.1",
+    "husky": "^9.1.7",
     "typedoc": "^0.28.13",
     "typescript": "^5.9.3"
   },

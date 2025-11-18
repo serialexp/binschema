@@ -204,41 +204,52 @@ async function main() {
   // Parse command line arguments
   const args = process.argv.slice(2);
   let filter: string | null = null;
+  let summaryMode = false;
 
   for (const arg of args) {
     if (arg.startsWith("--filter=")) {
       filter = arg.substring("--filter=".length);
+    } else if (arg === "--summary") {
+      summaryMode = true;
     } else if (arg === "--help" || arg === "-h") {
       console.log("Usage: bun run src/run-tests.ts [options]");
       console.log("");
       console.log("Options:");
       console.log("  --filter=<pattern>  Only run tests with names containing <pattern>");
+      console.log("  --summary           Show only final summary (suppress verbose output)");
       console.log("  --help, -h          Show this help message");
       console.log("");
       console.log("Examples:");
       console.log("  bun run src/run-tests.ts                    # Run all tests");
       console.log("  bun run src/run-tests.ts --filter=optional  # Run tests with 'optional' in name");
+      console.log("  bun run src/run-tests.ts --summary          # Run all tests, show only summary");
       console.log("  bun run src/run-tests.ts --filter=uint8     # Run only uint8 tests");
       process.exit(0);
     }
   }
 
-  console.log("=".repeat(80));
-  console.log("Running BinSchema Test Suite");
-  if (filter) {
-    console.log(`Filter: "${filter}"`);
+  if (!summaryMode) {
+    console.log("=".repeat(80));
+    console.log("Running BinSchema Test Suite");
+    if (filter) {
+      console.log(`Filter: "${filter}"`);
+    }
+    console.log("=".repeat(80));
+
+    // Always export TypeScript tests to JSON first
+    console.log("\n📝 Exporting TypeScript tests to JSON...");
   }
-  console.log("=".repeat(80));
-
-  // Always export TypeScript tests to JSON first
-  console.log("\n📝 Exporting TypeScript tests to JSON...");
   await exportTestsToJson();
-  console.log("");
+  if (!summaryMode) {
+    console.log("");
 
-  // Set up runtime library for generated code
-  console.log("📦 Setting up runtime library...");
+    // Set up runtime library for generated code
+    console.log("📦 Setting up runtime library...");
+  }
   setupRuntimeLibrary();
-  console.log("");
+  if (!summaryMode) {
+    console.log("");
+  }
 
   // Find all test JSON files
   const testsJsonDir = join(__dirname, '../tests-json');
@@ -281,12 +292,14 @@ async function main() {
     // Skip empty categories
     if (filteredGroupSuites.length === 0) continue;
 
-    console.log(`\n${"━".repeat(80)}`);
-    console.log(`📦 ${category}`);
-    console.log(`${"━".repeat(80)}`);
+    if (!summaryMode) {
+      console.log(`\n${"━".repeat(80)}`);
+      console.log(`📦 ${category}`);
+      console.log(`${"━".repeat(80)}`);
+    }
 
     for (const suite of filteredGroupSuites) {
-      const result = await runTestSuite(suite);
+      const result = await runTestSuite(suite, summaryMode);
       results.push(result);
     }
   }

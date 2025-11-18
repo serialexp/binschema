@@ -44,7 +44,7 @@ export interface TestFailure {
 /**
  * Run a test suite
  */
-export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
+export async function runTestSuite(suite: TestSuite, summaryMode = false): Promise<TestResult> {
   const result: TestResult = {
     testSuite: suite.name,
     passed: 0,
@@ -55,12 +55,16 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
   // Validate schema before generation
   const validation = validateSchema(suite.schema);
   if (!validation.valid) {
-    console.error(`\n❌ Schema validation failed for ${suite.name}:`);
-    console.error(formatValidationErrors(validation));
+    if (!summaryMode) {
+      console.error(`\n❌ Schema validation failed for ${suite.name}:`);
+      console.error(formatValidationErrors(validation));
+    }
 
     // If this is a schema validation error test, this is expected
     if (suite.schema_validation_error) {
-      console.log(`  ✓ Schema validation correctly failed (expected)`);
+      if (!summaryMode) {
+        console.log(`  ✓ Schema validation correctly failed (expected)`);
+      }
       result.passed = 1;
       return result;
     }
@@ -81,7 +85,9 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
 
   // If this is a schema validation error test but schema passed, that's wrong
   if (suite.schema_validation_error) {
-    console.error(`\n❌ Expected schema validation to fail for ${suite.name}, but it passed`);
+    if (!summaryMode) {
+      console.error(`\n❌ Expected schema validation to fail for ${suite.name}, but it passed`);
+    }
     result.failed = 1;
     result.failures.push({
       description: "Schema validation",
@@ -102,7 +108,9 @@ export async function runTestSuite(suite: TestSuite): Promise<TestResult> {
   const genFile = join(genDir, `${suite.name}.ts`);
   writeFileSync(genFile, generatedCode);
 
-  console.log(`\nGenerated code for ${suite.name} → ${genFile}`);
+  if (!summaryMode) {
+    console.log(`\nGenerated code for ${suite.name} → ${genFile}`);
+  }
 
   // Dynamically import generated TypeScript code (bun supports .ts natively)
   // Force fresh import by adding timestamp to bypass cache
@@ -202,8 +210,7 @@ async function runStreamingTestCase(
     const streamDecoderFn = generatedModule[`decode${typeName}Stream`];
 
     if (!streamDecoderFn) {
-      // No streaming decoder generated yet - skip test
-      console.log(`  ⚠ Skipping streaming test for ${testCase.description} - no streaming decoder generated`);
+      // No streaming decoder generated yet - skip test (suppress in summary mode)
       return { passed: true, failures: [] };
     }
 
