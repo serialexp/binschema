@@ -21,6 +21,12 @@ interface CodegenTestCase {
   shouldCompile: boolean;
 }
 
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
 const DISCRIMINATED_UNION_CODEGEN_TESTS: CodegenTestCase[] = [
   // ==========================================================================
   // Peek-Based Discriminators (DNS Pattern)
@@ -537,26 +543,26 @@ const DISCRIMINATED_UNION_CODEGEN_TESTS: CodegenTestCase[] = [
 /**
  * Run all discriminated union code generation tests
  */
-export function runDiscriminatedUnionCodegenTests() {
-  console.log("\n=== Discriminated Union Code Generation Tests ===\n");
-
+export function runDiscriminatedUnionCodegenTests(): { passed: number; failed: number; checks: TestCheck[] } {
   let passed = 0;
   let failed = 0;
+  const checks: TestCheck[] = [];
 
   for (const tc of DISCRIMINATED_UNION_CODEGEN_TESTS) {
     try {
       const generatedCode = generateTypeScriptCode(tc.schema);
+
+      // Track if this test case passed all checks
+      let testCasePassed = true;
+      const failureMessages: string[] = [];
 
       // Check each expected type
       for (const expectedType of tc.expectedTypes) {
         // Verify all required patterns are present
         for (const pattern of expectedType.mustContain) {
           if (!generatedCode.includes(pattern)) {
-            console.error(
-              `✗ ${tc.description}\n  Type '${expectedType.typeName}' missing required pattern:\n  "${pattern}"`
-            );
-            failed++;
-            continue;
+            testCasePassed = false;
+            failureMessages.push(`Type '${expectedType.typeName}' missing required pattern: "${pattern}"`);
           }
         }
 
@@ -564,30 +570,38 @@ export function runDiscriminatedUnionCodegenTests() {
         if (expectedType.mustNotContain) {
           for (const pattern of expectedType.mustNotContain) {
             if (generatedCode.includes(pattern)) {
-              console.error(
-                `✗ ${tc.description}\n  Type '${expectedType.typeName}' contains forbidden pattern:\n  "${pattern}"`
-              );
-              failed++;
-              continue;
+              testCasePassed = false;
+              failureMessages.push(`Type '${expectedType.typeName}' contains forbidden pattern: "${pattern}"`);
             }
           }
         }
       }
 
-      passed++;
+      if (testCasePassed) {
+        passed++;
+        checks.push({
+          description: tc.description,
+          passed: true
+        });
+      } else {
+        failed++;
+        checks.push({
+          description: tc.description,
+          passed: false,
+          message: failureMessages.join('\n  ')
+        });
+      }
     } catch (error: any) {
-      console.error(`✗ ${tc.description}\n  Code generation failed: ${error.message}`);
       failed++;
+      checks.push({
+        description: tc.description,
+        passed: false,
+        message: `Code generation failed: ${error.message}`
+      });
     }
   }
 
-  console.log(`✓ ${passed} tests passed`);
-  if (failed > 0) {
-    console.log(`✗ ${failed} tests failed`);
-    throw new Error(`${failed} discriminated union codegen tests failed`);
-  }
-
-  console.log("\n✓ All discriminated union code generation tests passed!\n");
+  return { passed, failed, checks };
 }
 
 // Run tests if executed directly

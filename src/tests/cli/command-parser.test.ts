@@ -6,6 +6,7 @@ import {
   HelpCommand,
   SupportedLanguage,
 } from "../../cli/command-parser";
+import { logger } from "../../logger.js";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) {
@@ -98,8 +99,14 @@ function arraysEqual(a: readonly unknown[], b: readonly unknown[]): boolean {
   return a.every((value, index) => value === b[index]);
 }
 
-export function runCommandParserTests() {
-  console.log("\n=== CLI Command Parser Tests ===\n");
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
+export function runCommandParserTests(): { passed: number; failed: number; checks: TestCheck[] } {
+  const checks: TestCheck[] = [];
 
   expectBuild(
     ["docs", "build", "--schema", "schema.json", "--out", "docs.html"],
@@ -168,7 +175,11 @@ export function runCommandParserTests() {
   expectError(["generate", "--schema", "schema.json", "--out", "./gen"], "Missing required option: --language <ts|go|rust>");
   expectError(["generate", "--schema", "schema.json", "--out", "./gen", "--language", "cpp"], "Unsupported language");
 
-  console.log("✓ CLI parser assertions passed");
-}
+  // All checks passed (assertions would have thrown)
+  checks.push({
+    description: "CLI parser assertions",
+    passed: true
+  });
 
-runCommandParserTests();
+  return { passed: 1, failed: 0, checks };
+}

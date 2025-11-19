@@ -7,7 +7,8 @@ import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
 import { sanitizeVarName } from "./type-utils.js";
 import { detectCorrespondingTracking, detectFirstLastTracking } from "./computed-fields.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
-import { generateArrayContextExtension, getContextParam } from "./context-extension.js";
+import { generateArrayContextExtension, getContextParam, getContextVarName } from "./context-extension.js";
+import { schemaRequiresContext } from "./context-analysis.js";
 
 /**
  * Calculate the size of a fixed-size primitive type item for length_prefixed_items.
@@ -46,7 +47,7 @@ export function generateEncodeArray(
   globalEndianness: Endianness,
   valuePath: string,
   indent: string,
-  generateEncodeFieldCoreImpl: (field: Field, schema: BinarySchema, endianness: Endianness, valuePath: string, indent: string) => string
+  generateEncodeFieldCoreImpl: (field: Field, schema: BinarySchema, endianness: Endianness, valuePath: string, indent: string, contextVarName?: string) => string
 ): string {
   let code = "";
 
@@ -85,17 +86,10 @@ export function generateEncodeArray(
   const trackingTypes = new Set([...correspondingTypes, ...firstLastTypes]);
 
   // Initialize position tracking if needed
-  if (trackingTypes.size > 0) {
-    code += `${indent}// Initialize position tracking (corresponding, first/last)\n`;
+  if (trackingTypes.size > 0 && schemaRequiresContext(schema)) {
+    code += `${indent}// Initialize position tracking (corresponding, first/last) in context\n`;
     for (const typeName of trackingTypes) {
-      code += `${indent}this._positions_${fieldName}_${typeName} = [];\n`;
-    }
-    // Also initialize index counters for corresponding in choice arrays
-    if (correspondingTypes.size > 0 && field.items?.type === "choice") {
-      const choices = field.items.choices || [];
-      for (const choice of choices) {
-        code += `${indent}this._index_${fieldName}_${choice.type} = 0;\n`;
-      }
+      code += `${indent}context.positions.set('${fieldName}_${typeName}', []);\n`;
     }
   }
 
@@ -105,6 +99,17 @@ export function generateEncodeArray(
     code += `${indent}if (${valuePath}.length !== ${field.length}) {\n`;
     code += `${indent}  throw new Error(\`Array '${fieldName}' must have exactly ${field.length} elements, got \${${valuePath}.length}\`);\n`;
     code += `${indent}}\n`;
+  }
+
+  // Initialize type indices Map for choice arrays (before loop)
+  const isChoiceArray = field.items?.type === "choice";
+  const choiceTypes = isChoiceArray ? (field.items?.choices || []).map((c: any) => c.type) : [];
+  if (isChoiceArray && choiceTypes.length > 0 && schema && generateArrayContextExtension && getContextParam) {
+    code += `${indent}// Initialize type indices for corresponding correlation\n`;
+    code += `${indent}const ${valuePath.replace(/\./g, "_")}_typeIndices = new Map<string, number>();\n`;
+    for (const typeName of choiceTypes) {
+      code += `${indent}${valuePath.replace(/\./g, "_")}_typeIndices.set('${typeName}', 0);\n`;
+    }
   }
 
   // Write array elements
@@ -119,14 +124,38 @@ export function generateEncodeArray(
     code += `${indent}for (let ${itemVar}_prepass_index = 0; ${itemVar}_prepass_index < ${valuePath}.length; ${itemVar}_prepass_index++) {\n`;
     code += `${indent}  const ${itemVar} = ${valuePath}[${itemVar}_prepass_index];\n`;
 
+    // Determine if this is a choice array and extract choice types
+    const isChoiceArray = field.items?.type === "choice";
+    const choiceTypes = isChoiceArray ? (field.items?.choices || []).map((c: any) => c.type) : [];
+
     // Generate context extension for pre-pass iteration
-    code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_prepass_index`, indent + "  ", schema);
+    code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_prepass_index`, indent + "  ", schema, isChoiceArray, choiceTypes);
+
+    // Increment type-specific occurrence counter for choice arrays (needed for corresponding correlation in encoders)
+    if (isChoiceArray && choiceTypes.length > 0) {
+      code += `${indent}  // Increment type-specific occurrence counter\n`;
+      code += `${indent}  const currentItemType_prepass = ${itemVar}.type;\n`;
+      const typeIndicesVar = `${valuePath.replace(/\./g, "_")}_typeIndices`;
+      const contextVar = getContextVarName(fieldName);
+      if (schemaRequiresContext(schema)) {
+        code += `${indent}  const currentTypeIndex_prepass = ${contextVar}.arrayIterations.${fieldName}.typeIndices.get(currentItemType_prepass) ?? 0;\n`;
+        code += `${indent}  ${contextVar}.arrayIterations.${fieldName}.typeIndices.set(currentItemType_prepass, currentTypeIndex_prepass + 1);\n`;
+      } else {
+        code += `${indent}  const currentTypeIndex_prepass = ${typeIndicesVar}.get(currentItemType_prepass) ?? 0;\n`;
+        code += `${indent}  ${typeIndicesVar}.set(currentItemType_prepass, currentTypeIndex_prepass + 1);\n`;
+      }
+    }
 
     if (field.items?.type === "choice") {
       // Choice array: track position based on item type
+      const contextVar = getContextVarName(fieldName);
       for (const typeName of firstLastTypes) {
         code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
-        code += `${indent}    this._positions_${fieldName}_${typeName}.push(${itemVar}_offset);\n`;
+        if (schemaRequiresContext(schema)) {
+          code += `${indent}    ${contextVar}.positions.get('${fieldName}_${typeName}')!.push(${itemVar}_offset);\n`;
+        } else {
+          code += `${indent}    this._positions_${fieldName}_${typeName}.push(${itemVar}_offset);\n`;
+        }
         code += `${indent}  }\n`;
       }
       // After tracking position, advance offset by item size
@@ -138,19 +167,24 @@ export function generateEncodeArray(
         code += `${indent}  ${ifOrElseIf} (${itemVar}.type === '${choice.type}') {\n`;
         code += `${indent}    // Encode to temporary encoder to measure size\n`;
         code += `${indent}    const temp_encoder = new ${choice.type}Encoder();\n`;
-        code += `${indent}    const temp_bytes = temp_encoder.encode(${itemVar} as ${choice.type}${getContextParam(schema, true)});\n`;
+        code += `${indent}    const temp_bytes = temp_encoder.encode(${itemVar} as ${choice.type}${getContextParam(schema, true, fieldName)});\n`;
         code += `${indent}    ${itemVar}_offset += temp_bytes.length;\n`;
         code += `${indent}  }\n`;
       }
     } else {
       // Non-choice array: track position for the single item type
       const itemType = field.items?.type;
+      const contextVar = getContextVarName(fieldName);
       if (itemType && firstLastTypes.has(itemType)) {
-        code += `${indent}  this._positions_${fieldName}_${itemType}.push(${itemVar}_offset);\n`;
+        if (schemaRequiresContext(schema)) {
+          code += `${indent}  ${contextVar}.positions.get('${fieldName}_${itemType}')!.push(${itemVar}_offset);\n`;
+        } else {
+          code += `${indent}  this._positions_${fieldName}_${itemType}.push(${itemVar}_offset);\n`;
+        }
         // Advance offset by item size
         code += `${indent}  // Encode to temporary encoder to measure size\n`;
         code += `${indent}  const temp_encoder = new ${itemType}Encoder();\n`;
-        code += `${indent}  const temp_bytes = temp_encoder.encode(${itemVar}${getContextParam(schema, true)});\n`;
+        code += `${indent}  const temp_bytes = temp_encoder.encode(${itemVar}${getContextParam(schema, true, fieldName)});\n`;
         code += `${indent}  ${itemVar}_offset += temp_bytes.length;\n`;
       }
     }
@@ -168,16 +202,38 @@ export function generateEncodeArray(
   code += `${indent}  const ${itemVar} = ${valuePath}[${itemVar}_index];\n`;
 
   // Generate context extension for array iteration
-  code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_index`, indent + "  ", schema);
+  code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_index`, indent + "  ", schema, isChoiceArray, choiceTypes);
+
+  // Increment type-specific occurrence counter for choice arrays (after context extension, before encoding)
+  if (isChoiceArray && choiceTypes.length > 0) {
+    code += `${indent}  // Increment type-specific occurrence counter\n`;
+    code += `${indent}  const currentItemType = ${itemVar}.type;\n`;
+    const typeIndicesVar = `${valuePath.replace(/\./g, "_")}_typeIndices`;
+    const contextVar = getContextVarName(fieldName);
+    if (schemaRequiresContext(schema)) {
+      // When context is enabled, use context.arrayIterations
+      code += `${indent}  const currentTypeIndex = ${contextVar}.arrayIterations.${fieldName}.typeIndices.get(currentItemType) ?? 0;\n`;
+      code += `${indent}  ${contextVar}.arrayIterations.${fieldName}.typeIndices.set(currentItemType, currentTypeIndex + 1);\n`;
+    } else {
+      // When context is not enabled, use local typeIndices Map directly
+      code += `${indent}  const currentTypeIndex = ${typeIndicesVar}.get(currentItemType) ?? 0;\n`;
+      code += `${indent}  ${typeIndicesVar}.set(currentItemType, currentTypeIndex + 1);\n`;
+    }
+  }
 
   // Track position inline for corresponding (requires iteration context)
   if (correspondingTypes.size > 0) {
+    const contextVar = getContextVarName(fieldName);
     if (field.items?.type === "choice") {
       // Choice array: track position based on item type
       code += `${indent}  // Track position for corresponding correlation\n`;
       for (const typeName of correspondingTypes) {
         code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
-        code += `${indent}    this._positions_${fieldName}_${typeName}.push(this.byteOffset);\n`;
+        if (schemaRequiresContext(schema)) {
+          code += `${indent}    ${contextVar}.positions.get('${fieldName}_${typeName}')!.push(this.byteOffset);\n`;
+        } else {
+          code += `${indent}    this._positions_${fieldName}_${typeName}.push(this.byteOffset);\n`;
+        }
         code += `${indent}  }\n`;
       }
     } else {
@@ -185,7 +241,11 @@ export function generateEncodeArray(
       const itemType = field.items?.type;
       if (itemType && correspondingTypes.has(itemType)) {
         code += `${indent}  // Track position for corresponding correlation\n`;
-        code += `${indent}  this._positions_${fieldName}_${itemType}.push(this.byteOffset);\n`;
+        if (schemaRequiresContext(schema)) {
+          code += `${indent}  ${contextVar}.positions.get('${fieldName}_${itemType}')!.push(this.byteOffset);\n`;
+        } else {
+          code += `${indent}  this._positions_${fieldName}_${itemType}.push(this.byteOffset);\n`;
+        }
       }
     }
   }
@@ -277,12 +337,15 @@ export function generateEncodeArray(
 
   // Only encode if we didn't already handle it in length_prefixed_items above
   if (!(field.kind === "length_prefixed_items" && field.item_length_type && !['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'uint64', 'int64', 'float64'].includes(field.items?.type))) {
+    // Pass field-specific context variable name for choice arrays
+    const contextVarForItem = schemaRequiresContext(schema) ? getContextVarName(fieldName) : undefined;
     code += generateEncodeFieldCoreImpl(
       field.items as Field,
       schema,
       globalEndianness,
       itemVar,
-      indent + "  "
+      indent + "  ",
+      contextVarForItem
     );
   }
 

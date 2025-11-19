@@ -1725,7 +1725,8 @@ function generateEncodeFieldCoreImpl(
   schema: BinarySchema,
   globalEndianness: Endianness,
   valuePath: string,
-  indent: string
+  indent: string,
+  contextVarName?: string
 ): string {
   if (!('type' in field)) return "";
 
@@ -1780,7 +1781,7 @@ function generateEncodeFieldCoreImpl(
       return generateEncodeDiscriminatedUnion(field, schema, globalEndianness, valuePath, indent);
 
     case "choice":
-      return generateEncodeChoice(field, schema, globalEndianness, valuePath, indent);
+      return generateEncodeChoice(field, schema, globalEndianness, valuePath, indent, contextVarName);
 
     case "back_reference":
       return generateEncodeBackReference(field, schema, globalEndianness, valuePath, indent, generateEncodeTypeReference);
@@ -1790,7 +1791,7 @@ function generateEncodeFieldCoreImpl(
 
     default:
       // Type reference - need to encode nested struct
-      return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent);
+      return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent, contextVarName);
   }
 }
 
@@ -1802,7 +1803,8 @@ function generateEncodeChoice(
   schema: BinarySchema,
   globalEndianness: Endianness,
   valuePath: string,
-  indent: string
+  indent: string,
+  contextVarName: string = 'extendedContext'
 ): string {
   let code = "";
   const choices = field.choices || [];
@@ -1822,7 +1824,7 @@ function generateEncodeChoice(
     if (useEncoderClasses) {
       // Use encoder class to pass context properly
       code += `${indent}  const encoder = new ${choice.type}Encoder();\n`;
-      code += `${indent}  const encoded = encoder.encode(${valuePath} as ${choice.type}, extendedContext);\n`;
+      code += `${indent}  const encoded = encoder.encode(${valuePath} as ${choice.type}, ${contextVarName});\n`;
       code += `${indent}  for (const byte of encoded) {\n`;
       code += `${indent}    this.writeUint8(byte);\n`;
       code += `${indent}  }\n`;
@@ -2049,7 +2051,8 @@ function generateEncodeTypeReference(
   schema: BinarySchema,
   globalEndianness: Endianness,
   valuePath: string,
-  indent: string
+  indent: string,
+  contextVarName?: string
 ): string {
   // Check if this is a generic type instantiation (e.g., Optional<uint64>)
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
@@ -2108,17 +2111,21 @@ function generateEncodeTypeReference(
   // If context is required, use encoder class to properly pass context
   if (schemaRequiresContext(schema)) {
     // Extract field name and parent path from valuePath (e.g., "value.inner" -> field="inner", parent="value")
+    // For array items (e.g., "value_items__iter"), use the item itself as parent
     const lastDot = valuePath.lastIndexOf('.');
     const fieldName = lastDot >= 0 ? valuePath.substring(lastDot + 1) : valuePath;
-    const parentPath = lastDot >= 0 ? valuePath.substring(0, lastDot) : 'value';
-    const contextVarName = `extendedContext_${fieldName}`;
+    const parentPath = lastDot >= 0 ? valuePath.substring(0, lastDot) : valuePath;
+    const nestedContextVarName = `extendedContext_${fieldName}`;
     const encoderVarName = `encoder_${fieldName}`;
     const encodedVarName = `encoded_${fieldName}`;
 
+    // Use provided context variable name as base, or default to 'context'
+    const baseContextVarName = contextVarName || 'context';
+
     code += `${indent}// Extend context for nested type\n`;
-    code += generateNestedTypeContextExtension(fieldName, parentPath, indent, schema);
+    code += generateNestedTypeContextExtension(fieldName, parentPath, indent, schema, baseContextVarName);
     code += `${indent}const ${encoderVarName} = new ${typeRef}Encoder();\n`;
-    code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath}, ${contextVarName});\n`;
+    code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath}, ${nestedContextVarName});\n`;
     code += `${indent}for (const byte of ${encodedVarName}) {\n`;
     code += `${indent}  this.writeUint8(byte);\n`;
     code += `${indent}}\n`;

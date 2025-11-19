@@ -1,4 +1,5 @@
 import { BitStreamEncoder, BitStreamDecoder } from "../../runtime/bit-stream";
+import { logger } from "../../logger.js";
 
 /**
  * Tests for BitStream position tracking and seeking
@@ -39,7 +40,7 @@ function testPositionGetter() {
     throw new Error(`After second readUint8: got ${pos4}, expected 4`);
   }
 
-  console.log("✓ Position getter tracks byte offset correctly");
+  // Passed
 }
 
 /**
@@ -93,7 +94,7 @@ function testSeekToValidOffset() {
     throw new Error(`After seek(8): position is ${pos8}, expected 8`);
   }
 
-  console.log("✓ Seek to valid offsets works correctly");
+  // Passed
 }
 
 /**
@@ -126,7 +127,7 @@ function testSeekOutOfBounds() {
     }
   }
 
-  console.log("✓ Seek out of bounds throws appropriate error");
+  // Passed
 }
 
 /**
@@ -155,7 +156,7 @@ function testSeekResetsBitOffset() {
     );
   }
 
-  console.log("✓ Seek resets bit offset correctly");
+  // Passed
 }
 
 /**
@@ -196,7 +197,7 @@ function testPushPopPositionSingle() {
     throw new Error(`After restore and read: got ${value2}, expected 0x22`);
   }
 
-  console.log("✓ Push/pop position (single level) works correctly");
+  // Passed
 }
 
 /**
@@ -258,7 +259,7 @@ function testPushPopPositionNested() {
     throw new Error(`At restored position 1: got ${value1}, expected 0x11`);
   }
 
-  console.log("✓ Push/pop position (nested) works correctly");
+  // Passed
 }
 
 /**
@@ -294,7 +295,7 @@ function testPopPositionUnderflow() {
     }
   }
 
-  console.log("✓ Pop position on empty stack throws appropriate error");
+  // Passed
 }
 
 /**
@@ -363,7 +364,7 @@ function testRealisticPointerFollowing() {
     );
   }
 
-  console.log("✓ Realistic pointer following scenario works correctly");
+  // Passed
 }
 
 /**
@@ -389,7 +390,7 @@ function testPositionIsReadOnly() {
     // Error is OK - property might be read-only
   }
 
-  console.log("✓ Position property is read-only (use seek() to modify)");
+  // Passed
 }
 
 /**
@@ -417,7 +418,7 @@ function testSeekToSamePositionAfterBits() {
     );
   }
 
-  console.log("✓ Seek to same position resets bit offset correctly");
+  // Passed
 }
 
 /**
@@ -444,7 +445,7 @@ function testSeekForwardAfterPartialByte() {
     );
   }
 
-  console.log("✓ Seek forward after partial byte resets bit offset correctly");
+  // Passed
 }
 
 /**
@@ -474,7 +475,7 @@ function testSeekBackwardAfterPartialByte() {
     );
   }
 
-  console.log("✓ Seek backward after partial byte resets bit offset correctly");
+  // Passed
 }
 
 /**
@@ -515,7 +516,7 @@ function testPositionWithBitOffset() {
     throw new Error(`Position after 8 bits: got ${pos1After8Bits}, expected 1`);
   }
 
-  console.log("✓ Position getter returns byte offset (ignores bit offset)");
+  // Passed
 }
 
 /**
@@ -548,9 +549,9 @@ function testPushPositionLimit() {
   // If we pushed all without error, that's OK too (no enforced limit)
   // But document this behavior
   if (pushed === limit) {
-    console.log(`✓ Position stack allows at least ${limit} levels (no limit enforced - consider adding one for security)`);
+    // Position stack allows at least the limit levels (no enforced limit)
   } else {
-    console.log(`✓ Position stack limit enforced at ${pushed} levels (prevents DoS)`);
+    // Position stack limit enforced at the pushed levels (prevents DoS)
   }
 
   // Clean up: pop what we pushed
@@ -559,28 +560,53 @@ function testPushPositionLimit() {
   }
 }
 
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
 /**
  * Main test runner
  */
-export function runSeekPositionTests() {
-  console.log("\n=== Seek/Position Tests ===\n");
+export function runSeekPositionTests(): { passed: number; failed: number; checks: TestCheck[] } {
+  const checks: TestCheck[] = [];
+  let passed = 0;
+  let failed = 0;
 
-  testPositionGetter();
-  testSeekToValidOffset();
-  testSeekOutOfBounds();
-  testSeekResetsBitOffset();
-  testPushPopPositionSingle();
-  testPushPopPositionNested();
-  testPopPositionUnderflow();
-  testRealisticPointerFollowing();
-  testPositionIsReadOnly();
-  testSeekToSamePositionAfterBits();
-  testSeekForwardAfterPartialByte();
-  testSeekBackwardAfterPartialByte();
-  testPositionWithBitOffset();
-  testPushPositionLimit();
+  const tests = [
+    { name: "Position getter tracks byte offset correctly", fn: testPositionGetter },
+    { name: "Seek to valid offsets works correctly", fn: testSeekToValidOffset },
+    { name: "Seek out of bounds throws appropriate error", fn: testSeekOutOfBounds },
+    { name: "Seek resets bit offset correctly", fn: testSeekResetsBitOffset },
+    { name: "Push/pop position (single level) works correctly", fn: testPushPopPositionSingle },
+    { name: "Push/pop position (nested) works correctly", fn: testPushPopPositionNested },
+    { name: "Pop position on empty stack throws appropriate error", fn: testPopPositionUnderflow },
+    { name: "Realistic pointer following scenario works correctly", fn: testRealisticPointerFollowing },
+    { name: "Position property is read-only (use seek() to modify)", fn: testPositionIsReadOnly },
+    { name: "Seek to same position resets bit offset correctly", fn: testSeekToSamePositionAfterBits },
+    { name: "Seek forward after partial byte resets bit offset correctly", fn: testSeekForwardAfterPartialByte },
+    { name: "Seek backward after partial byte resets bit offset correctly", fn: testSeekBackwardAfterPartialByte },
+    { name: "Position getter returns byte offset (ignores bit offset)", fn: testPositionWithBitOffset },
+    { name: "Position stack allows at least 128 levels (no limit enforced - consider adding one for security)", fn: testPushPositionLimit },
+  ];
 
-  console.log("\n✓ All seek/position tests passed!\n");
+  for (const test of tests) {
+    try {
+      test.fn();
+      passed++;
+      checks.push({ description: test.name, passed: true });
+    } catch (error) {
+      failed++;
+      checks.push({
+        description: test.name,
+        passed: false,
+        message: String(error)
+      });
+    }
+  }
+
+  return { passed, failed, checks };
 }
 
 // Run tests if executed directly

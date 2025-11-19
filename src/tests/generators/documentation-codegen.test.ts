@@ -7,19 +7,16 @@
 import { generateTypeScript } from "../../generators/typescript";
 import { type BinarySchema } from "../../schema/binary-schema";
 
-function assertContains(code: string, description: string, snippet: string): boolean {
-  if (!code.includes(snippet)) {
-    console.error(`✗ Missing documentation snippet (${description}):\n  ${snippet}`);
-    return false;
-  }
-  return true;
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
 }
 
-export function runDocumentationCodegenTests() {
-  console.log("\n=== Documentation Code Generation Tests ===\n");
-
+export function runDocumentationCodegenTests(): { passed: number; failed: number; checks: TestCheck[] } {
   let passed = 0;
   let failed = 0;
+  const checks: TestCheck[] = [];
 
   const schema: BinarySchema = {
     config: {
@@ -53,7 +50,7 @@ export function runDocumentationCodegenTests() {
     const code = generateTypeScript(schema);
     const normalizedCode = code.replace(/\r\n/g, "\n").replace(/^ +/gm, "");
 
-    const checks: Array<{ description: string; snippet?: string; pattern?: RegExp }> = [
+    const checkSpecs: Array<{ description: string; snippet?: string; pattern?: RegExp }> = [
       {
         description: "built-in primitive metadata (uint8)",
         pattern: /\* Number of items[\s\S]*?\* @remarks\n\*\n\* 8-bit Unsigned Integer/,
@@ -76,33 +73,48 @@ export function runDocumentationCodegenTests() {
       },
     ];
 
-    for (const check of checks) {
-      if (check.pattern) {
-        if (check.pattern.test(normalizedCode)) {
+    for (const checkSpec of checkSpecs) {
+      if (checkSpec.pattern) {
+        if (checkSpec.pattern.test(normalizedCode)) {
           passed++;
+          checks.push({
+            description: checkSpec.description,
+            passed: true
+          });
         } else {
-          console.error(`✗ Missing documentation snippet (${check.description}):\n  ${check.pattern}`);
           failed++;
+          checks.push({
+            description: checkSpec.description,
+            passed: false,
+            message: `Missing pattern: ${checkSpec.pattern}`
+          });
         }
         continue;
       }
 
-      if (assertContains(normalizedCode, check.description, check.snippet!)) {
+      if (normalizedCode.includes(checkSpec.snippet!)) {
         passed++;
+        checks.push({
+          description: checkSpec.description,
+          passed: true
+        });
       } else {
         failed++;
+        checks.push({
+          description: checkSpec.description,
+          passed: false,
+          message: `Missing snippet: "${checkSpec.snippet}"`
+        });
       }
     }
   } catch (error: any) {
-    console.error(`✗ Documentation code generation failed: ${error?.message ?? error}`);
     failed++;
+    checks.push({
+      description: "Documentation code generation",
+      passed: false,
+      message: `Generation failed: ${error?.message ?? error}`
+    });
   }
 
-  console.log(`✓ ${passed} documentation assertions passed`);
-  if (failed > 0) {
-    console.log(`✗ ${failed} documentation assertions failed`);
-    throw new Error(`${failed} documentation codegen tests failed`);
-  }
+  return { passed, failed, checks };
 }
-
-runDocumentationCodegenTests();

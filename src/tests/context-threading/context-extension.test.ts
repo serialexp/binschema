@@ -89,14 +89,20 @@ export const contextExtendsForNestedTypeTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../shared_value"  // Reference parent's field
+              target: "../shared_value"  // Reference parent's array field
             }
           }
         ]
       },
       "Outer": {
         sequence: [
-          { name: "shared_value", type: "uint16" },
+          {
+            name: "shared_value",
+            type: "array",
+            kind: "fixed",
+            length: 1234,
+            items: { type: "uint8" }
+          },
           { name: "inner", type: "Inner" }
         ]
       }
@@ -107,17 +113,17 @@ export const contextExtendsForNestedTypeTestSuite = defineTestSuite({
     {
       description: "Inner type accesses outer's shared_value via context",
       value: {
-        shared_value: 1234,
+        shared_value: new Array(1234).fill(0),
         inner: {}
       },
       decoded_value: {
-        shared_value: 1234,
+        shared_value: new Array(1234).fill(0),
         inner: {
-          outer_value: 1234  // Copied from parent
+          outer_value: 1234  // Length of parent's array
         }
       },
       bytes: [
-        0xD2, 0x04,  // shared_value = 1234 (LE)
+        ...new Array(1234).fill(0),  // shared_value array (1234 bytes)
         0xD2, 0x04   // inner.outer_value = 1234
       ]
     }

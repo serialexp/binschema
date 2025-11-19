@@ -44,7 +44,7 @@ Example:
 - [x] Add validation: computed fields must have compatible types
   - `length_of` requires numeric type (uint8, uint16, uint32, uint64)
   - Target must exist in the same type definition
-  - Target must be array or string
+  - Target must be array or string (primitives are NOT allowed - see "length_of on Primitives" below)
 
 - [x] Add validation: detect conflicts
   - If field is marked `computed`, it cannot be referenced by `length_field`
@@ -64,8 +64,37 @@ Example:
   - Before encoding each field, check if it's a computed field
   - If computed as `length_of`, calculate the target field's byte length
   - For strings: use TextEncoder to get UTF-8 byte length
-  - For arrays: use array.length
+  - For arrays: use array.length (element count)
+  - **For primitives: Schema validation error** (not allowed - see below)
   - Throw error if user provided value for computed field
+
+### `length_of` on Primitives
+
+**Decision**: Schema validation should **REJECT** `length_of` on primitive types (uint8, uint16, uint32, uint64, int8, int16, int32, int64).
+
+**Rationale**:
+- The byte length of primitives is always known statically (uint16 = 2 bytes, uint32 = 4 bytes, etc.)
+- There's no runtime reason to compute a static constant
+- If you need the byte size, just use a literal constant in your schema
+- Allowing `length_of` on primitives would suggest semantic meaning (like "give me this value") which is incorrect
+- Clear error messages are better than surprising behavior
+
+**Valid targets for `length_of`**:
+- Arrays (returns element count via `.length`)
+- Strings (returns byte length via `TextEncoder`)
+- **NOT** primitives (uint8, uint16, uint32, uint64, int8, int16, int32, int64)
+
+**Example of INVALID schema** (should fail validation):
+```json
+{
+  "name": "field_size",
+  "type": "uint8",
+  "computed": {
+    "type": "length_of",
+    "target": "some_uint16_field"  // ❌ ERROR: Cannot use length_of on primitive
+  }
+}
+```
 
 - [x] Add encoder validation
   - Throws error if user bypasses TypeScript and provides computed field

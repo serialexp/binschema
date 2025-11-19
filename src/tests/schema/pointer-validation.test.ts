@@ -1,6 +1,12 @@
 import { BinarySchema } from "../../schema/binary-schema";
 import { validateSchema, ValidationResult } from "../../schema/validator";
 
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
 /**
  * Schema Validation Tests for Back Reference Types
  *
@@ -722,11 +728,10 @@ const BACK_REFERENCE_VALIDATION_TESTS: BackReferenceTestCase[] = [
 /**
  * Run all back_reference validation tests
  */
-export function runPointerValidationTests() {
-  console.log("\n=== Pointer Schema Validation Tests ===\n");
-
+export function runPointerValidationTests(): { passed: number; failed: number; checks: TestCheck[] } {
   let passed = 0;
   let failed = 0;
+  const checks: TestCheck[] = [];
 
   for (const tc of BACK_REFERENCE_VALIDATION_TESTS) {
     const result = validateSchema(tc.schema);
@@ -734,49 +739,67 @@ export function runPointerValidationTests() {
     if (tc.shouldPass && result.valid) {
       // Expected pass, got pass
       passed++;
+      checks.push({
+        description: tc.description,
+        passed: true
+      });
     } else if (!tc.shouldPass && !result.valid) {
       // Expected fail, got fail - check error messages
       if (tc.expectedErrors) {
         let allErrorsFound = true;
+        const missingErrors: string[] = [];
+
         for (const expectedError of tc.expectedErrors) {
           const found = result.errors.some((err) =>
             err.message.toLowerCase().includes(expectedError.toLowerCase())
           );
           if (!found) {
-            console.error(
-              `✗ ${tc.description}\n  Expected error containing "${expectedError}" but got:\n  ${result.errors.map((e) => e.message).join("\n  ")}`
-            );
             allErrorsFound = false;
-            failed++;
-            break;
+            missingErrors.push(expectedError);
           }
         }
+
         if (allErrorsFound) {
           passed++;
+          checks.push({
+            description: tc.description,
+            passed: true
+          });
+        } else {
+          failed++;
+          checks.push({
+            description: tc.description,
+            passed: false,
+            message: `Expected error containing "${missingErrors.join('", "')}" but got:\n${result.errors.map((e) => e.message).join("\n")}`
+          });
         }
       } else {
         passed++;
+        checks.push({
+          description: tc.description,
+          passed: true
+        });
       }
     } else if (tc.shouldPass && !result.valid) {
       // Expected pass, got fail
-      console.error(
-        `✗ ${tc.description}\n  Expected to pass but got errors:\n  ${result.errors.map((e) => `${e.path}: ${e.message}`).join("\n  ")}`
-      );
       failed++;
+      checks.push({
+        description: tc.description,
+        passed: false,
+        message: `Expected to pass but got errors:\n${result.errors.map((e) => `${e.path}: ${e.message}`).join("\n")}`
+      });
     } else {
       // Expected fail, got pass
-      console.error(`✗ ${tc.description}\n  Expected to fail but passed validation`);
       failed++;
+      checks.push({
+        description: tc.description,
+        passed: false,
+        message: 'Expected to fail but passed validation'
+      });
     }
   }
 
-  console.log(`\n✓ ${passed} tests passed`);
-  if (failed > 0) {
-    console.log(`✗ ${failed} tests failed`);
-    throw new Error(`${failed} back_reference validation tests failed`);
-  }
-
-  console.log("\n✓ All back_reference validation tests passed!\n");
+  return { passed, failed, checks };
 }
 
 // Run tests if executed directly

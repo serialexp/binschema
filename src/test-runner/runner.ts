@@ -4,6 +4,7 @@ import { validateSchema, formatValidationErrors } from "../schema/validator.js";
 import { writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
+import kleur from "kleur";
 
 /**
  * Test Runner
@@ -31,11 +32,12 @@ export interface TestResult {
   passed: number;
   failed: number;
   failures: TestFailure[];
+  phase: "schema" | "generation" | "execution" | "pass";
 }
 
 export interface TestFailure {
   description: string;
-  type: "encode" | "decode";
+  type: "encode" | "decode" | "validation" | "generation";
   expected: number[] | string;
   actual: number[] | string;
   message: string;
@@ -50,34 +52,32 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
     passed: 0,
     failed: 0,
     failures: [],
+    phase: "pass",
   };
 
   // Validate schema before generation
   const validation = validateSchema(suite.schema);
   if (!validation.valid) {
-    if (!summaryMode) {
-      console.error(`\n❌ Schema validation failed for ${suite.name}:`);
-      console.error(formatValidationErrors(validation));
-    }
+    // Don't log immediately - will be shown in Final Results
 
     // If this is a schema validation error test, this is expected
     if (suite.schema_validation_error) {
-      if (!summaryMode) {
-        console.log(`  ✓ Schema validation correctly failed (expected)`);
-      }
       result.passed = 1;
+      result.phase = "pass";
       return result;
     }
 
     // Otherwise, unexpected schema validation failure
+    result.phase = "schema";
     result.failed = suite.test_cases?.length ?? 0;
+    const validationErrorMessage = formatValidationErrors(validation);
     for (const testCase of suite.test_cases ?? []) {
       result.failures.push({
         description: testCase.description,
-        type: "encode",
+        type: "validation",
         expected: [],
         actual: [],
-        message: "Schema validation failed",
+        message: `Schema validation failed:\n${validationErrorMessage}`,
       });
     }
     return result;
@@ -85,13 +85,11 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
 
   // If this is a schema validation error test but schema passed, that's wrong
   if (suite.schema_validation_error) {
-    if (!summaryMode) {
-      console.error(`\n❌ Expected schema validation to fail for ${suite.name}, but it passed`);
-    }
+    result.phase = "schema";
     result.failed = 1;
     result.failures.push({
       description: "Schema validation",
-      type: "encode",
+      type: "validation",
       expected: [],
       actual: [],
       message: "Expected schema validation to fail, but it passed",
@@ -100,17 +98,31 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
   }
 
   // Generate TypeScript code
-  const generatedCode = generateTypeScript(suite.schema);
+  let generatedCode: string;
+  try {
+    generatedCode = generateTypeScript(suite.schema);
+  } catch (error) {
+    // Don't log immediately - will be shown in Final Results
+    result.phase = "generation";
+    result.failed = suite.test_cases?.length ?? 0;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    for (const testCase of suite.test_cases ?? []) {
+      result.failures.push({
+        description: testCase.description,
+        type: "generation",
+        expected: [],
+        actual: [],
+        message: `Code generation failed: ${errorMessage}`,
+      });
+    }
+    return result;
+  }
 
   // Write to .generated directory (use suite.name to avoid collisions between variants)
   const genDir = join(process.cwd(), ".generated");
   mkdirSync(genDir, { recursive: true });
   const genFile = join(genDir, `${suite.name}.ts`);
   writeFileSync(genFile, generatedCode);
-
-  if (!summaryMode) {
-    console.log(`\nGenerated code for ${suite.name} → ${genFile}`);
-  }
 
   // Dynamically import generated TypeScript code (bun supports .ts natively)
   // Force fresh import by adding timestamp to bypass cache
@@ -122,8 +134,18 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
   const DecoderClass = generatedModule[`${typeName}Decoder`];
 
   if (!EncoderClass || !DecoderClass) {
-    console.error(`Could not find ${typeName}Encoder or ${typeName}Decoder in generated code`);
+    // Don't log immediately - will be shown in Final Results
+    result.phase = "generation";
     result.failed = suite.test_cases?.length ?? 0;
+    for (const testCase of suite.test_cases ?? []) {
+      result.failures.push({
+        description: testCase.description,
+        type: "generation",
+        expected: [],
+        actual: [],
+        message: `Could not find ${typeName}Encoder or ${typeName}Decoder in generated code`,
+      });
+    }
     return result;
   }
 
@@ -158,6 +180,11 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
         result.failures.push(...streamResult.failures);
       }
     }
+  }
+
+  // Mark phase as execution if there were failures during test execution
+  if (result.failed > 0) {
+    result.phase = "execution";
   }
 
   return result;
@@ -272,7 +299,7 @@ async function runTestCase(
       // If we got here, encode didn't throw - that's a failure
       failures.push({
         description: testCase.description,
-        type: "encode",
+        type: "validation",
         expected: `Error containing: ${testCase.error_message || "any error"}`,
         actual: `Encoded successfully to ${Array.from(encoded).length} bytes`,
         message: "Expected encode to throw an error, but it succeeded",
@@ -284,7 +311,7 @@ async function runTestCase(
         if (!errorStr.includes(testCase.error_message)) {
           failures.push({
             description: testCase.description,
-            type: "encode",
+            type: "validation",
             expected: `Error containing: ${testCase.error_message}`,
             actual: errorStr,
             message: "Error was thrown but message doesn't match expected",
@@ -310,7 +337,7 @@ async function runTestCase(
         // If we got here, decode didn't throw - that's a failure
         failures.push({
           description: testCase.description,
-          type: "decode",
+          type: "validation",
           expected: `Error containing: ${testCase.error_message || "any error"}`,
           actual: stringifyWithBigInt(decoded),
           message: "Expected decode to throw an error, but it succeeded",
@@ -323,7 +350,7 @@ async function runTestCase(
         if (!errorStr.includes(testCase.error_message)) {
           failures.push({
             description: testCase.description,
-            type: "decode",
+            type: "validation",
             expected: `Error containing: ${testCase.error_message}`,
             actual: errorStr,
             message: "Error was thrown but message doesn't match expected",
@@ -349,8 +376,8 @@ async function runTestCase(
       const encoder = new EncoderClass();
 
       if (debugTest) {
-        console.log(`\n=== DEBUG: ${testCase.description} ===`);
-        console.log("Input value:", JSON.stringify(testCase.value, null, 2));
+        logger.debug(`\n=== DEBUG: ${testCase.description} ===`);
+        logger.debug("Input value:", stringifyWithBigInt(testCase.value));
       }
 
       let encoded: number[];
@@ -362,9 +389,9 @@ async function runTestCase(
         expected = testCase.bytes!;
 
         if (debugTest) {
-          console.log("Expected bytes:", expected);
-          console.log("Encoded bytes:", encoded);
-          console.log("Match:", arraysEqual(encoded, expected));
+          logger.debug("Expected bytes:", expected);
+          logger.debug("Encoded bytes:", encoded);
+          logger.debug("Match:", arraysEqual(encoded, expected));
         }
       } else {
         // Bit-level encoding - use finishBits() method
@@ -373,9 +400,9 @@ async function runTestCase(
         expected = testCase.bits!;
 
         if (debugTest) {
-          console.log("Expected bits:", expected);
-          console.log("Encoded bits:", encoded);
-          console.log("Match:", arraysEqual(encoded, expected));
+          logger.debug("Expected bits:", expected);
+          logger.debug("Encoded bits:", encoded);
+          logger.debug("Match:", arraysEqual(encoded, expected));
         }
       }
 
@@ -410,9 +437,9 @@ async function runTestCase(
     }
   } catch (error) {
     if (debugTest) {
-      console.log("Exception during test:", error);
+      logger.debug("Exception during test:", error);
       if (error instanceof Error) {
-        console.log("Stack trace:", error.stack);
+        logger.debug("Stack trace:", error.stack);
       }
     }
     failures.push({
@@ -531,34 +558,129 @@ function deepEqual(a: any, b: any): boolean {
   return true;
 }
 
+import { logger } from "../logger.js";
+
+interface FunctionTestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
+interface FunctionTestResult {
+  name: string;
+  passed: number;
+  failed: number;
+  checks?: FunctionTestCheck[];
+}
+
 /**
  * Pretty print test results
  */
-export function printTestResults(results: TestResult[]): void {
+export function printTestResults(results: TestResult[], functionResults: FunctionTestResult[] = [], summaryMode = false, failuresOnly = false): void {
   let totalPassed = 0;
   let totalFailed = 0;
+  let schemaErrors = 0;
+  let generationErrors = 0;
+  let executionFailures = 0;
 
   for (const result of results) {
     totalPassed += result.passed;
     totalFailed += result.failed;
 
-    console.log(`\n${result.testSuite}:`);
-    console.log(`  ✓ ${result.passed} passed`);
+    // Count by phase
+    if (result.phase === "schema") {
+      schemaErrors++;
+    } else if (result.phase === "generation") {
+      generationErrors++;
+    } else if (result.phase === "execution") {
+      executionFailures++;
+    }
+
+    // Skip passing tests if --failures flag is set
+    if (failuresOnly && result.failed === 0) {
+      continue;
+    }
+
     if (result.failed > 0) {
-      console.log(`  ✗ ${result.failed} failed`);
+      // Show failures with condensed header
+      logger.info(`${kleur.blue(result.testSuite)} (${kleur.green('✓')} ${result.passed} passed, ${kleur.red('✗')} ${result.failed} failed):`);
       for (const failure of result.failures) {
-        console.log(`    - ${failure.description}: ${failure.message}`);
-        // Show expected vs actual for both encode and decode failures
-        if (failure.type === "encode") {
-          console.log(`      Expected bytes: [${failure.expected}]`);
-          console.log(`      Actual bytes:   [${failure.actual}]`);
-        } else if (failure.type === "decode") {
-          console.log(`      Expected: ${failure.expected}`);
-          console.log(`      Actual:   ${failure.actual}`);
+        // Format multi-line messages with proper indentation
+        const lines = failure.message.split('\n');
+        logger.info(`    - ${kleur.yellow(failure.description)}: ${lines[0]}`);
+        // Indent continuation lines
+        for (let i = 1; i < lines.length; i++) {
+          if (lines[i].trim()) { // Skip empty lines
+            logger.info(`      ${lines[i]}`);
+          }
         }
+
+        // Show expected vs actual only for actual byte/value tests
+        if (failure.type === "encode") {
+          logger.info(`      Expected bytes: [${failure.expected}]`);
+          logger.info(`      Actual bytes:   [${failure.actual}]`);
+        } else if (failure.type === "decode") {
+          logger.info(`      Expected: ${failure.expected}`);
+          logger.info(`      Actual:   ${failure.actual}`);
+        }
+        // For validation/generation errors, the message already contains the details
       }
+    } else if (result.passed > 0) {
+      // Show passing tests on a single line
+      logger.info(`${kleur.blue(result.testSuite)} (${kleur.green('✓')} ${result.passed} passed)`);
     }
   }
 
-  console.log(`\nTotal: ${totalPassed} passed, ${totalFailed} failed`);
+  // Show function test results in Final Results
+  for (const funcResult of functionResults) {
+    // Skip passing tests if --failures flag is set
+    if (failuresOnly && funcResult.failed === 0) {
+      continue;
+    }
+
+    if (funcResult.failed > 0) {
+      // Show failures with condensed header
+      logger.info(`${kleur.blue(funcResult.name)} (${kleur.green('✓')} ${funcResult.passed} passed, ${kleur.red('✗')} ${funcResult.failed} failed):`);
+      // Show failed checks in the same format as binary test failures
+      if (funcResult.checks) {
+        for (const check of funcResult.checks) {
+          if (!check.passed) {
+            // Format multi-line messages with proper indentation
+            if (check.message) {
+              const lines = check.message.split('\n');
+              logger.info(`    - ${kleur.yellow(check.description)}: ${lines[0]}`);
+              // Indent continuation lines
+              for (let i = 1; i < lines.length; i++) {
+                if (lines[i].trim()) { // Skip empty lines
+                  logger.info(`      ${lines[i]}`);
+                }
+              }
+            } else {
+              logger.info(`    - ${kleur.yellow(check.description)}`);
+            }
+          }
+        }
+      }
+    } else if (funcResult.passed > 0) {
+      // Show passing tests on a single line
+      logger.info(`${kleur.blue(funcResult.name)} (${kleur.green('✓')} ${funcResult.passed} passed)`);
+    }
+  }
+
+  // Calculate totals
+  let functionTestsPassed = 0;
+  let functionTestsFailed = 0;
+  for (const funcResult of functionResults) {
+    functionTestsPassed += funcResult.passed;
+    functionTestsFailed += funcResult.failed;
+  }
+
+  logger.info(`\nTotal: ${kleur.green(totalPassed)} passed, ${totalFailed === 0 ? kleur.green(totalFailed) : kleur.red(totalFailed)} failed`);
+
+  // Count non-empty test suites
+  const nonEmptyResults = results.filter(r => r.passed > 0 || r.failed > 0);
+  const nonEmptyFunctionResults = functionResults.filter(fr => fr.passed > 0 || fr.failed > 0);
+  const totalTests = nonEmptyResults.length + nonEmptyFunctionResults.length;
+
+  logger.always(`${totalTests} test suites, ${schemaErrors === 0 ? kleur.green(schemaErrors) : kleur.red(schemaErrors)} schema errors, ${generationErrors === 0 ? kleur.green(generationErrors) : kleur.red(generationErrors)} generation errors, ${executionFailures === 0 ? kleur.green(executionFailures) : kleur.red(executionFailures)} execution failures`);
 }

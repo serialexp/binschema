@@ -9,7 +9,7 @@ import { ARRAY_ITER_SUFFIX } from "./shared.js";
 
 /**
  * Resolve a computed field target path to the actual value path.
- * Handles relative paths (../) by stripping them and using value prefix.
+ * Handles relative paths (../) by using context.parents array.
  */
 export function resolveComputedFieldPath(target: string, baseObjectPath: string = "value"): string {
   if (!target.startsWith('../')) {
@@ -26,14 +26,22 @@ export function resolveComputedFieldPath(target: string, baseObjectPath: string 
 
   // Go up 'levelsUp' levels in the baseObjectPath
   let currentPath = baseObjectPath;
+  let parentsNeeded = 0;
+
   for (let i = 0; i < levelsUp; i++) {
     const lastDot = currentPath.lastIndexOf('.');
     if (lastDot > 0) {
       currentPath = currentPath.substring(0, lastDot);
     } else {
-      // Already at root (e.g., "value"), can't go up further
-      break;
+      // At root level (e.g., "value"), need to use context.parents
+      parentsNeeded++;
     }
+  }
+
+  // If we need to go beyond the root, use context.parents
+  // Count from the end of parents array to get the most recent parent
+  if (parentsNeeded > 0) {
+    return `context.parents[context.parents.length - ${parentsNeeded}].${remainingPath}`;
   }
 
   return `${currentPath}.${remainingPath}`;
@@ -133,7 +141,7 @@ function generateRuntimeSizeComputation(
   globalEndianness: Endianness,
   indent: string
 ): { code: string; sizeVar: string } {
-  const sizeVar = `${targetPath.replace(/[.\[\]]/g, "_")}_size`;
+  const sizeVar = `${targetPath.replace(/[^a-zA-Z0-9_]/g, "_")}_size`;
   let code = "";
 
   // For simplicity, we'll encode the value to a temporary encoder and measure the size
@@ -327,42 +335,50 @@ export function generateEncodeComputedField(
       const { arrayPath, filterType } = sameIndexInfo;
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
-      // Check if we're in an array iteration context
-      const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
+      // Check if we have array iteration context available
+      // With context threading, we check if the context has the array iteration info
+      code += `${indent}// Check if array iteration context is available\n`;
+      code += `${indent}if (!context.arrayIterations.${arrayPath}) {\n`;
+      code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context for '${arrayPath}'");\n`;
+      code += `${indent}}\n`;
+      code += `${indent}// Look up correlated item using corresponding<Type>\n`;
+      code += `${indent}const ${fieldName}_currentType = ${baseObjectPath}.type;\n`;
+      code += `${indent}// Use context to get per-type occurrence index for corresponding reference\n`;
+      code += `${indent}const ${fieldName}_typeOccurrenceIndex = context.arrayIterations.${arrayPath}.typeIndices.get(${fieldName}_currentType) ?? 0;\n`;
+      code += `${indent}if (${fieldName}_typeOccurrenceIndex === 0) {\n`;
+      code += `${indent}  throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${${fieldName}_currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
+      code += `${indent}}\n`;
+      code += `${indent}// Subtract 1 because counter was incremented after we started encoding this item\n`;
+      code += `${indent}const ${fieldName}_correlationIndex = ${fieldName}_typeOccurrenceIndex - 1;\n`;
+      code += `${indent}// Find the Nth ${filterType} in the parent's array\n`;
+      code += `${indent}const ${fieldName}_array = context.parents[context.parents.length - 1]?.${arrayPath};\n`;
+      code += `${indent}if (!${fieldName}_array) {\n`;
+      code += `${indent}  throw new Error(\`Array '${arrayPath}' not found in parent context\`);\n`;
+      code += `${indent}}\n`;
+      code += `${indent}let ${fieldName}_occurrenceCount = 0;\n`;
+      code += `${indent}let ${fieldName}_targetItem: any;\n`;
+      code += `${indent}for (const item of ${fieldName}_array) {\n`;
+      code += `${indent}  if (item.type === '${filterType}') {\n`;
+      code += `${indent}    if (${fieldName}_occurrenceCount === ${fieldName}_correlationIndex) {\n`;
+      code += `${indent}      ${fieldName}_targetItem = item;\n`;
+      code += `${indent}      break;\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}    ${fieldName}_occurrenceCount++;\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (!${fieldName}_targetItem) {\n`;
+      code += `${indent}  throw new Error(\`Could not find ${filterType} at occurrence index \${${fieldName}_correlationIndex}\`);\n`;
+      code += `${indent}}\n`;
 
-      if (iterSuffixPos < 0) {
-        // Not in array iteration context - corresponding cannot be resolved
-        // This happens when generating standalone encoders for types that are meant to be used in arrays
-        // Throw an error at runtime
-        code += `${indent}// ERROR: corresponding reference requires array iteration context\n`;
-        code += `${indent}throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context");\n`;
-      } else {
-        code += `${indent}// Look up correlated item using corresponding<Type>\n`;
+      const targetPath = `${fieldName}_targetItem${remainingPath}`;
 
-        // Parse baseObjectPath to find root and current array
-        // E.g., "value_sections__iter" -> root="value", currentArray="sections"
-        const parts = baseObjectPath.substring(0, iterSuffixPos).split('_');
-        const rootObjectPath = parts[0]; // Usually "value"
-
-        const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
-        code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
-        code += `${indent}// Use context to get correlation index for corresponding reference\n`;
-        code += `${indent}const ${fieldName}_correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
-        code += `${indent}if (${fieldName}_correlationIndex < 0) {\n`;
-        code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+      if (computed.encoding) {
+        code += `${indent}{\n`;
+        code += `${indent}  const encoder = new TextEncoder();\n`;
+        code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
         code += `${indent}}\n`;
-        code += `${indent}const ${fieldName}_targetItem = ${rootObjectPath}.${arrayPath}[${fieldName}_correlationIndex];\n`;
-
-        const targetPath = `${fieldName}_targetItem${remainingPath}`;
-
-        if (computed.encoding) {
-          code += `${indent}{\n`;
-          code += `${indent}  const encoder = new TextEncoder();\n`;
-          code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
-          code += `${indent}}\n`;
-        } else {
-          code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
-        }
+      } else {
+        code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
       }
     } else if (firstLastInfo) {
       // first/last selector - need to look up from tracking array
@@ -370,8 +386,8 @@ export function generateEncodeComputedField(
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
       code += `${indent}// Look up ${selector} item from position tracking\n`;
-      const positionsArray = `this._positions_${arrayPath}_${filterType}`;
-      code += `${indent}const targetIndex = ${positionsArray} && ${positionsArray}.length > 0 ? ${selector === "first" ? "0" : `${positionsArray}.length - 1`} : undefined;\n`;
+      code += `${indent}const ${fieldName}_positions_len = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
+      code += `${indent}const targetIndex = ${fieldName}_positions_len.length > 0 ? ${selector === "first" ? "0" : `${fieldName}_positions_len.length - 1`} : undefined;\n`;
       code += `${indent}if (targetIndex === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
       code += `${indent}const targetItem = ${baseObjectPath}.${arrayPath}[targetIndex];\n`;
 
@@ -450,12 +466,28 @@ export function generateEncodeComputedField(
 
         const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
         code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
-        code += `${indent}// Use context to get correlation index for corresponding reference\n`;
-        code += `${indent}const ${fieldName}_correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
-        code += `${indent}if (${fieldName}_correlationIndex < 0) {\n`;
-        code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+        code += `${indent}// Use context to get per-type occurrence index for corresponding reference\n`;
+        code += `${indent}const ${fieldName}_typeOccurrenceIndex = context.arrayIterations.${arrayPath}?.typeIndices.get(${fieldName}_currentType) ?? 0;\n`;
+        code += `${indent}if (${fieldName}_typeOccurrenceIndex === 0) {\n`;
+        code += `${indent}  throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${${fieldName}_currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
         code += `${indent}}\n`;
-        code += `${indent}const ${fieldName}_targetItem = ${rootObjectPath}.${arrayPath}[${fieldName}_correlationIndex];\n`;
+        code += `${indent}// Subtract 1 because counter was incremented after we started encoding this item\n`;
+        code += `${indent}const ${fieldName}_correlationIndex = ${fieldName}_typeOccurrenceIndex - 1;\n`;
+        code += `${indent}// Find the Nth ${filterType} in the array\n`;
+        code += `${indent}let ${fieldName}_occurrenceCount = 0;\n`;
+        code += `${indent}let ${fieldName}_targetItem: any;\n`;
+        code += `${indent}for (const item of ${rootObjectPath}.${arrayPath}) {\n`;
+        code += `${indent}  if (item.type === '${filterType}') {\n`;
+        code += `${indent}    if (${fieldName}_occurrenceCount === ${fieldName}_correlationIndex) {\n`;
+        code += `${indent}      ${fieldName}_targetItem = item;\n`;
+        code += `${indent}      break;\n`;
+        code += `${indent}    }\n`;
+        code += `${indent}    ${fieldName}_occurrenceCount++;\n`;
+        code += `${indent}  }\n`;
+        code += `${indent}}\n`;
+        code += `${indent}if (!${fieldName}_targetItem) {\n`;
+        code += `${indent}  throw new Error(\`Could not find ${filterType} at occurrence index \${${fieldName}_correlationIndex}\`);\n`;
+        code += `${indent}}\n`;
 
         const targetPath = `${fieldName}_targetItem${remainingPath}`;
         code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
@@ -466,8 +498,8 @@ export function generateEncodeComputedField(
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
       code += `${indent}// Look up ${selector} item from position tracking\n`;
-      const positionsArray = `this._positions_${arrayPath}_${filterType}`;
-      code += `${indent}const targetIndex = ${positionsArray} && ${positionsArray}.length > 0 ? ${selector === "first" ? "0" : `${positionsArray}.length - 1`} : undefined;\n`;
+      code += `${indent}const ${fieldName}_positions_crc = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
+      code += `${indent}const targetIndex = ${fieldName}_positions_crc.length > 0 ? ${selector === "first" ? "0" : `${fieldName}_positions_crc.length - 1`} : undefined;\n`;
       code += `${indent}if (targetIndex === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
       code += `${indent}const targetItem = ${baseObjectPath}.${arrayPath}[targetIndex];\n`;
 
@@ -499,21 +531,28 @@ export function generateEncodeComputedField(
       // We need to extract the containing object's variable name from the context
       // For inlined encoding, look for the parent object variable (e.g., value_sections_item)
 
-      // Try to infer the item variable name from the schema context
-      // For computed fields in choice types, the valuePath pattern is typically: value_arrayname__iter
-      // We can infer this from the arrayPath
-      const itemVarPattern = `value_${arrayPath}${ARRAY_ITER_SUFFIX}`;
+      // Determine the current item type
+      // If we're in an array iteration context, use the iteration variable
+      // Otherwise, use the value parameter (for encoder class methods)
+      const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
+      const itemVarPattern = iterSuffixPos >= 0
+        ? baseObjectPath.substring(0, iterSuffixPos + ARRAY_ITER_SUFFIX.length)
+        : baseObjectPath;
 
       code += `${indent}// Determine current item type to use correct correlation index\n`;
       code += `${indent}const currentType = ${itemVarPattern}.type;\n`;
-      code += `${indent}// Use context to get correlation index for corresponding reference\n`;
-      code += `${indent}const correlationIndex = extendedContext.arrayIterations.${arrayPath}?.index ?? -1;\n`;
-      code += `${indent}if (correlationIndex < 0) {\n`;
-      code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation on '${arrayPath}' which requires encoding within an array context");\n`;
+      code += `${indent}// Use context to get per-type occurrence index for corresponding reference\n`;
+      code += `${indent}const typeOccurrenceIndex = context.arrayIterations.${arrayPath}?.typeIndices.get(currentType) ?? 0;\n`;
+      code += `${indent}if (typeOccurrenceIndex === 0) {\n`;
+      code += `${indent}  throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
       code += `${indent}}\n`;
-      code += `${indent}const ${fieldName}_computed = this._positions_${arrayPath}_${filterType}[correlationIndex];\n`;
+      code += `${indent}// Subtract 1 because counter was incremented after we started encoding this item\n`;
+      code += `${indent}const correlationIndex = typeOccurrenceIndex - 1;\n`;
+      code += `${indent}// Look up the position of the Nth ${filterType}\n`;
+      code += `${indent}const ${fieldName}_positions_array = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
+      code += `${indent}const ${fieldName}_computed = ${fieldName}_positions_array[correlationIndex];\n`;
       code += `${indent}if (${fieldName}_computed === undefined) {\n`;
-      code += `${indent}  throw new Error(\`corresponding correlation failed: no ${filterType} at correlation index \${correlationIndex} for type \${currentType}\`);\n`;
+      code += `${indent}  throw new Error(\`corresponding correlation failed: no ${filterType} at occurrence index \${correlationIndex} for current type \${currentType}\`);\n`;
       code += `${indent}}\n`;
     } else if (firstLastInfo) {
       // first/last selector - look up position from tracking array
@@ -521,8 +560,7 @@ export function generateEncodeComputedField(
       code += `${indent}// Computed field '${fieldName}': auto-compute position of '${targetField}'\n`;
       code += `${indent}// Look up ${selector} ${filterType} in ${arrayPath}\n`;
 
-      const positionsArray = `this._positions_${arrayPath}_${filterType}`;
-      code += `${indent}const ${fieldName}_positions = ${positionsArray} || [];\n`;
+      code += `${indent}const ${fieldName}_positions = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
 
       if (selector === "first") {
         code += `${indent}const ${fieldName}_computed = ${fieldName}_positions.length > 0 ? ${fieldName}_positions[0] : 0xFFFFFFFF;\n`;

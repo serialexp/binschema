@@ -280,4 +280,66 @@ if (!result7.errors.some(e => e.message.includes("array of uint8"))) {
 }
 console.log("✓ Test 7 PASSED: crc32_of with uint16 array rejected");
 
+// Test 8: Invalid - length_of on primitive types should be rejected
+// Rationale: The byte length of primitives is statically known (uint16 = 2 bytes, uint32 = 4 bytes, etc.)
+// There's no runtime reason to compute a static constant. If you need the byte size, use a literal.
+// This test validates that schema validation properly rejects length_of on all primitive types.
+const lengthOfPrimitiveTestCases = [
+  { primitiveType: "uint8", byteSize: 1 },
+  { primitiveType: "uint16", byteSize: 2 },
+  { primitiveType: "uint32", byteSize: 4 },
+  { primitiveType: "uint64", byteSize: 8 },
+  { primitiveType: "int8", byteSize: 1 },
+  { primitiveType: "int16", byteSize: 2 },
+  { primitiveType: "int32", byteSize: 4 },
+  { primitiveType: "int64", byteSize: 8 },
+];
+
+let test8Passed = true;
+for (const testCase of lengthOfPrimitiveTestCases) {
+  const invalidPrimitiveSchema: BinarySchema = {
+    config: { endianness: "little_endian" },
+    types: {
+      TestType: {
+        sequence: [
+          {
+            name: "primitive_field",
+            type: testCase.primitiveType as any
+          },
+          {
+            name: "bad_length",
+            type: "uint16",
+            computed: {
+              type: "length_of",
+              target: "primitive_field"
+            }
+          }
+        ]
+      }
+    }
+  };
+
+  const result = validateSchema(invalidPrimitiveSchema);
+  if (result.valid) {
+    console.error(`Test 8 FAILED: length_of on ${testCase.primitiveType} should fail validation`);
+    console.error(`  Primitives have statically-known byte lengths (${testCase.primitiveType} = ${testCase.byteSize} bytes)`);
+    console.error("  Use a literal constant instead of computed length_of");
+    test8Passed = false;
+    break;
+  }
+  if (!result.errors.some(e => e.message.includes("must be array or string"))) {
+    console.error(`Test 8 FAILED: Expected error message 'must be array or string' for ${testCase.primitiveType}`);
+    console.error("  Actual errors:", result.errors);
+    test8Passed = false;
+    break;
+  }
+}
+
+if (!test8Passed) {
+  process.exit(1);
+}
+console.log("✓ Test 8 PASSED: length_of on all primitive types correctly rejected");
+console.log("  (uint8, uint16, uint32, uint64, int8, int16, int32, int64)");
+console.log("  Reason: Primitives have statically-known byte lengths - use literal constants instead");
+
 console.log("\n✅ All computed field validation tests passed!");

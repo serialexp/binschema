@@ -10,14 +10,28 @@ import { join, relative, dirname } from "path";
 import { fileURLToPath } from "url";
 import { TestSuite } from "./schema/test-schema.js";
 import JSON5 from "json5";
+import { setLogLevel, logger } from "./logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+interface FunctionTestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
+interface FunctionTestResult {
+  name: string;
+  passed: number;
+  failed: number;
+  checks?: FunctionTestCheck[];
+}
+
 /**
  * Export TypeScript tests to JSON (inline implementation)
  */
-async function exportTestsToJson(): Promise<void> {
+async function exportTestsToJson(filter?: string): Promise<{ filtered: FunctionTestResult[], total: number }> {
   const testsDir = join(__dirname, 'tests');
   const outputDir = join(__dirname, '../tests-json');
 
@@ -28,9 +42,13 @@ async function exportTestsToJson(): Promise<void> {
   const testFiles = findTestSourceFiles(testsDir);
 
   let totalSuites = 0;
+  const functionTestResults: FunctionTestResult[] = [];
+  let totalFunctionTests = 0;
 
   for (const testFile of testFiles) {
-    const suites = await loadTestSuitesFromTypeScript(testFile);
+    const { suites, functionResults, totalFunctionTests: fileTotal } = await loadTestSuitesFromTypeScript(testFile, filter);
+
+    totalFunctionTests += fileTotal;
 
     for (const suite of suites) {
       const relativeToTests = relative(testsDir, dirname(testFile));
@@ -49,9 +67,14 @@ async function exportTestsToJson(): Promise<void> {
       writeFileSync(outputPath, json, 'utf-8');
       totalSuites++;
     }
+
+    functionTestResults.push(...functionResults);
   }
 
-  console.log(`Exported ${totalSuites} test suites to JSON`);
+  return {
+    filtered: functionTestResults,
+    total: totalFunctionTests
+  };
 }
 
 /**
@@ -83,7 +106,7 @@ function findTestSourceFiles(dir: string): string[] {
 /**
  * Load test suites from TypeScript module
  */
-async function loadTestSuitesFromTypeScript(filePath: string): Promise<TestSuite[]> {
+async function loadTestSuitesFromTypeScript(filePath: string, filter?: string): Promise<{ suites: TestSuite[], functionResults: FunctionTestResult[], totalFunctionTests: number }> {
   const relativePath = './' + relative(__dirname, filePath).replace(/\.ts$/, '.js');
 
   try {
@@ -96,10 +119,50 @@ async function loadTestSuitesFromTypeScript(filePath: string): Promise<TestSuite
       }
     }
 
-    return testSuites;
+    // Also look for exported test functions (for non-binary tests like documentation, CLI parser)
+    const functionResults: FunctionTestResult[] = [];
+    let totalFunctionTests = 0;
+
+    for (const [key, value] of Object.entries(module)) {
+      if (typeof value === 'function' && (key.startsWith('run') || key.endsWith('Tests'))) {
+        totalFunctionTests++; // Count all function tests
+
+        // Skip running function tests that don't match the filter
+        if (filter && !key.toLowerCase().includes(filter.toLowerCase())) {
+          continue;
+        }
+
+        try {
+          const result = value();
+
+          // If function returns { passed, failed, checks? }, track it
+          if (result && typeof result === 'object' && 'passed' in result && 'failed' in result) {
+            functionResults.push({
+              name: key,
+              passed: result.passed,
+              failed: result.failed,
+              checks: result.checks || []
+            });
+          }
+        } catch (err) {
+          functionResults.push({
+            name: key,
+            passed: 0,
+            failed: 1,
+            checks: [{
+              description: 'Test execution',
+              passed: false,
+              message: `Test function ${key} threw error: ${err}`
+            }]
+          });
+        }
+      }
+    }
+
+    return { suites: testSuites, functionResults, totalFunctionTests };
   } catch (err) {
-    console.error(`Failed to load test file ${filePath}:`, err);
-    return [];
+    logger.error(`Failed to load test file ${filePath}:`, err);
+    return { suites: [], functionResults: [], totalFunctionTests: 0 };
   }
 }
 
@@ -196,60 +259,53 @@ function setupRuntimeLibrary(): void {
   const crc32Source = join(__dirname, 'runtime/crc32.ts');
   const crc32Dest = join(genDir, 'crc32.ts');
   copyFileSync(crc32Source, crc32Dest);
-
-  console.log(`Copied runtime library to ${genDir}/`);
 }
 
 async function main() {
+  // Check for DEBUG_TEST environment variable and enable debug logging
+  if (process.env.DEBUG_TEST === "1" || process.env.DEBUG_TEST === "true") {
+    setLogLevel('debug');
+  }
+
   // Parse command line arguments
   const args = process.argv.slice(2);
   let filter: string | null = null;
   let summaryMode = false;
+  let failuresOnly = false;
 
   for (const arg of args) {
     if (arg.startsWith("--filter=")) {
       filter = arg.substring("--filter=".length);
     } else if (arg === "--summary") {
       summaryMode = true;
+      setLogLevel('silent');
+    } else if (arg === "--failures") {
+      failuresOnly = true;
     } else if (arg === "--help" || arg === "-h") {
       console.log("Usage: bun run src/run-tests.ts [options]");
       console.log("");
       console.log("Options:");
       console.log("  --filter=<pattern>  Only run tests with names containing <pattern>");
+      console.log("  --failures          Show only tests with failures");
       console.log("  --summary           Show only final summary (suppress verbose output)");
       console.log("  --help, -h          Show this help message");
+      console.log("");
+      console.log("Environment Variables:");
+      console.log("  DEBUG_TEST=1        Enable verbose debug output (input values, bytes, stack traces)");
       console.log("");
       console.log("Examples:");
       console.log("  bun run src/run-tests.ts                    # Run all tests");
       console.log("  bun run src/run-tests.ts --filter=optional  # Run tests with 'optional' in name");
+      console.log("  bun run src/run-tests.ts --failures         # Show only failing tests");
       console.log("  bun run src/run-tests.ts --summary          # Run all tests, show only summary");
-      console.log("  bun run src/run-tests.ts --filter=uint8     # Run only uint8 tests");
+      console.log("  DEBUG_TEST=1 npm test -- --filter=uint8     # Debug uint8 tests with verbose output");
       process.exit(0);
     }
   }
 
-  if (!summaryMode) {
-    console.log("=".repeat(80));
-    console.log("Running BinSchema Test Suite");
-    if (filter) {
-      console.log(`Filter: "${filter}"`);
-    }
-    console.log("=".repeat(80));
 
-    // Always export TypeScript tests to JSON first
-    console.log("\n📝 Exporting TypeScript tests to JSON...");
-  }
-  await exportTestsToJson();
-  if (!summaryMode) {
-    console.log("");
-
-    // Set up runtime library for generated code
-    console.log("📦 Setting up runtime library...");
-  }
+  const { filtered: functionTestResults, total: totalFunctionTests } = await exportTestsToJson(filter);
   setupRuntimeLibrary();
-  if (!summaryMode) {
-    console.log("");
-  }
 
   // Find all test JSON files
   const testsJsonDir = join(__dirname, '../tests-json');
@@ -260,7 +316,10 @@ async function main() {
 
   for (const testFile of testFiles) {
     const suite = await loadTestSuite(testFile);
-    if (!suite) continue;
+    if (!suite) {
+      logger.warn(`Skipping invalid test file: ${testFile}`);
+      continue;
+    }
 
     const category = getCategoryFromPath(testFile);
 
@@ -292,32 +351,32 @@ async function main() {
     // Skip empty categories
     if (filteredGroupSuites.length === 0) continue;
 
-    if (!summaryMode) {
-      console.log(`\n${"━".repeat(80)}`);
-      console.log(`📦 ${category}`);
-      console.log(`${"━".repeat(80)}`);
-    }
-
     for (const suite of filteredGroupSuites) {
       const result = await runTestSuite(suite, summaryMode);
       results.push(result);
     }
   }
 
+  // Function tests are already filtered during execution
+  const filteredFunctionCount = functionTestResults.length;
+  const totalFilteredCount = filteredSuites + filteredFunctionCount;
+  const totalAllCount = totalSuites + totalFunctionTests;
+
   // Show filter summary
-  if (filter && filteredSuites === 0) {
-    console.log(`\n⚠️  No tests matched filter: "${filter}"`);
-    console.log(`Total available test suites: ${totalSuites}`);
+  if (filter && totalFilteredCount === 0) {
+    logger.always(`\n⚠️  No tests matched filter: "${filter}"`);
+    logger.always(`Total available test suites: ${totalAllCount}`);
     process.exit(0);
   } else if (filter) {
-    console.log(`\nℹ️  Ran ${filteredSuites} of ${totalSuites} test suites (filtered)`);
+    logger.info(`\nℹ️  Ran ${totalFilteredCount} of ${totalAllCount} test suites (filtered)`);
   }
 
-  console.log(`\n${"=".repeat(80)}`);
-  console.log("Final Results");
-  console.log("=".repeat(80));
+  if (failuresOnly) {
+    logger.info("\n⚠️  Showing only tests with failures");
+  }
 
-  printTestResults(results);
+  // Function tests are already filtered during execution
+  printTestResults(results, functionTestResults, summaryMode, failuresOnly);
 
   // Exit with error code if any tests failed
   const totalFailed = results.reduce((sum, r) => sum + r.failed, 0);

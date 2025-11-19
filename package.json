@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "json5": "^2.2.3",
+    "kleur": "^4.1.5",
     "zod": "^4.1.12",
     "zod-metadata-extractor": "workspace:*"
   }

@@ -1,5 +1,6 @@
 import { BitStreamEncoder, BitStreamDecoder } from "../../runtime/bit-stream";
 import { Endianness } from "../../schema/binary-schema";
+import { logger } from "../../logger.js";
 
 /**
  * Tests for BitStream peek methods (non-consuming reads)
@@ -222,7 +223,7 @@ function testPeekDoesNotAdvancePosition() {
     }
   }
 
-  console.log("✓ Peek methods don't advance position");
+  // logger.info("✓ Peek methods don't advance position");
 }
 
 /**
@@ -259,7 +260,7 @@ function testMultiplePeeksReturnSameValue() {
     }
   }
 
-  console.log("✓ Multiple peeks return same value");
+  // logger.info("✓ Multiple peeks return same value");
 }
 
 /**
@@ -297,7 +298,7 @@ function testPeekAfterRead() {
     throw new Error(`Peek after read: got ${peekByte2}, expected 0x78`);
   }
 
-  console.log("✓ Peek after read sees correct next value");
+  // logger.info("✓ Peek after read sees correct next value");
 }
 
 /**
@@ -350,7 +351,7 @@ function testPeekAtEndOfBuffer() {
     }
   }
 
-  console.log("✓ Peek at end of buffer throws appropriate error");
+  // logger.info("✓ Peek at end of buffer throws appropriate error");
 }
 
 /**
@@ -389,7 +390,7 @@ function testPeekEndianness() {
     throw new Error(`Position after all peeks: got ${decoder.position}, expected 0`);
   }
 
-  console.log("✓ Peek methods handle endianness correctly");
+  // logger.info("✓ Peek methods handle endianness correctly");
 }
 
 /**
@@ -456,7 +457,7 @@ function testPeekAfterReadingBits() {
     }
   }
 
-  console.log("✓ Peek methods correctly handle bit alignment (throw when not byte-aligned)");
+  // logger.info("✓ Peek methods correctly handle bit alignment (throw when not byte-aligned)");
 }
 
 /**
@@ -539,7 +540,7 @@ function testPeekBoundsFromPositionZero() {
     }
   }
 
-  console.log("✓ Peek methods enforce comprehensive bounds checking from position 0");
+  // logger.info("✓ Peek methods enforce comprehensive bounds checking from position 0");
 }
 
 /**
@@ -571,7 +572,7 @@ function testPeekAtArbitraryPositions() {
     }
   }
 
-  console.log("✓ Peek methods work correctly at arbitrary positions");
+  // logger.info("✓ Peek methods work correctly at arbitrary positions");
 }
 
 /**
@@ -637,42 +638,75 @@ function testPeekThenSeekIntegration() {
     throw new Error(`Position after popPosition: got ${posAfterPop}, expected 2`);
   }
 
-  console.log("✓ Peek → seek integration works correctly (DNS compression pattern)");
+  // logger.info("✓ Peek → seek integration works correctly (DNS compression pattern)");
+}
+
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
 }
 
 /**
  * Main test runner
  */
-export function runPeekMethodsTests() {
-  console.log("\n=== Peek Methods Tests ===\n");
+export function runPeekMethodsTests(): { passed: number; failed: number; checks: TestCheck[] } {
+  const checks: TestCheck[] = [];
+  let passed = 0;
+  let failed = 0;
 
   // Basic peek value tests
   for (const tc of PEEK_TEST_CASES) {
-    const decoder = new BitStreamDecoder(new Uint8Array(tc.bytes));
-    const value =
-      tc.endianness !== undefined
-        ? (decoder as any)[tc.peekMethod](tc.endianness)
-        : (decoder as any)[tc.peekMethod]();
+    try {
+      const decoder = new BitStreamDecoder(new Uint8Array(tc.bytes));
+      const value =
+        tc.endianness !== undefined
+          ? (decoder as any)[tc.peekMethod](tc.endianness)
+          : (decoder as any)[tc.peekMethod]();
 
-    if (value !== tc.expectedValue) {
-      throw new Error(
-        `${tc.description}: got ${value}, expected ${tc.expectedValue}`
-      );
+      if (value !== tc.expectedValue) {
+        throw new Error(`got ${value}, expected ${tc.expectedValue}`);
+      }
+      passed++;
+      checks.push({ description: tc.description, passed: true });
+    } catch (error) {
+      failed++;
+      checks.push({
+        description: tc.description,
+        passed: false,
+        message: String(error)
+      });
     }
   }
-  console.log(`✓ All ${PEEK_TEST_CASES.length} basic peek value tests passed`);
 
-  testPeekDoesNotAdvancePosition();
-  testMultiplePeeksReturnSameValue();
-  testPeekAfterRead();
-  testPeekAtEndOfBuffer();
-  testPeekEndianness();
-  testPeekAfterReadingBits();
-  testPeekBoundsFromPositionZero();
-  testPeekAtArbitraryPositions();
-  testPeekThenSeekIntegration();
+  const tests = [
+    { name: "Peek methods don't advance position", fn: testPeekDoesNotAdvancePosition },
+    { name: "Multiple peeks return same value", fn: testMultiplePeeksReturnSameValue },
+    { name: "Peek after read sees correct next value", fn: testPeekAfterRead },
+    { name: "Peek at end of buffer throws appropriate error", fn: testPeekAtEndOfBuffer },
+    { name: "Peek methods handle endianness correctly", fn: testPeekEndianness },
+    { name: "Peek methods correctly handle bit alignment (throw when not byte-aligned)", fn: testPeekAfterReadingBits },
+    { name: "Peek methods enforce comprehensive bounds checking from position 0", fn: testPeekBoundsFromPositionZero },
+    { name: "Peek methods work correctly at arbitrary positions", fn: testPeekAtArbitraryPositions },
+    { name: "Peek → seek integration works correctly (DNS compression pattern)", fn: testPeekThenSeekIntegration },
+  ];
 
-  console.log("\n✓ All peek methods tests passed!\n");
+  for (const test of tests) {
+    try {
+      test.fn();
+      passed++;
+      checks.push({ description: test.name, passed: true });
+    } catch (error) {
+      failed++;
+      checks.push({
+        description: test.name,
+        passed: false,
+        message: String(error)
+      });
+    }
+  }
+
+  return { passed, failed, checks };
 }
 
 // Run tests if executed directly

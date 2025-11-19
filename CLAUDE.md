@@ -15,22 +15,30 @@ BinSchema is a binary protocol schema definition and code generation tool. It al
 
 ## Testing
 
+### Running Tests
+
 ```bash
 # Run all tests (TypeScript and Go)
 make test
 
 # Run TypeScript/Bun tests only
 npm test                                       # Run all BinSchema tests (~0.15s with bun!)
-bun run src/run-tests.ts --filter=<pattern>   # Run specific tests
-bun run src/run-tests.ts --filter=uint16      # Example: only uint16 tests
-bun run src/run-tests.ts --filter=optional    # Example: only optional tests
+npm test -- --filter=<pattern>                 # Run tests matching pattern
+npm test -- --failures                         # Show only failing tests
+npm test -- --filter=uint16 --failures         # Combine flags for focused debugging
+npm test -- --summary                          # Minimal output (just final summary)
+
+# Examples
+npm test -- --filter=optional                  # Only tests with 'optional' in name
+npm test -- --failures                         # Only show test suites with failures
+DEBUG_TEST=1 npm test -- --filter=zip          # Debug zip tests with verbose output
 
 # Go test suite
 # Uses batched compilation for efficiency (single compilation, ~5-10s vs one-by-one, ~60s)
 cd go
 go test -v ./test                             # Run all tests with batched compilation
 
-# Test filtering and reporting flags
+# Test filtering and reporting flags (Go)
 TEST_FILTER=primitives go test -v ./test      # Run only tests matching 'primitives'
 TEST_FILTER=bit go test -v ./test             # Run only bitfield tests (bit_order, bitfield, single_bit, etc.)
 TEST_REPORT=summary go test -v ./test         # Print overall statistics
@@ -42,14 +50,39 @@ TEST_REPORT=json go test -v ./test            # JSON output for scripting
 
 **⚠️ Important**: Please use the environment variable flags above for analyzing test results and filtering tests. Custom shell commands are fragile and hard to maintain. If you need a report format that doesn't exist, add it to `go/test/test_summary.go` and document it here.
 
+### TypeScript Test Flags
+
+**Command-line flags:**
+- `--filter=<pattern>` - Only run tests with names containing pattern (case-insensitive)
+- `--failures` - Show only test suites with failures (hides passing tests)
+- `--summary` - Minimal output, only show final summary
+
+**Environment variables:**
+- `DEBUG_TEST=1` - Enable verbose debug output (input values, bytes, stack traces)
+
+**Useful combinations:**
+```bash
+# Focus on specific failing tests
+npm test -- --filter=context --failures
+
+# Debug a specific test with full details
+DEBUG_TEST=1 npm test -- --filter=first_element_position
+
+# Quick check: only see what's broken
+npm test -- --failures
+
+# CI mode: minimal noise
+npm test -- --summary
+```
+
 ### TypeScript Test Debugging
 
 **IMPORTANT: Always use DEBUG_TEST for debugging test failures before making code changes.**
 
 For verbose test output with detailed encoding/decoding information:
 ```bash
-DEBUG_TEST=1 npm test                           # Debug all tests (very verbose)
 DEBUG_TEST=1 npm test -- --filter=test_name    # Debug specific test (recommended)
+DEBUG_TEST=1 npm test -- --failures            # Debug only failing tests
 ```
 
 **Output includes:**
@@ -67,16 +100,17 @@ DEBUG_TEST=1 npm test -- --filter=test_name    # Debug specific test (recommende
 
 **Best practices:**
 - Always filter to a specific test (`--filter=test_name`) to avoid overwhelming output
+- Use `--failures` to see only broken tests
 - Compare expected vs actual bytes first - often reveals the root cause immediately
 - Check if exception happens during encoding or decoding
 - Look for off-by-one errors in byte positions (common with discriminator fields)
 
 **Example workflow:**
 ```bash
-# 1. Identify failing test
-npm test | grep "✗"
+# 1. Identify failing tests
+npm test -- --failures
 
-# 2. Debug with verbose output
+# 2. Debug specific test with verbose output
 DEBUG_TEST=1 npm test -- --filter=first_element_position
 
 # 3. Analyze output to find root cause
@@ -84,6 +118,122 @@ DEBUG_TEST=1 npm test -- --filter=first_element_position
 # 5. Verify fix works
 npm test -- --filter=first_element_position
 ```
+
+### Writing Tests
+
+BinSchema has two types of tests:
+
+#### 1. TestSuite Tests (for encoder/decoder validation)
+
+**Use TestSuite tests when:** Testing that a schema correctly encodes/decodes binary data.
+
+**Location:** `src/tests/**/*.test.ts`
+
+**Pattern:**
+```typescript
+import { TestSuite } from "../../schema/test-schema.js";
+
+export const myFeatureTestSuite: TestSuite = {
+  name: "my_feature",
+  description: "Tests for my feature",
+  schema: {
+    config: { endianness: "big_endian" },
+    types: {
+      "MyType": {
+        sequence: [
+          { name: "value", type: "uint16", endianness: "big_endian" }
+        ]
+      }
+    }
+  },
+  test_type: "MyType",
+  tests: [
+    {
+      description: "Zero value",
+      value: { value: 0 },
+      bytes: [0, 0]
+    },
+    {
+      description: "Max value",
+      value: { value: 65535 },
+      bytes: [255, 255]
+    }
+  ]
+};
+```
+
+**How it works:**
+- Automatically generates encoder/decoder from schema
+- Tests both encoding (value → bytes) and decoding (bytes → value)
+- Exported to JSON for cross-language validation (Go, Rust)
+
+#### 2. Custom Function Tests (for everything else)
+
+**Use custom function tests when:** Testing anything OTHER than encoder/decoder behavior:
+- Schema validation
+- Code generation patterns
+- Protocol transformations
+- Error handling
+- CLI parsing
+
+**Location:** `src/tests/**/*.test.ts` (same files as TestSuite tests)
+
+**Pattern:**
+```typescript
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;  // Only set when passed=false
+}
+
+export function runMyCustomTests(): { passed: number; failed: number; checks: TestCheck[] } {
+  let passed = 0;
+  let failed = 0;
+  const checks: TestCheck[] = [];
+
+  // Test case 1
+  try {
+    const result = myFunction();
+    if (result === expected) {
+      passed++;
+      checks.push({ description: "Function returns expected value", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Function returns expected value",
+        passed: false,
+        message: `Expected ${expected}, got ${result}`
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Function returns expected value",
+      passed: false,
+      message: `Exception: ${error.message}`
+    });
+  }
+
+  return { passed, failed, checks };
+}
+```
+
+**Requirements:**
+- Function name must start with `run` or end with `Tests` (e.g., `runMyTests`, `myCustomTests`)
+- Must return `{ passed: number, failed: number, checks: TestCheck[] }`
+- Each check must have `description`, `passed`, and optional `message` (for failures)
+- Checks are automatically discovered and integrated into test output
+
+**Examples:**
+- `src/tests/generators/discriminated-union-codegen.test.ts` - Code generation validation
+- `src/tests/schema/protocol-validation.test.ts` - Schema validation
+- `src/tests/cli/command-parser.test.ts` - CLI argument parsing
+
+**Key differences:**
+- TestSuite: Validates binary encoding/decoding behavior
+- Custom function: Validates everything else (code gen, validation, transformations, etc.)
+- Both types auto-discovered and run together
+- Both support `--filter` and `--failures` flags
 
 ## Commit Messages
 

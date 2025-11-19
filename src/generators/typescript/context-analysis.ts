@@ -305,10 +305,15 @@ export function generateContextInterface(schema: BinarySchema): string {
       code += `      items: ${arrayType};\n`;
       code += `      index: number;\n`;
       code += `      fieldName: string;\n`;
+      code += `      typeIndices: Map<string, number>;\n`;
       code += `    };\n`;
     }
     code += '  };\n';
   }
+
+  // Add position tracking for corresponding/first/last selectors
+  code += '  // Position tracking for corresponding/first/last array selectors\n';
+  code += '  positions: Map<string, number[]>;\n';
 
   code += '}\n\n';
 
@@ -320,6 +325,7 @@ export function generateContextInterface(schema: BinarySchema): string {
   if (requirements.needsArrayIterations.size > 0) {
     code += '  arrayIterations: {},\n';
   }
+  code += '  positions: new Map(),\n';
   code += '};\n\n';
 
   return code;

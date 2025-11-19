@@ -14,6 +14,12 @@ import { transformProtocolToBinary } from "../../schema/protocol-to-binary";
 import { ProtocolSchema, normalizeMessageCode } from "../../schema/protocol-schema";
 import { BinarySchema } from "../../schema/binary-schema";
 
+interface TestCheck {
+  description: string;
+  passed: boolean;
+  message?: string;
+}
+
 interface TransformTestCase {
   description: string;
   protocolSchema: ProtocolSchema;
@@ -846,11 +852,10 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
 /**
  * Run all protocol transformation tests
  */
-export function runProtocolTransformationTests() {
-  console.log("\n=== Protocol-to-Binary Transformation Tests ===\n");
-
+export function runProtocolTransformationTests(): { passed: number; failed: number; checks: TestCheck[] } {
   let passed = 0;
   let failed = 0;
+  const checks: TestCheck[] = [];
 
   for (const tc of TRANSFORM_TEST_CASES) {
     try {
@@ -887,16 +892,24 @@ export function runProtocolTransformationTests() {
 
       if (!tc.shouldSucceed) {
         // Expected failure, but got success
-        console.error(`✗ ${tc.description}\n  Expected transformation to fail but it succeeded`);
         failed++;
+        checks.push({
+          description: tc.description,
+          passed: false,
+          message: 'Expected transformation to fail but it succeeded'
+        });
         continue;
       }
 
       // Verify combined type was generated
       const combinedTypeName = tc.expectedOutput.combinedTypeName;
       if (!result.types[combinedTypeName]) {
-        console.error(`✗ ${tc.description}\n  Combined type '${combinedTypeName}' not found in output`);
         failed++;
+        checks.push({
+          description: tc.description,
+          passed: false,
+          message: `Combined type '${combinedTypeName}' not found in output`
+        });
         continue;
       }
 
@@ -908,36 +921,50 @@ export function runProtocolTransformationTests() {
       const expectedJson = JSON.stringify(expectedCombinedType, null, 2);
 
       if (actualJson !== expectedJson) {
-        console.error(`✗ ${tc.description}\n  Combined type mismatch:\n  Expected:\n${expectedJson}\n\n  Actual:\n${actualJson}`);
         failed++;
+        checks.push({
+          description: tc.description,
+          passed: false,
+          message: `Combined type mismatch:\nExpected:\n${expectedJson}\n\nActual:\n${actualJson}`
+        });
         continue;
       }
 
       passed++;
+      checks.push({
+        description: tc.description,
+        passed: true
+      });
     } catch (error: any) {
       if (!tc.shouldSucceed) {
         // Expected failure - check error message
         if (tc.expectedError && error.message.includes(tc.expectedError)) {
           passed++;
+          checks.push({
+            description: tc.description,
+            passed: true
+          });
         } else {
-          console.error(`✗ ${tc.description}\n  Expected error containing "${tc.expectedError}" but got: ${error.message}`);
           failed++;
+          checks.push({
+            description: tc.description,
+            passed: false,
+            message: `Expected error containing "${tc.expectedError}" but got: ${error.message}`
+          });
         }
       } else {
         // Unexpected failure
-        console.error(`✗ ${tc.description}\n  Unexpected error: ${error.message}`);
         failed++;
+        checks.push({
+          description: tc.description,
+          passed: false,
+          message: `Unexpected error: ${error.message}`
+        });
       }
     }
   }
 
-  console.log(`✓ ${passed} tests passed`);
-  if (failed > 0) {
-    console.log(`✗ ${failed} tests failed`);
-    throw new Error(`${failed} protocol transformation tests failed`);
-  }
-
-  console.log("\n✓ All protocol transformation tests passed!\n");
+  return { passed, failed, checks };
 }
 
 // Run tests if executed directly
