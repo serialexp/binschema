@@ -107,7 +107,7 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
     types: {
       "DataBlock": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
+          { name: "type_tag", type: "uint8", const: 0x01 },  // Discriminator: 0x01
           { name: "block_id", type: "uint8" },
           {
             name: "data",
@@ -120,7 +120,7 @@ export const arrayElementTypeSizeTestSuite = defineTestSuite({
       },
       "MetadataBlock": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
+          { name: "type_tag", type: "uint8", const: 0x02 },  // Discriminator: 0x02
           { name: "meta_id", type: "uint8" },
           { name: "flags", type: "uint16" }
         ]

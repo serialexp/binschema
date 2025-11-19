@@ -39,6 +39,7 @@ import {
   getItemSize
 } from "./typescript/array-support.js";
 import { generateContextInterface, schemaRequiresContext } from "./typescript/context-analysis.js";
+import { generateNestedTypeContextExtension } from "./typescript/context-extension.js";
 
 /**
  * TypeScript Code Generator
@@ -1494,7 +1495,7 @@ function generateEncoder(
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
   code += `  private compressionDict: Map<string, number> = new Map();\n`;
 
-  // Detect if any fields need position tracking (same_index, first/last) and declare tracking variables
+  // Detect if any fields need position tracking (corresponding, first/last) and declare tracking variables
   for (const field of fields) {
     if ('type' in field && field.type === 'array') {
       const fieldName = field.name;
@@ -1508,7 +1509,7 @@ function generateEncoder(
         for (const typeName of trackingTypes) {
           code += `  private _positions_${fieldName}_${typeName}: number[] = [];\n`;
         }
-        // Declare index counters for same_index in choice arrays
+        // Declare index counters for corresponding in choice arrays
         if (sameIndexTypes.size > 0) {
           const choices = (field as any).items?.choices || [];
           for (const choice of choices) {
@@ -1806,8 +1807,9 @@ function generateEncodeChoice(
   let code = "";
   const choices = field.choices || [];
 
-  // TODO: Auto-detect discriminator field from choice types
-  // For now, assume first field of each type is the discriminator
+  // When context is required, use encoder classes to properly pass context
+  // When context is not required, inline for better performance
+  const useEncoderClasses = schemaRequiresContext(schema);
 
   // Generate if-else chain for each choice
   // Unlike discriminated_union, choice uses flat structure (no .value wrapper)
@@ -1817,8 +1819,17 @@ function generateEncodeChoice(
 
     code += `${indent}${ifKeyword} (${valuePath}.type === '${choice.type}') {\n`;
 
-    // Encode the choice directly (no .value wrapper like discriminated_union)
-    code += generateEncodeTypeReference(choice.type, schema, globalEndianness, valuePath, indent + "  ");
+    if (useEncoderClasses) {
+      // Use encoder class to pass context properly
+      code += `${indent}  const encoder = new ${choice.type}Encoder();\n`;
+      code += `${indent}  const encoded = encoder.encode(${valuePath} as ${choice.type}, extendedContext);\n`;
+      code += `${indent}  for (const byte of encoded) {\n`;
+      code += `${indent}    this.writeUint8(byte);\n`;
+      code += `${indent}  }\n`;
+    } else {
+      // Inline encoding when no context needed
+      code += generateEncodeTypeReference(choice.type, schema, globalEndianness, valuePath, indent + "  ");
+    }
 
     code += `${indent}}`;
     if (i < choices.length - 1) {
@@ -1854,23 +1865,48 @@ function generateDecodeChoice(
 
   const choices = field.choices || [];
 
-  // TODO: Auto-detect discriminator field from all choice types
-  // For now, peek at first byte (assuming uint8 discriminator as first field)
+  // Auto-detect discriminator field from first choice type
+  let discriminatorType: string | null = null;
+  let discriminatorEndianness: Endianness | null = null;
 
-  // Peek discriminator value (first byte of first field)
-  code += `${indent}const discriminator = this.peekUint8();\n`;
+  if (choices.length > 0) {
+    const firstChoiceType = schema.types[choices[0].type];
+    if (firstChoiceType && 'sequence' in firstChoiceType && firstChoiceType.sequence.length > 0) {
+      const firstField = firstChoiceType.sequence[0];
+      discriminatorType = firstField.type;
+      discriminatorEndianness = firstField.endianness || globalEndianness;
+    }
+  }
+
+  // Peek discriminator value using the detected type
+  if (discriminatorType === 'uint32') {
+    const endian = discriminatorEndianness === 'big_endian' ? "'big'" : "'little'";
+    code += `${indent}const discriminator = this.peekUint32(${endian});\n`;
+  } else if (discriminatorType === 'uint16') {
+    const endian = discriminatorEndianness === 'big_endian' ? "'big'" : "'little'";
+    code += `${indent}const discriminator = this.peekUint16(${endian});\n`;
+  } else {
+    // Default to uint8
+    code += `${indent}const discriminator = this.peekUint8();\n`;
+  }
 
   // Generate if-else chain for each choice
   for (let i = 0; i < choices.length; i++) {
     const choice = choices[i];
     const ifKeyword = i === 0 ? "if" : "else if";
 
-    // We need to get the discriminator value for this choice type
-    // For now, assume the discriminator values are 0x01, 0x02, etc.
-    // TODO: Extract actual discriminator values from type definitions
-    const discriminatorValue = i + 1;
+    // Extract actual discriminator value from type definition
+    const choiceTypeDef = schema.types[choice.type];
+    let discriminatorValue: number | bigint = i + 1; // fallback
 
-    code += `${indent}${ifKeyword} (discriminator === 0x${discriminatorValue.toString(16).padStart(2, '0')}) {\n`;
+    if (choiceTypeDef && 'sequence' in choiceTypeDef && choiceTypeDef.sequence.length > 0) {
+      const firstField = choiceTypeDef.sequence[0];
+      if ('const' in firstField && firstField.const !== undefined) {
+        discriminatorValue = firstField.const;
+      }
+    }
+
+    code += `${indent}${ifKeyword} (discriminator === 0x${discriminatorValue.toString(16)}) {\n`;
 
     // Determine the base object for context
     const baseObject = target.includes(".") ? target.split(".")[0] : "value";
@@ -2069,20 +2105,40 @@ function generateEncodeTypeReference(
   const fields = getTypeFields(typeDef);
   let code = "";
 
-  // Add runtime validation for computed fields in nested struct
-  const computedFields = fields.filter(f => (f as any).computed);
-  if (computedFields.length > 0) {
-    code += `${indent}// Runtime validation: reject computed fields in nested struct\n`;
-    for (const field of computedFields) {
-      code += `${indent}if ((${valuePath} as any).${field.name} !== undefined) {\n`;
-      code += `${indent}  throw new Error("Field '${field.name}' is computed and cannot be set manually");\n`;
-      code += `${indent}}\n`;
-    }
-  }
+  // If context is required, use encoder class to properly pass context
+  if (schemaRequiresContext(schema)) {
+    // Extract field name and parent path from valuePath (e.g., "value.inner" -> field="inner", parent="value")
+    const lastDot = valuePath.lastIndexOf('.');
+    const fieldName = lastDot >= 0 ? valuePath.substring(lastDot + 1) : valuePath;
+    const parentPath = lastDot >= 0 ? valuePath.substring(0, lastDot) : 'value';
+    const contextVarName = `extendedContext_${fieldName}`;
+    const encoderVarName = `encoder_${fieldName}`;
+    const encodedVarName = `encoded_${fieldName}`;
 
-  for (const field of fields) {
-    const newValuePath = `${valuePath}.${field.name}`;
-    code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent, typeRef, fields);
+    code += `${indent}// Extend context for nested type\n`;
+    code += generateNestedTypeContextExtension(fieldName, parentPath, indent, schema);
+    code += `${indent}const ${encoderVarName} = new ${typeRef}Encoder();\n`;
+    code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath}, ${contextVarName});\n`;
+    code += `${indent}for (const byte of ${encodedVarName}) {\n`;
+    code += `${indent}  this.writeUint8(byte);\n`;
+    code += `${indent}}\n`;
+  } else {
+    // Inline encoding when no context needed
+    // Add runtime validation for computed fields in nested struct
+    const computedFields = fields.filter(f => (f as any).computed);
+    if (computedFields.length > 0) {
+      code += `${indent}// Runtime validation: reject computed fields in nested struct\n`;
+      for (const field of computedFields) {
+        code += `${indent}if ((${valuePath} as any).${field.name} !== undefined) {\n`;
+        code += `${indent}  throw new Error("Field '${field.name}' is computed and cannot be set manually");\n`;
+        code += `${indent}}\n`;
+      }
+    }
+
+    for (const field of fields) {
+      const newValuePath = `${valuePath}.${field.name}`;
+      code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent, typeRef, fields);
+    }
   }
 
   return code;
@@ -2479,6 +2535,86 @@ function generateDecodeDiscriminatedUnion(
     code += ` else {\n`;
     code += `${indent}  throw new Error(\`Unknown discriminator value: \${${discriminatorRef}}\`);\n`;
     code += `${indent}}\n`;
+  }
+
+  return code;
+}
+
+/**
+ * Generate inline decoding for discriminated union within array loop
+ */
+function generateDecodeDiscriminatedUnionInline(
+  field: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  indent: string,
+  arrayName: string
+): string {
+  let code = "";
+
+  const discriminator = field.discriminator || {};
+  const variants = field.variants || [];
+
+  // Determine how to read discriminator
+  if (discriminator.peek) {
+    // Peek-based discriminator
+    const peekType = discriminator.peek;
+    const endianness = discriminator.endianness || globalEndianness;
+    const endiannessArg = peekType !== "uint8" ? `'${endianness}'` : "";
+
+    code += `${indent}const discriminator = this.peek${capitalize(peekType)}(${endiannessArg});\n`;
+
+    // Generate if-else chain for each variant
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
+
+      if (variant.when) {
+        const condition = variant.when.replace(/\bvalue\b/g, 'discriminator');
+        const ifKeyword = i === 0 ? "if" : "else if";
+
+        code += `${indent}${ifKeyword} (${condition}) {\n`;
+        const variantTypeDef = schema.types[variant.type];
+        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
+
+        if (isBackReference) {
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, value);\n`;
+          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
+        } else {
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), value);\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+        }
+        code += `${indent}  ${arrayName}.push({ type: '${variant.type}', value: decodedValue });\n`;
+        code += `${indent}}`;
+        if (i < variants.length - 1) {
+          code += "\n";
+        }
+      } else {
+        // Fallback variant
+        code += ` else {\n`;
+        const variantTypeDef = schema.types[variant.type];
+        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
+
+        if (isBackReference) {
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, value);\n`;
+          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
+        } else {
+          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), value);\n`;
+          code += `${indent}  const decodedValue = decoder.decode();\n`;
+          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+        }
+        code += `${indent}  ${arrayName}.push({ type: '${variant.type}', value: decodedValue });\n`;
+        code += `${indent}}\n`;
+      }
+    }
+  } else {
+    // Field-based discriminator
+    code += `${indent}// TODO: Field-based discriminator for discriminated union inline\n`;
+    code += `${indent}throw new Error('Field-based discriminator not yet supported in inline discriminated unions');\n`;
   }
 
   return code;

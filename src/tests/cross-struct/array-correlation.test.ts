@@ -12,14 +12,14 @@ import { defineTestSuite } from "../../schema/test-schema.js";
  * - Correlation: CentralDirEntry[i] references LocalFile[i]
  */
 export const sameIndexCorrelationTestSuite = defineTestSuite({
-  name: "same_index_correlation",
+  name: "corresponding_correlation",
   description: "Array element references corresponding element in another array",
   schema: {
     config: { endianness: "little_endian" },
     types: {
       "DataBlock": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
+          { name: "type_tag", type: "uint8", const: 0x01 },  // Discriminator: 0x01
           { name: "id", type: "uint8" },
           {
             name: "data",
@@ -32,14 +32,14 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
       },
       "IndexEntry": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
+          { name: "type_tag", type: "uint8", const: 0x02 },  // Discriminator: 0x02
           { name: "id", type: "uint8" },
           {
             name: "data_offset",
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../sections[same_index<DataBlock>]"  // Position of corresponding DataBlock
+              target: "../sections[corresponding<DataBlock>]"  // Position of corresponding DataBlock
             }
           }
         ]
@@ -79,7 +79,7 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
             type: "IndexEntry",
             type_tag: 0x02,
             id: 1
-            // data_offset is computed from sections[same_index<DataBlock>]
+            // data_offset is computed from sections[corresponding<DataBlock>]
           }
         ]
       },
@@ -203,7 +203,7 @@ export const firstElementPositionTestSuite = defineTestSuite({
     types: {
       "FileData": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x02
+          { name: "type_tag", type: "uint8", const: 0x02 },  // Discriminator: 0x02
           { name: "file_id", type: "uint8" },
           {
             name: "content",
@@ -216,7 +216,7 @@ export const firstElementPositionTestSuite = defineTestSuite({
       },
       "Directory": {
         sequence: [
-          { name: "type_tag", type: "uint8" },  // Discriminator: 0x01
+          { name: "type_tag", type: "uint8", const: 0x01 },  // Discriminator: 0x01
           { name: "dir_id", type: "uint8" },
           {
             name: "first_file_offset",
@@ -513,7 +513,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
             type: "uint32",
             computed: {
               type: "position_of",
-              target: "../sections[same_index<LocalFileHeader>]"
+              target: "../sections[corresponding<LocalFileHeader>]"
             }
           },
           {

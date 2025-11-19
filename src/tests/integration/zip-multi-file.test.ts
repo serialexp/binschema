@@ -71,7 +71,7 @@ export const multiFileZipTestSuite = defineTestSuite({
       },
       "LocalFile": {
         sequence: [
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x04034b50 },
           { name: "header", type: "LocalFileHeader" },
           {
             name: "body",
@@ -84,7 +84,7 @@ export const multiFileZipTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x02014b50 },
           { name: "version_made_by", type: "uint16" },
           { name: "version_needed", type: "uint16" },
           { name: "flags", type: "uint16" },
@@ -148,7 +148,7 @@ export const multiFileZipTestSuite = defineTestSuite({
       },
       "EndOfCentralDir": {
         sequence: [
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x06054b50 },
           { name: "disk_number", type: "uint16" },
           { name: "disk_with_central_dir", type: "uint16" },
           { name: "num_entries_this_disk", type: "uint16" },
@@ -606,7 +606,7 @@ export const multiFileUtf8FilenamesTestSuite = defineTestSuite({
       },
       "LocalFile": {
         sequence: [
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x04034b50 },
           { name: "header", type: "LocalFileHeader" },
           {
             name: "body",
@@ -619,7 +619,7 @@ export const multiFileUtf8FilenamesTestSuite = defineTestSuite({
       },
       "CentralDirEntry": {
         sequence: [
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x02014b50 },
           { name: "version_made_by", type: "uint16" },
           { name: "version_needed", type: "uint16" },
           { name: "flags", type: "uint16" },
@@ -667,7 +667,7 @@ export const multiFileUtf8FilenamesTestSuite = defineTestSuite({
       },
       "EndOfCentralDir": {
         sequence: [
-          { name: "signature", type: "uint32" },
+          { name: "signature", type: "uint32", const: 0x06054b50 },
           { name: "disk_number", type: "uint16" },
           { name: "disk_with_central_dir", type: "uint16" },
           { name: "num_entries_this_disk", type: "uint16" },
