@@ -3,11 +3,192 @@
 ## Summary
 
 **Starting state:** 53 failing tests out of 540 total
-**Current state:** 7 execution failures out of 540 total
-**Progress:** 46 tests fixed (87% reduction in failures)
-**Overall:** 533/540 tests passing (98.7%)
+**Current state:** 1 execution failure out of 540 total
+**Progress:** 52 tests fixed (98% reduction in failures)
+**Overall:** 539/540 tests passing (99.8%)
 
-## Latest Session: DEBUG_ENCODE Implementation & Test Fixes (Current)
+## Latest Session: Context Threading and Path Reference Fixes (Current)
+
+### Issues Fixed
+
+#### 1. Incorrect `length_of` Target Paths (2 tests fixed)
+
+**Problem:** Tests used `target: "../filename"` for sibling field references instead of direct references.
+
+**Root Cause:** The `../` syntax is for parent context references, not siblings in the same sequence.
+
+**Tests Fixed:**
+- `context_sum_of_type_sizes_zip_style`
+- `zip_style_correlation`
+- `zip_style_aggregate_size`
+
+**Files Modified:**
+- `src/tests/context-threading/sum-of-type-sizes.test.ts`
+- `src/tests/cross-struct/array-correlation.test.ts`
+- `src/tests/cross-struct/aggregate-size.test.ts`
+
+**Changes:**
+```typescript
+// BEFORE (incorrect)
+computed: {
+  type: "length_of",
+  target: "../filename",  // Wrong for sibling reference
+  encoding: "utf8"
+}
+
+// AFTER (correct)
+computed: {
+  type: "length_of",
+  target: "filename",  // Direct sibling reference
+  encoding: "utf8"
+}
+```
+
+**Commit:** `e96211e` - "fix(test): correct length_of target paths in context-threading and cross-struct tests"
+
+---
+
+#### 2. Incorrect `type_tag` in Test Expectations (1 test fixed)
+
+**Problem:** `minimal_zip_single_file` test expected `type_tag` fields in decoded output, but schema uses `signature` fields as discriminators.
+
+**Root Cause:** Test expectations didn't match schema definition. The schema uses `const` `signature` fields as discriminators for choice types, not artificial `type_tag` fields.
+
+**Test Fixed:**
+- `minimal_zip_single_file` (2 test cases)
+
+**File Modified:**
+- `src/tests/integration/zip-minimal.test.ts`
+
+**Changes:** Removed all `type_tag` field references from `value` and `decoded_value` objects (6 occurrences).
+
+---
+
+#### 3. Context Not Extended in Pre-pass (1 test fixed)
+
+**Problem:** `aggregate_size_with_position` failed with `TypeError: undefined is not an object (evaluating 'context.parents[context.parents.length - 1].entries')`.
+
+**Root Cause:** During the pre-pass (position tracking phase), nested types were encoded without extending the context. This meant nested types couldn't access parent fields through `../` references, specifically when computing `sum_of_type_sizes` that references parent array.
+
+**Test Fixed:**
+- `aggregate_size_with_position`
+
+**File Modified:**
+- `src/generators/typescript.ts` (lines 1571-1591, 1646-1660)
+
+**Changes:**
+
+1. **Lines 1571-1591:** Extended context when encoding nested types in pre-pass
+```typescript
+// BEFORE (context not extended)
+const temp_directory_enc = new DirectoryEncoder();
+value_entries_offset += temp_directory_enc.encode(value.directory, context).length;
+
+// AFTER (context properly extended)
+const prepassContext_directory: EncodingContext = {
+  ...context,
+  parents: [
+    ...context.parents,
+    value  // Add parent to context
+  ],
+  arrayIterations: context.arrayIterations,
+  positions: context.positions
+};
+const temp_directory_enc = new DirectoryEncoder();
+value_entries_offset += temp_directory_enc.encode(value.directory, prepassContext_directory).length;
+```
+
+2. **Lines 1646-1660:** Transfer pre-computed positions into `context.positions`
+```typescript
+// After pre-pass completes, transfer positions from instance vars to context
+for (let i = 0; i < fields.length; i++) {
+  const field = fields[i];
+  if ('type' in field && field.type === 'array') {
+    const fieldName = field.name;
+    const firstLastTypes = detectFirstLastTracking(fieldName, schema);
+
+    if (firstLastTypes.size > 0) {
+      for (const itemType of firstLastTypes) {
+        currentContext.positions.set(`${fieldName}_${itemType}`,
+                                     this._positions_${fieldName}_${itemType});
+      }
+    }
+  }
+}
+```
+
+**Why This Was Needed:**
+- The `Directory` type has computed fields that use `../entries` to reference the parent's array
+- Without the parent in context, `context.parents[context.parents.length - 1]` is undefined
+- Pre-pass positions were computed but never made available to the actual encoding phase
+
+**Commit:** `786d26a` - "fix(codegen): fix context threading and position tracking in pre-pass"
+
+---
+
+### Remaining Issue: `zip_like_format` (1 test - decoder bug)
+
+**Problem:** Test fails with `TypeError: undefined is not an object (evaluating 'value.entries__iter_data.file_offset = this.readUint16("little_endian")')`
+
+**Root Cause:** Decoder code generation bug with array items that have `instances` fields.
+
+**Location:** Generated decoder at `.generated/zip_like_format.ts:453-454`
+
+**Buggy Generated Code:**
+```typescript
+for (let i = 0; i < entries_length; i++) {
+  let entries__iter: any;
+  const entries__iter_data: any = {};  // Local variable created
+  value.entries__iter_data.file_offset = this.readUint16("little_endian");  // BUG: assigns to value.entries__iter_data (doesn't exist)
+  value.entries__iter_data.file_size = this.readUint16("little_endian");    // BUG: should be entries__iter_data (local var)
+  entries__iter = new DirEntryInstance(this.context?._rootDecoder || this, entries__iter_data, this.context?._root || this as any);
+  value.entries.push(entries__iter);
+}
+```
+
+**Expected Code:**
+```typescript
+for (let i = 0; i < entries_length; i++) {
+  let entries__iter: any;
+  const entries__iter_data: any = {};
+  entries__iter_data.file_offset = this.readUint16("little_endian");  // Should assign to local var
+  entries__iter_data.file_size = this.readUint16("little_endian");
+  entries__iter = new DirEntryInstance(this.context?._rootDecoder || this, entries__iter_data, this.context?._root || this as any);
+  value.entries.push(entries__iter);
+}
+```
+
+**Schema Context:**
+```typescript
+"DirEntry": {
+  sequence: [
+    { name: "file_offset", type: "uint16" },
+    { name: "file_size", type: "uint16" }
+  ],
+  instances: [
+    {
+      name: "file",
+      type: "LocalFile",
+      position: "file_offset"  // Instance uses position reference
+    }
+  ]
+}
+```
+
+**Analysis:**
+- The decoder needs to generate code that uses `instances` pattern (lazy-loaded fields)
+- For array items with instances, it creates a local `entries__iter_data` object to hold the decoded fields
+- But the assignment incorrectly references `value.entries__iter_data` (which doesn't exist) instead of the local variable
+- This appears to be a variable scoping bug in the decoder generator when handling arrays of types that have `instances`
+
+**Next Steps:**
+- Search for decoder array generation code that handles instances
+- Look for where `${arrayItemVar}_data` assignments are generated
+- Fix the code to use the local variable name instead of prefixing with `value.`
+
+---
+
+## Previous Session: DEBUG_ENCODE Implementation & Test Fixes
 
 ### Major Additions
 
