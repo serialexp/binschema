@@ -482,7 +482,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../filename",
+              target: "filename",
               encoding: "utf8"
             }
           },
@@ -504,7 +504,7 @@ export const zipStyleCorrelationTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../filename",
+              target: "filename",
               encoding: "utf8"
             }
           },

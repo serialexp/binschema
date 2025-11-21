@@ -454,7 +454,7 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../filename",
+              target: "filename",
               encoding: "utf8"
             }
           },
@@ -475,7 +475,7 @@ export const zipStyleAggregateSizeTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../filename",
+              target: "filename",
               encoding: "utf8"
             }
           },

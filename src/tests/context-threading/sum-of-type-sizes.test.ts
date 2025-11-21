@@ -177,7 +177,7 @@ export const zipStyleSumOfTypeSizesTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../filename",
+              target: "filename",
               encoding: "utf8"
             }
           },
@@ -199,7 +199,7 @@ export const zipStyleSumOfTypeSizesTestSuite = defineTestSuite({
             type: "uint16",
             computed: {
               type: "length_of",
-              target: "../filename",
+              target: "filename",
               encoding: "utf8"
             }
           },
@@ -305,29 +305,29 @@ export const zipStyleSumOfTypeSizesTestSuite = defineTestSuite({
             type_tag: 0x02,
             signature: 0x02014b50,
             filename_length: 5,
-            local_header_offset: 13,
+            local_header_offset: 12,
             filename: "b.txt"
           },
           {
             type: "EndOfCentralDir",
             type_tag: 0x03,
             signature: 0x06054b50,
-            central_dir_offset: 26,   // Position of first CentralDirEntry
+            central_dir_offset: 24,   // Position of first CentralDirEntry
             central_dir_size: 32      // Sum of 2 CentralDirEntry sizes (16 bytes each)
           }
         ]
       },
       bytes: [
-        // sections[0]: LocalFileHeader "a.txt" (13 bytes)
+        // sections[0]: LocalFileHeader "a.txt" (12 bytes)
         0x01,                    // type_tag
         0x50, 0x4b, 0x03, 0x04,  // signature
         5, 0,                    // filename_length
         0x61, 0x2e, 0x74, 0x78, 0x74,  // "a.txt"
 
-        // sections[1]: LocalFileHeader "b.txt" (13 bytes)
+        // sections[1]: LocalFileHeader "b.txt" (12 bytes)
         0x01,
         0x50, 0x4b, 0x03, 0x04,
-        5, 0,
+        5, 0,                    // filename_length
         0x62, 0x2e, 0x74, 0x78, 0x74,  // "b.txt"
 
         // sections[2]: CentralDirEntry "a.txt" (16 bytes)
@@ -340,14 +340,14 @@ export const zipStyleSumOfTypeSizesTestSuite = defineTestSuite({
         // sections[3]: CentralDirEntry "b.txt" (16 bytes)
         0x02,
         0x50, 0x4b, 0x01, 0x02,
-        5, 0,
-        13, 0, 0, 0,             // local_header_offset = 13
+        5, 0,                    // filename_length
+        12, 0, 0, 0,             // local_header_offset = 12
         0x62, 0x2e, 0x74, 0x78, 0x74,
 
-        // sections[4]: EndOfCentralDir (14 bytes)
+        // sections[4]: EndOfCentralDir (13 bytes)
         0x03,
         0x50, 0x4b, 0x05, 0x06,  // signature
-        26, 0, 0, 0,             // central_dir_offset = 26
+        24, 0, 0, 0,             // central_dir_offset = 24
         32, 0, 0, 0              // central_dir_size = 32 (2 × 16)
       ]
     }
