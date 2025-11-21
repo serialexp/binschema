@@ -1,9 +1,12 @@
 # BinSchema TODO
 
-## CODEGEN Improvements (from docs/CODEGEN_IMPROVEMENTS.md)
-- [x] **Generate JSDoc for discriminated unions**
+This file tracks active work and future enhancements. Completed items have been moved to `docs/finished/COMPLETED_TODO_ITEMS.md`.
+
+## Active Work
+
+### CODEGEN Improvements (from docs/CODEGEN_IMPROVEMENTS.md)
+
 - [ ] **Extract inline anonymous types to named interfaces**
-- [x] **Add const enums for discriminated union types**
 - [ ] **Add input validation for bitfields**
 - [ ] **Add const enums for well-known discriminator values**
 - [ ] **Generate helper type guards**
@@ -14,24 +17,15 @@
 - [ ] Add test that validates all public interfaces have JSDoc
 - [ ] Add snapshot test for generated code structure
 
-## DNS Compression Plan (from docs/DNS_COMPRESSION_PLAN.md)
-- [x] All runtime tests pass (peek, seek, position)
-- [x] All schema validation tests pass
-- [x] All code generation tests pass (code compiles & runs)
-- [x] All DNS protocol tests pass (including compression)
-- [x] Circular back references detected and rejected
-- [x] Generated code handles real DNS responses from RFC 1035
-- [x] Documentation explains how to use new features
-- [x] Example DNS schema works end-to-end
+### Go Implementation Plan (from docs/GO_IMPLEMENTATION_PLAN.md)
 
-## Go Implementation Plan (from docs/GO_IMPLEMENTATION_PLAN.md)
-### Phase 0: Setup (~30 min)
+#### Phase 0: Setup (~30 min)
 - [ ] Create `go/` directory structure
 - [ ] Initialize Go module: `go mod init github.com/anthropics/binschema`
 - [ ] Add basic README explaining Go implementation
 - [ ] Create placeholder files for each component
 
-### Validation & Completion Checklist
+#### Validation & Completion Checklist
 - [ ] All primitive type tests pass (10 test suites)
 - [ ] All composite type tests pass (6 test suites)
 - [ ] All advanced feature tests pass (4 test suites)
@@ -42,104 +36,76 @@
 - [ ] Examples run successfully
 - [ ] Can generate SuperChat protocol encoders/decoders
 
-## Project Progress Follow-Ups (from docs/PROGRESS.md)
-### Critical – Schema Migration Tasks
+### Schema Migration Tasks
+
 - [ ] Merge IoT protocol schema files into single unified schema
 - [ ] Merge any other protocol schemas (follow dns.schema.json pattern)
 - [ ] Update all protocol tests to use merged schemas
 
-### Implement Field-Referenced Array Decoder Support (High Priority)
-- [ ] Update TypeScript generator to handle field-referenced arrays
-- [ ] Decoder needs to access earlier fields in same sequence for array lengths
-- [ ] Support cross-field references (e.g., payload arrays referencing header counts)
-*Estimated impact: +2 tests passing (DNS protocol tests)*
+### Refactor Plan – Type System (from docs/REFACTOR_PLAN.md)
 
-### Fix Decoder Conditional Logic (High Priority)
-- [x] Add conditional wrapper in `generateDecodeFieldCore()`
-- [x] Evaluate condition expressions (start with simple `present == 1`)
-- [x] Handle undefined fields correctly in decoder
-*Estimated impact: +8 tests passing (optionals)*
-
-### Fix Array Items Undefined Bug
-- [ ] Debug test schemas to find source of undefined items
-- [ ] Ensure all array definitions have valid `items` field
-- [ ] Improve error message if items missing
-*Estimated impact: +13 tests passing (arrays)*
-
-### Fix BigInt Conditional Expressions
-- [ ] Detect when conditional involves BigInt types
-- [ ] Cast appropriately (Number() or BigInt())
-- [ ] Generate type-safe comparison code
-*Estimated impact: +4 tests passing (multiple conditionals)*
-
-### Fix Null-Terminated String Decoding
-- [ ] Check element type in null-terminated array decoder
-- [ ] Read full elements, not just bytes
-*Estimated impact: +2 tests passing (c_string)*
-
-### Audit Test Suite Type Names
-- [ ] Check all `test_type` values match schema type keys
-- [ ] Fix mismatches in test files
-*Estimated impact: +3-4 tests passing (bit-level)*
-
-### Future Enhancements
-- [ ] Benchmark encoder/decoder performance
-- [ ] Consider pre-allocated buffer sizes
-- [ ] Profile bit operations for hot paths
-- [ ] Design Go code structure (types, encoder, decoder)
-- [ ] Implement generator similar to TypeScript version
-- [ ] Add Go-specific tests
-- [ ] Generate visual schema documentation
-- [ ] Show byte/bit layouts
-- [ ] Include examples and test cases
-- [ ] Support for enums
-- [ ] Support for unions/tagged unions
-- [ ] Support for alignment/padding
-- [ ] Support for computed fields (checksums, lengths)
-
-### Milestones
-- [ ] Decoder conditionals working
-- [ ] Array handling robust
-- [ ] String types fully supported
-- [ ] 80%+ tests passing
-- [ ] 95%+ tests passing
-- [ ] Performance benchmarks
-- [ ] Documentation complete
-- [ ] Go generator implemented
-
-## Refactor Plan – `fields` → `sequence` (from docs/REFACTOR_PLAN.md)
-- [ ] All 272 tests passing
-- [x] No schema uses `"fields"` (all use `"sequence"`)
+- [ ] All 256+ tests passing (currently: ✅ 256 passing)
 - [ ] Type aliases work correctly (String, Optional, etc.)
 - [ ] TypeScript generator produces correct code
 - [ ] HTML generator produces correct docs
 - [ ] Example SuperChat schema uses type aliases
 
-## Schema Documentation System (from docs/SCHEMA_DOCUMENTATION.md)
-### Phase 1: Metadata System
+### Schema Documentation System (from docs/SCHEMA_DOCUMENTATION.md)
+
+#### Phase 1: Metadata System
 - [ ] Add `.meta()` calls to bit-level types (bit, bitfield)
 - [ ] Add `.meta()` calls to composite types (array, string, optional, discriminated_union, pointer)
 - [ ] Add `.meta()` calls to special types (conditional, type reference)
 
-### Phase 2: Generic Metadata Extractor
+#### Phase 2: Generic Metadata Extractor
 - [ ] Handle array types
 - [ ] Handle optional/nullable types
 - [ ] Handle recursive schemas
 
-### Phase 3: HTML Generator
+#### Phase 3: HTML Generator
 - [ ] Add search/filter functionality (optional, future)
 
-### Phase 4: Integration
+#### Phase 4: Integration
 - [ ] Add to CI/deployment pipeline (optional, future)
 
-### Phase 5: Documentation & Examples
+#### Phase 5: Documentation & Examples
 - [ ] Document metadata format and conventions
 - [ ] Document how to use the generic extractor
 - [ ] Provide example for documenting custom schemas
 - [ ] Update main README with link to type reference
 
-## Streaming Support Roadmap (from docs/STREAMING_ANALYSIS.md)
-### Phase 1: `length_prefixed_items` Array Kind (~2-3 days)
+## Future Enhancements
+
+### Performance
+
+- [ ] Benchmark encoder/decoder performance
+- [ ] Consider pre-allocated buffer sizes
+- [ ] Profile bit operations for hot paths
+
+### Language Support
+
+- [ ] Design Go code structure (types, encoder, decoder)
+- [ ] Implement generator similar to TypeScript version
+- [ ] Add Go-specific tests
+- [ ] Rust generator improvements (currently experimental)
+
+### Documentation
+
+- [ ] Generate visual schema documentation
+- [ ] Show byte/bit layouts
+- [ ] Include examples and test cases
+
+### Type System Extensions
+
+- [ ] Support for enums
+- [ ] Support for unions/tagged unions (beyond current discriminated unions)
+- [ ] Support for alignment/padding
+- [ ] Support for additional computed field types (beyond length_of, crc32_of, position_of)
+
+### Streaming Support Roadmap (from docs/STREAMING_ANALYSIS.md)
+
+#### Phase 1: `length_prefixed_items` Array Kind (~2-3 days)
+
 **Schema Changes**
 - [ ] Add `item_length_type` field to array schema definition
 - [ ] Validate `length_prefixed_items` kind in schema validator
@@ -173,7 +139,8 @@
 - [ ] `length-prefixed-items.test.ts` – optional fields
 - [ ] `length-prefixed-items.test.ts` – size constraint validation
 
-### Phase 2: Error Codes for Cross-Language Compatibility (~1 day)
+#### Phase 2: Error Codes for Cross-Language Compatibility (~1 day)
+
 **BitStreamDecoder Changes**
 - [ ] Add `lastErrorCode: string | null` property to `BitStreamDecoder`
 - [ ] Set `lastErrorCode = 'INCOMPLETE_DATA'` when hitting EOF in all read methods
@@ -190,7 +157,8 @@
 - [ ] Test that `lastErrorCode` is set correctly on EOF
 - [ ] Test that `lastErrorCode` is cleared on success
 
-### Phase 3: Streaming Layer (~2-3 days)
+#### Phase 3: Streaming Layer (~2-3 days)
+
 **New Module: `src/runtime/stream-decoder.ts`**
 - [ ] Create `readExactly(reader, n)` helper
 - [ ] Implement `decodeArrayStream()` for `length_prefixed_items`
@@ -209,7 +177,8 @@
 - [ ] `chunked-network.test.ts` – `length_prefixed_items` with chunks
 - [ ] Update tests to work with actual generated streaming functions
 
-### Phase 4: Code Generation for Streaming Variants (~1-2 days)
+#### Phase 4: Code Generation for Streaming Variants (~1-2 days)
+
 **Codegen Changes**
 - [ ] Add `generate_streaming: true` option to code generator config
 - [ ] Detect root-level arrays in schema
@@ -222,7 +191,8 @@
 - [ ] Document when to use streaming vs batch decoding
 - [ ] Add usage examples
 
-### Phase 5: Documentation and Examples (~1 day)
+#### Phase 5: Documentation and Examples (~1 day)
+
 **Documentation Updates**
 - [ ] Update `CLAUDE.md` with streaming section
 - [ ] Add streaming examples to `examples/` directory
@@ -240,7 +210,8 @@
 - [ ] Add badges/indicators for streaming support
 - [ ] Link to streaming analysis document
 
-### Testing Checklist
+#### Testing Checklist
+
 **Unit Tests**
 - [ ] All existing tests pass (no regressions)
 - [ ] `length-prefixed-items.test.ts` (wire format)
@@ -266,13 +237,15 @@
 - [ ] Measure memory usage with large arrays (no unbounded buffering)
 - [ ] Verify backpressure handling (slow consumer doesn't OOM)
 
-### Cross-Language Considerations
+#### Cross-Language Considerations
+
 - [ ] Document error codes in shared spec
 - [ ] Ensure wire format is language-agnostic
 - [ ] Test interoperability (TypeScript encode → Go decode)
 - [ ] Consider Go-specific optimizations (`io.Reader` interface)
 
-### Final Checklist
+#### Final Checklist
+
 - [ ] All tests passing
 - [ ] Documentation complete
 - [ ] Examples working
@@ -280,3 +253,15 @@
 - [ ] Error messages are clear and helpful
 - [ ] Code review complete
 - [ ] Streaming support ready for production use
+
+## Milestones
+
+- [x] Computed fields working (length_of, crc32_of, position_of)
+- [x] Array selectors working (first, last, corresponding)
+- [x] Context threading implemented
+- [x] Cross-struct references for ZIP support
+- [x] All 256+ tests passing
+- [ ] Performance benchmarks established
+- [ ] Documentation complete
+- [ ] Go generator implemented
+- [ ] Streaming support added
