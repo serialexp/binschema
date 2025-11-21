@@ -145,7 +145,19 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       const code = generateTypeScript(schema);
       const outputPath = join(absoluteOut, "generated.ts");
       writeFileSync(outputPath, code, "utf-8");
+
+      // Copy runtime dependencies
+      const runtimeFiles = ["bit-stream.ts", "seekable-bit-stream.ts", "binary-reader.ts", "crc32.ts"];
+      const runtimeDir = resolve(process.cwd(), "src/runtime");
+      for (const file of runtimeFiles) {
+        const srcPath = join(runtimeDir, file);
+        const destPath = join(absoluteOut, file);
+        const content = readFileSync(srcPath, "utf-8");
+        writeFileSync(destPath, content, "utf-8");
+      }
+
       console.log(`Generated TypeScript sources → ${outputPath}`);
+      console.log(`Copied runtime dependencies → ${absoluteOut}/`);
       break;
     }
     case "rust":

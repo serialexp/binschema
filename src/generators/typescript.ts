@@ -69,7 +69,7 @@ export function generateTypeScriptCode(schema: BinarySchema): string {
   const globalBitOrder = schema.config?.bit_order || "msb_first";
 
   // Import runtime library (from same directory)
-  let code = `import { BitStreamEncoder, BitStreamDecoder } from "./BitStream.js";\n\n`;
+  let code = `import { BitStreamEncoder, BitStreamDecoder } from "./bit-stream.js";\n\n`;
 
   // Add global visitedOffsets for back_reference circular reference detection
   code += `// Global set for circular reference detection in back references\n`;
@@ -102,7 +102,7 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   const addTraceLogs = options?.addTraceLogs || false;
 
   // Import runtime library (from same directory)
-  let code = `import { BitStreamEncoder, Endianness } from "./BitStream.js";\n`;
+  let code = `import { BitStreamEncoder, Endianness } from "./bit-stream.js";\n`;
   code += `import { SeekableBitStreamDecoder } from "./seekable-bit-stream.js";\n`;
   code += `import { createReader } from "./binary-reader.js";\n`;
   code += `import { crc32 } from "./crc32.js";\n\n`;
