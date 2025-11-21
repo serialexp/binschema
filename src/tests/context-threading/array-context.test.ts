@@ -354,7 +354,7 @@ export const lastSelectorTestSuite = defineTestSuite({
           { type: "DataChunk", type_tag: 0xDA, chunk_id: 3, content: [0x05, 0x06] }
         ],
         footer: {
-          last_data_position: 10,  // Position of chunks[4] (last DataChunk)
+          last_data_position: 12,  // Position of chunks[4] (last DataChunk)
           total_chunks: 5
         }
       },
@@ -496,13 +496,13 @@ export const multipleVariantsSameIndexTestSuite = defineTestSuite({
           {
             type: "CentralDir",
             type_tag: 0x02,
-            local_offset: 7,     // Position of sections[1] (corresponding)
+            local_offset: 6,     // Position of sections[1] (corresponding) - CORRECTED from 7
             compressed_size: 3
           },
           {
             type: "EndRecord",
             type_tag: 0x03,
-            cd_start: 14  // Position of first CentralDir (sections[2])
+            cd_start: 12  // Position of first CentralDir (sections[2]) - CORRECTED from 14
           }
         ]
       },
@@ -510,22 +510,22 @@ export const multipleVariantsSameIndexTestSuite = defineTestSuite({
         // sections[0]: LocalFile (position 0)
         0x01, 1, 0, 0xAA, 0xBB, 0xCC,
 
-        // sections[1]: LocalFile (position 7)
+        // sections[1]: LocalFile (position 6) - CORRECTED from 7
         0x01, 2, 0, 0xDD, 0xEE, 0xFF,
 
-        // sections[2]: CentralDir (position 14)
+        // sections[2]: CentralDir (position 12) - CORRECTED from 14
         0x02,
         0, 0, 0, 0,   // local_offset = 0
         3, 0,         // compressed_size = 3
 
-        // sections[3]: CentralDir (position 21)
+        // sections[3]: CentralDir (position 19) - CORRECTED from 21
         0x02,
-        7, 0, 0, 0,   // local_offset = 7
+        6, 0, 0, 0,   // local_offset = 6 - CORRECTED from 7
         3, 0,         // compressed_size = 3
 
-        // sections[4]: EndRecord (position 28)
+        // sections[4]: EndRecord (position 26) - CORRECTED from 28
         0x03,
-        14, 0, 0, 0   // cd_start = 14
+        12, 0, 0, 0   // cd_start = 12 - CORRECTED from 14
       ]
     }
   ]

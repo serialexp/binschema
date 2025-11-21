@@ -47,7 +47,8 @@ export function generateEncodeArray(
   globalEndianness: Endianness,
   valuePath: string,
   indent: string,
-  generateEncodeFieldCoreImpl: (field: Field, schema: BinarySchema, endianness: Endianness, valuePath: string, indent: string, contextVarName?: string) => string
+  generateEncodeFieldCoreImpl: (field: Field, schema: BinarySchema, endianness: Endianness, valuePath: string, indent: string, contextVarName?: string) => string,
+  baseContextVar: string = 'context'
 ): string {
   let code = "";
 
@@ -116,9 +117,9 @@ export function generateEncodeArray(
   // Use unique variable name to avoid shadowing in nested arrays
   const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
 
-  // Pre-pass: compute positions before encoding (only for first/last selectors)
-  // Note: corresponding requires inline tracking during encoding because it needs iteration context
-  if (firstLastTypes.size > 0) {
+  // Pre-pass: compute positions before encoding (for first/last and position_of+corresponding)
+  // Note: length_of+corresponding requires inline tracking during encoding because it needs iteration context
+  if (trackingTypes.size > 0) {
     code += `${indent}// Pre-pass: compute item positions for first/last selectors\n`;
     code += `${indent}let ${itemVar}_offset = this.byteOffset;\n`;
     code += `${indent}for (let ${itemVar}_prepass_index = 0; ${itemVar}_prepass_index < ${valuePath}.length; ${itemVar}_prepass_index++) {\n`;
@@ -129,7 +130,7 @@ export function generateEncodeArray(
     const choiceTypes = isChoiceArray ? (field.items?.choices || []).map((c: any) => c.type) : [];
 
     // Generate context extension for pre-pass iteration
-    code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_prepass_index`, indent + "  ", schema, isChoiceArray, choiceTypes);
+    code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_prepass_index`, indent + "  ", schema, isChoiceArray, choiceTypes, baseContextVar);
 
     // Increment type-specific occurrence counter for choice arrays (needed for corresponding correlation in encoders)
     if (isChoiceArray && choiceTypes.length > 0) {
@@ -147,9 +148,10 @@ export function generateEncodeArray(
     }
 
     if (field.items?.type === "choice") {
-      // Choice array: track position based on item type
+      // Choice array: track position based on item type in pre-pass
+      // This includes both first/last AND position_of+corresponding types
       const contextVar = getContextVarName(fieldName);
-      for (const typeName of firstLastTypes) {
+      for (const typeName of trackingTypes) {
         code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
         if (schemaRequiresContext(schema)) {
           code += `${indent}    ${contextVar}.positions.get('${fieldName}_${typeName}')!.push(${itemVar}_offset);\n`;
@@ -172,10 +174,11 @@ export function generateEncodeArray(
         code += `${indent}  }\n`;
       }
     } else {
-      // Non-choice array: track position for the single item type
+      // Non-choice array: track position for the single item type in pre-pass
+      // This includes both first/last AND position_of+corresponding types
       const itemType = field.items?.type;
       const contextVar = getContextVarName(fieldName);
-      if (itemType && firstLastTypes.has(itemType)) {
+      if (itemType && trackingTypes.has(itemType)) {
         if (schemaRequiresContext(schema)) {
           code += `${indent}  ${contextVar}.positions.get('${fieldName}_${itemType}')!.push(${itemVar}_offset);\n`;
         } else {
@@ -191,6 +194,16 @@ export function generateEncodeArray(
     code += `${indent}}\n\n`;
   }
 
+  // Reset type indices after pre-pass (they were incremented during pre-pass for position tracking)
+  // This ensures the main encoding loop starts with fresh occurrence counters
+  if (isChoiceArray && choiceTypes.length > 0 && trackingTypes.size > 0) {
+    const typeIndicesVar = `${valuePath.replace(/\./g, "_")}_typeIndices`;
+    code += `${indent}// Reset type indices for main encoding loop\n`;
+    for (const typeName of choiceTypes) {
+      code += `${indent}${typeIndicesVar}.set('${typeName}', 0);\n`;
+    }
+  }
+
   // Track if we encounter a terminal variant (to skip null terminator)
   const hasTerminalVariants = field.kind === "null_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants) && field.terminal_variants.length > 0;
   if (hasTerminalVariants) {
@@ -202,7 +215,7 @@ export function generateEncodeArray(
   code += `${indent}  const ${itemVar} = ${valuePath}[${itemVar}_index];\n`;
 
   // Generate context extension for array iteration
-  code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_index`, indent + "  ", schema, isChoiceArray, choiceTypes);
+  code += generateArrayContextExtension(fieldName, valuePath, itemVar, `${itemVar}_index`, indent + "  ", schema, isChoiceArray, choiceTypes, baseContextVar);
 
   // Increment type-specific occurrence counter for choice arrays (after context extension, before encoding)
   if (isChoiceArray && choiceTypes.length > 0) {
@@ -221,13 +234,17 @@ export function generateEncodeArray(
     }
   }
 
-  // Track position inline for corresponding (requires iteration context)
-  if (correspondingTypes.size > 0) {
+  // Track position inline for corresponding types that are NOT already tracked in pre-pass
+  // (i.e., corresponding types used with length_of, not position_of)
+  const correspondingTypesNotInPrePass = new Set(
+    [...correspondingTypes].filter(t => !trackingTypes.has(t))
+  );
+  if (correspondingTypesNotInPrePass.size > 0) {
     const contextVar = getContextVarName(fieldName);
     if (field.items?.type === "choice") {
       // Choice array: track position based on item type
       code += `${indent}  // Track position for corresponding correlation\n`;
-      for (const typeName of correspondingTypes) {
+      for (const typeName of correspondingTypesNotInPrePass) {
         code += `${indent}  if (${itemVar}.type === '${typeName}') {\n`;
         if (schemaRequiresContext(schema)) {
           code += `${indent}    ${contextVar}.positions.get('${fieldName}_${typeName}')!.push(this.byteOffset);\n`;
@@ -239,7 +256,7 @@ export function generateEncodeArray(
     } else {
       // Non-choice array: track position for the single item type
       const itemType = field.items?.type;
-      if (itemType && correspondingTypes.has(itemType)) {
+      if (itemType && correspondingTypesNotInPrePass.has(itemType)) {
         code += `${indent}  // Track position for corresponding correlation\n`;
         if (schemaRequiresContext(schema)) {
           code += `${indent}  ${contextVar}.positions.get('${fieldName}_${itemType}')!.push(this.byteOffset);\n`;

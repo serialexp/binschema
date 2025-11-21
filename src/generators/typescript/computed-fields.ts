@@ -257,9 +257,9 @@ export function generateEncodeComputedField(
     code += `${indent}  for (const item of ${targetPath}) {\n`;
     code += `${indent}    // Check if this item matches the target type\n`;
     code += `${indent}    if (!item.type || item.type === '${elementType}') {\n`;
-    code += `${indent}      // Encode item using ${elementType}Encoder to measure size\n`;
+    code += `${indent}      // Encode item using ${elementType}Encoder to measure size (pass context for computed fields)\n`;
     code += `${indent}      const encoder_${fieldName} = new ${elementType}Encoder();\n`;
-    code += `${indent}      const encoded_${fieldName} = encoder_${fieldName}.encode(item as ${elementType});\n`;
+    code += `${indent}      const encoded_${fieldName} = encoder_${fieldName}.encode(item as ${elementType}, context);\n`;
     code += `${indent}      ${fieldName}_computed += encoded_${fieldName}.length;\n`;
     code += `${indent}    }\n`;
     code += `${indent}  }\n`;
@@ -341,33 +341,82 @@ export function generateEncodeComputedField(
       code += `${indent}if (!context.arrayIterations.${arrayPath}) {\n`;
       code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context for '${arrayPath}'");\n`;
       code += `${indent}}\n`;
-      code += `${indent}// Look up correlated item using corresponding<Type>\n`;
-      code += `${indent}const ${fieldName}_currentType = ${baseObjectPath}.type;\n`;
-      code += `${indent}// Use context to get per-type occurrence index for corresponding reference\n`;
-      code += `${indent}const ${fieldName}_typeOccurrenceIndex = context.arrayIterations.${arrayPath}.typeIndices.get(${fieldName}_currentType) ?? 0;\n`;
-      code += `${indent}if (${fieldName}_typeOccurrenceIndex === 0) {\n`;
-      code += `${indent}  throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${${fieldName}_currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
+
+      // Determine if we're referencing a sibling array or the current array
+      // If current item has .type property AND we have typeIndices → same-array type-based correlation
+      // Otherwise → cross-array index-based correlation
+      code += `${indent}// Check if this is same-array type correlation or cross-array index correlation\n`;
+      code += `${indent}const ${fieldName}_currentItemType = ${baseObjectPath}.type;\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} currentItemType:', ${fieldName}_currentItemType, 'has in typeIndices:', context.arrayIterations.${arrayPath}.typeIndices.has(${fieldName}_currentItemType));\n`;
+      code += `${indent}const ${fieldName}_isSameArrayCorrelation = ${fieldName}_currentItemType !== undefined && ` +
+              `context.arrayIterations.${arrayPath}.typeIndices.has(${fieldName}_currentItemType);\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} isSameArrayCorrelation:', ${fieldName}_isSameArrayCorrelation);\n`;
+      code += `${indent}let ${fieldName}_correlationIndex: number;\n`;
+      code += `${indent}if (${fieldName}_isSameArrayCorrelation) {\n`;
+      code += `${indent}  // Same-array correlation: use type-occurrence index\n`;
+      code += `${indent}  const ${fieldName}_typeOccurrenceIndex = context.arrayIterations.${arrayPath}.typeIndices.get(${fieldName}_currentItemType) ?? 0;\n`;
+      code += `${indent}  if (${fieldName}_typeOccurrenceIndex === 0) {\n`;
+      code += `${indent}    throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${${fieldName}_currentItemType}' has not been seen yet in '${arrayPath}'\`);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  // Subtract 1 because counter was incremented after we started encoding this item\n`;
+      code += `${indent}  ${fieldName}_correlationIndex = ${fieldName}_typeOccurrenceIndex - 1;\n`;
+      code += `${indent}  if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} same-array correlationIndex:', ${fieldName}_correlationIndex);\n`;
+      code += `${indent}} else {\n`;
+      code += `${indent}  // Cross-array correlation: use current array index\n`;
+      code += `${indent}  // Find which array we're currently in\n`;
+      code += `${indent}  let ${fieldName}_currentArrayIndex = -1;\n`;
+      code += `${indent}  for (const [arrayName, arrayInfo] of Object.entries(context.arrayIterations)) {\n`;
+      code += `${indent}    if (arrayName !== '${arrayPath}' && arrayInfo.items.includes(${baseObjectPath})) {\n`;
+      code += `${indent}      ${fieldName}_currentArrayIndex = arrayInfo.index;\n`;
+      code += `${indent}      break;\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} cross-array currentArrayIndex:', ${fieldName}_currentArrayIndex);\n`;
+      code += `${indent}  if (${fieldName}_currentArrayIndex === -1) {\n`;
+      code += `${indent}    throw new Error(\`Could not determine current array index for corresponding correlation\`);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  ${fieldName}_correlationIndex = ${fieldName}_currentArrayIndex;\n`;
       code += `${indent}}\n`;
-      code += `${indent}// Subtract 1 because counter was incremented after we started encoding this item\n`;
-      code += `${indent}const ${fieldName}_correlationIndex = ${fieldName}_typeOccurrenceIndex - 1;\n`;
-      code += `${indent}// Find the Nth ${filterType} in the parent's array\n`;
-      code += `${indent}const ${fieldName}_array = context.parents[context.parents.length - 1]?.${arrayPath};\n`;
+      code += `${indent}// Find the target array in parent context (search from outermost to innermost)\n`;
+      code += `${indent}let ${fieldName}_array: any;\n`;
+      code += `${indent}for (const parent of context.parents) {\n`;
+      code += `${indent}  if (parent.${arrayPath}) {\n`;
+      code += `${indent}    ${fieldName}_array = parent.${arrayPath};\n`;
+      code += `${indent}    break;\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
       code += `${indent}if (!${fieldName}_array) {\n`;
       code += `${indent}  throw new Error(\`Array '${arrayPath}' not found in parent context\`);\n`;
       code += `${indent}}\n`;
       code += `${indent}let ${fieldName}_occurrenceCount = 0;\n`;
       code += `${indent}let ${fieldName}_targetItem: any;\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} searching for ${filterType} at correlationIndex:', ${fieldName}_correlationIndex, 'in array of length:', ${fieldName}_array.length);\n`;
       code += `${indent}for (const item of ${fieldName}_array) {\n`;
       code += `${indent}  if (item.type === '${filterType}') {\n`;
       code += `${indent}    if (${fieldName}_occurrenceCount === ${fieldName}_correlationIndex) {\n`;
       code += `${indent}      ${fieldName}_targetItem = item;\n`;
+      code += `${indent}      if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} found target item at occurrence:', ${fieldName}_occurrenceCount);\n`;
       code += `${indent}      break;\n`;
       code += `${indent}    }\n`;
       code += `${indent}    ${fieldName}_occurrenceCount++;\n`;
       code += `${indent}  }\n`;
       code += `${indent}}\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} targetItem:', ${fieldName}_targetItem, 'finalOccurrenceCount:', ${fieldName}_occurrenceCount);\n`;
       code += `${indent}if (!${fieldName}_targetItem) {\n`;
-      code += `${indent}  throw new Error(\`Could not find ${filterType} at occurrence index \${${fieldName}_correlationIndex}\`);\n`;
+      code += `${indent}  if (${fieldName}_isSameArrayCorrelation) {\n`;
+      code += `${indent}    // Same-array type-occurrence correlation: looking for Nth occurrence of type\n`;
+      code += `${indent}    throw new Error(\`Could not find ${filterType} at occurrence index \${${fieldName}_correlationIndex} (index out of bounds: only \${${fieldName}_occurrenceCount} ${filterType} items found)\`);\n`;
+      code += `${indent}  } else {\n`;
+      code += `${indent}    // Cross-array index correlation: check if item exists at that array index\n`;
+      code += `${indent}    if (${fieldName}_array[${fieldName}_correlationIndex]) {\n`;
+      code += `${indent}      // Item exists but wrong type\n`;
+      code += `${indent}      const actualType = ${fieldName}_array[${fieldName}_correlationIndex].type;\n`;
+      code += `${indent}      throw new Error(\`Expected ${filterType} at ${arrayPath}[\${${fieldName}_correlationIndex}] but found \${actualType}\`);\n`;
+      code += `${indent}    } else {\n`;
+      code += `${indent}      // Array index out of bounds\n`;
+      code += `${indent}      throw new Error(\`Could not find ${filterType} at index \${${fieldName}_correlationIndex} (index out of bounds: array has \${${fieldName}_array.length} elements)\`);\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}  }\n`;
       code += `${indent}}\n`;
 
       const targetPath = `${fieldName}_targetItem${remainingPath}`;
@@ -378,7 +427,8 @@ export function generateEncodeComputedField(
         code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
         code += `${indent}}\n`;
       } else {
-        code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
+        // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
+        code += `${indent}${fieldName}_computed = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
       }
     } else if (firstLastInfo) {
       // first/last selector - need to look up from tracking array
@@ -399,11 +449,27 @@ export function generateEncodeComputedField(
         code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
         code += `${indent}}\n`;
       } else {
-        code += `${fieldName}_computed = ${targetPath}.length;\n`;
+        // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
+        code += `${fieldName}_computed = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
       }
     } else {
       // Regular path resolution
       const targetPath = resolveComputedFieldPath(targetField, baseObjectPath);
+
+      // Add validation if accessing parent fields
+      if (targetPath.includes('context.parents')) {
+        const parentAccessMatch = targetPath.match(/context\.parents\[context\.parents\.length - (\d+)\]\.(\w+)/);
+        if (parentAccessMatch) {
+          const levelsUp = parentAccessMatch[1];
+          const parentFieldName = parentAccessMatch[2];
+          code += `${indent}if (context.parents.length < ${levelsUp}) {\n`;
+          code += `${indent}  throw new Error(\`Cannot access parent field '${parentFieldName}': parent navigation exceeds available levels (need ${levelsUp}, have \${context.parents.length})\`);\n`;
+          code += `${indent}}\n`;
+          code += `${indent}if (!${targetPath.split('.').slice(0, -1).join('.')}) {\n`;
+          code += `${indent}  throw new Error(\`Cannot access parent field '${parentFieldName}': parent not found in context\`);\n`;
+          code += `${indent}}\n`;
+        }
+      }
 
       // Check if encoding is specified (for string byte length)
       if (computed.encoding) {
@@ -413,8 +479,9 @@ export function generateEncodeComputedField(
         code += `${indent}  ${fieldName}_computed = encoder.encode(${targetPath}).length;\n`;
         code += `${indent}}\n`;
       } else {
-        // Array element count or string character count
-        code += `${indent}${fieldName}_computed = ${targetPath}.length;\n`;
+        // Array element count, string character count, or scalar value
+        // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
+        code += `${indent}${fieldName}_computed = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
       }
     }
 
@@ -450,48 +517,91 @@ export function generateEncodeComputedField(
       const { arrayPath, filterType } = sameIndexInfo;
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
-      // Check if we're in an array iteration context
-      const iterSuffixPos = baseObjectPath.indexOf(ARRAY_ITER_SUFFIX);
+      // Check if we have array iteration context available (same as length_of approach)
+      code += `${indent}// Check if array iteration context is available\n`;
+      code += `${indent}if (!context.arrayIterations.${arrayPath}) {\n`;
+      code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context for '${arrayPath}'");\n`;
+      code += `${indent}}\n`;
 
-      if (iterSuffixPos < 0) {
-        // Not in array iteration context - corresponding cannot be resolved
-        code += `${indent}// ERROR: corresponding reference requires array iteration context\n`;
-        code += `${indent}throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context");\n`;
-      } else {
-        code += `${indent}// Look up correlated item using corresponding<Type>\n`;
+      // Determine if we're referencing a sibling array or the current array
+      // If current item has .type property AND we have typeIndices → same-array type-based correlation
+      // Otherwise → cross-array index-based correlation
+      code += `${indent}// Check if this is same-array type correlation or cross-array index correlation\n`;
+      code += `${indent}const ${fieldName}_currentItemType = ${baseObjectPath}.type;\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} currentItemType:', ${fieldName}_currentItemType, 'has in typeIndices:', context.arrayIterations.${arrayPath}.typeIndices.has(${fieldName}_currentItemType));\n`;
+      code += `${indent}const ${fieldName}_isSameArrayCorrelation = ${fieldName}_currentItemType !== undefined && ` +
+              `context.arrayIterations.${arrayPath}.typeIndices.has(${fieldName}_currentItemType);\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} isSameArrayCorrelation:', ${fieldName}_isSameArrayCorrelation);\n`;
+      code += `${indent}let ${fieldName}_correlationIndex: number;\n`;
+      code += `${indent}if (${fieldName}_isSameArrayCorrelation) {\n`;
+      code += `${indent}  // Same-array correlation: use type-occurrence index\n`;
+      code += `${indent}  const ${fieldName}_typeOccurrenceIndex = context.arrayIterations.${arrayPath}.typeIndices.get(${fieldName}_currentItemType) ?? 0;\n`;
+      code += `${indent}  if (${fieldName}_typeOccurrenceIndex === 0) {\n`;
+      code += `${indent}    throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${${fieldName}_currentItemType}' has not been seen yet in '${arrayPath}'\`);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  // Subtract 1 because counter was incremented after we started encoding this item\n`;
+      code += `${indent}  ${fieldName}_correlationIndex = ${fieldName}_typeOccurrenceIndex - 1;\n`;
+      code += `${indent}  if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} same-array correlationIndex:', ${fieldName}_correlationIndex);\n`;
+      code += `${indent}} else {\n`;
+      code += `${indent}  // Cross-array correlation: use current array index\n`;
+      code += `${indent}  // Find which array we're currently in\n`;
+      code += `${indent}  let ${fieldName}_currentArrayIndex = -1;\n`;
+      code += `${indent}  for (const [arrayName, arrayInfo] of Object.entries(context.arrayIterations)) {\n`;
+      code += `${indent}    if (arrayName !== '${arrayPath}' && arrayInfo.items.includes(${baseObjectPath})) {\n`;
+      code += `${indent}      ${fieldName}_currentArrayIndex = arrayInfo.index;\n`;
+      code += `${indent}      break;\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} cross-array currentArrayIndex:', ${fieldName}_currentArrayIndex);\n`;
+      code += `${indent}  if (${fieldName}_currentArrayIndex === -1) {\n`;
+      code += `${indent}    throw new Error(\`Could not determine current array index for corresponding correlation\`);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  ${fieldName}_correlationIndex = ${fieldName}_currentArrayIndex;\n`;
+      code += `${indent}}\n`;
+      code += `${indent}// Find the target array in parent context (search from outermost to innermost)\n`;
+      code += `${indent}let ${fieldName}_array: any;\n`;
+      code += `${indent}for (const parent of context.parents) {\n`;
+      code += `${indent}  if (parent.${arrayPath}) {\n`;
+      code += `${indent}    ${fieldName}_array = parent.${arrayPath};\n`;
+      code += `${indent}    break;\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (!${fieldName}_array) {\n`;
+      code += `${indent}  throw new Error(\`Array '${arrayPath}' not found in parent context\`);\n`;
+      code += `${indent}}\n`;
+      code += `${indent}let ${fieldName}_occurrenceCount = 0;\n`;
+      code += `${indent}let ${fieldName}_targetItem: any;\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} searching for ${filterType} at correlationIndex:', ${fieldName}_correlationIndex, 'in array of length:', ${fieldName}_array.length);\n`;
+      code += `${indent}for (const item of ${fieldName}_array) {\n`;
+      code += `${indent}  if (item.type === '${filterType}') {\n`;
+      code += `${indent}    if (${fieldName}_occurrenceCount === ${fieldName}_correlationIndex) {\n`;
+      code += `${indent}      ${fieldName}_targetItem = item;\n`;
+      code += `${indent}      if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} found target item at occurrence:', ${fieldName}_occurrenceCount);\n`;
+      code += `${indent}      break;\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}    ${fieldName}_occurrenceCount++;\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] ${fieldName} targetItem:', ${fieldName}_targetItem, 'finalOccurrenceCount:', ${fieldName}_occurrenceCount);\n`;
+      code += `${indent}if (!${fieldName}_targetItem) {\n`;
+      code += `${indent}  if (${fieldName}_isSameArrayCorrelation) {\n`;
+      code += `${indent}    // Same-array type-occurrence correlation: looking for Nth occurrence of type\n`;
+      code += `${indent}    throw new Error(\`Could not find ${filterType} at occurrence index \${${fieldName}_correlationIndex} (index out of bounds: only \${${fieldName}_occurrenceCount} ${filterType} items found)\`);\n`;
+      code += `${indent}  } else {\n`;
+      code += `${indent}    // Cross-array index correlation: check if item exists at that array index\n`;
+      code += `${indent}    if (${fieldName}_array[${fieldName}_correlationIndex]) {\n`;
+      code += `${indent}      // Item exists but wrong type\n`;
+      code += `${indent}      const actualType = ${fieldName}_array[${fieldName}_correlationIndex].type;\n`;
+      code += `${indent}      throw new Error(\`Expected ${filterType} at ${arrayPath}[\${${fieldName}_correlationIndex}] but found \${actualType}\`);\n`;
+      code += `${indent}    } else {\n`;
+      code += `${indent}      // Array index out of bounds\n`;
+      code += `${indent}      throw new Error(\`Could not find ${filterType} at index \${${fieldName}_correlationIndex} (index out of bounds: array has \${${fieldName}_array.length} elements)\`);\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
 
-        // Parse baseObjectPath to find root and current array
-        const parts = baseObjectPath.substring(0, iterSuffixPos).split('_');
-        const rootObjectPath = parts[0]; // Usually "value"
-
-        const itemVarPattern = `${rootObjectPath}_${arrayPath}${ARRAY_ITER_SUFFIX}`;
-        code += `${indent}const ${fieldName}_currentType = ${itemVarPattern}.type;\n`;
-        code += `${indent}// Use context to get per-type occurrence index for corresponding reference\n`;
-        code += `${indent}const ${fieldName}_typeOccurrenceIndex = context.arrayIterations.${arrayPath}?.typeIndices.get(${fieldName}_currentType) ?? 0;\n`;
-        code += `${indent}if (${fieldName}_typeOccurrenceIndex === 0) {\n`;
-        code += `${indent}  throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${${fieldName}_currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
-        code += `${indent}}\n`;
-        code += `${indent}// Subtract 1 because counter was incremented after we started encoding this item\n`;
-        code += `${indent}const ${fieldName}_correlationIndex = ${fieldName}_typeOccurrenceIndex - 1;\n`;
-        code += `${indent}// Find the Nth ${filterType} in the array\n`;
-        code += `${indent}let ${fieldName}_occurrenceCount = 0;\n`;
-        code += `${indent}let ${fieldName}_targetItem: any;\n`;
-        code += `${indent}for (const item of ${rootObjectPath}.${arrayPath}) {\n`;
-        code += `${indent}  if (item.type === '${filterType}') {\n`;
-        code += `${indent}    if (${fieldName}_occurrenceCount === ${fieldName}_correlationIndex) {\n`;
-        code += `${indent}      ${fieldName}_targetItem = item;\n`;
-        code += `${indent}      break;\n`;
-        code += `${indent}    }\n`;
-        code += `${indent}    ${fieldName}_occurrenceCount++;\n`;
-        code += `${indent}  }\n`;
-        code += `${indent}}\n`;
-        code += `${indent}if (!${fieldName}_targetItem) {\n`;
-        code += `${indent}  throw new Error(\`Could not find ${filterType} at occurrence index \${${fieldName}_correlationIndex}\`);\n`;
-        code += `${indent}}\n`;
-
-        const targetPath = `${fieldName}_targetItem${remainingPath}`;
-        code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
-      }
+      const targetPath = `${fieldName}_targetItem${remainingPath}`;
+      code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
     } else if (firstLastInfo) {
       // first/last selector - need to look up from tracking array
       const { arrayPath, filterType, selector } = firstLastInfo;
@@ -508,6 +618,22 @@ export function generateEncodeComputedField(
     } else {
       // Regular path resolution
       const targetPath = resolveComputedFieldPath(targetField, baseObjectPath);
+
+      // Add validation if accessing parent fields
+      if (targetPath.includes('context.parents')) {
+        const parentAccessMatch = targetPath.match(/context\.parents\[context\.parents\.length - (\d+)\]\.(\w+)/);
+        if (parentAccessMatch) {
+          const levelsUp = parentAccessMatch[1];
+          const parentFieldName = parentAccessMatch[2];
+          code += `${indent}if (context.parents.length < ${levelsUp}) {\n`;
+          code += `${indent}  throw new Error(\`Cannot access parent field '${parentFieldName}': parent navigation exceeds available levels (need ${levelsUp}, have \${context.parents.length})\`);\n`;
+          code += `${indent}}\n`;
+          code += `${indent}if (!${targetPath.split('.').slice(0, -1).join('.')}) {\n`;
+          code += `${indent}  throw new Error(\`Cannot access parent field '${parentFieldName}': parent not found in context\`);\n`;
+          code += `${indent}}\n`;
+        }
+      }
+
       code += `${indent}const ${fieldName}_computed = crc32(${targetPath});\n`;
     }
 
@@ -526,6 +652,11 @@ export function generateEncodeComputedField(
       code += `${indent}// Computed field '${fieldName}': auto-compute position of '${targetField}'\n`;
       code += `${indent}// Look up position using corresponding correlation\n`;
 
+      // Check if array iteration context is available
+      code += `${indent}if (!context.arrayIterations?.${arrayPath}) {\n`;
+      code += `${indent}  throw new Error("Field '${fieldName}' uses corresponding correlation which requires encoding within an array context");\n`;
+      code += `${indent}}\n`;
+
       // Need to determine the current item type to use the correct index counter
       // The computed field is being encoded within a specific type's fields
       // We need to extract the containing object's variable name from the context
@@ -539,20 +670,39 @@ export function generateEncodeComputedField(
         ? baseObjectPath.substring(0, iterSuffixPos + ARRAY_ITER_SUFFIX.length)
         : baseObjectPath;
 
-      code += `${indent}// Determine current item type to use correct correlation index\n`;
+      code += `${indent}// Determine correlation index based on current item type\n`;
       code += `${indent}const currentType = ${itemVarPattern}.type;\n`;
-      code += `${indent}// Use context to get per-type occurrence index for corresponding reference\n`;
-      code += `${indent}const typeOccurrenceIndex = context.arrayIterations.${arrayPath}?.typeIndices.get(currentType) ?? 0;\n`;
-      code += `${indent}if (typeOccurrenceIndex === 0) {\n`;
-      code += `${indent}  throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
+      code += `${indent}// Check if this is same-array type correlation (target in same array) or cross-array index correlation\n`;
+      code += `${indent}const isSameArrayCorrelation = currentType !== undefined && context.arrayIterations.${arrayPath}?.typeIndices.has(currentType);\n`;
+      code += `${indent}let correlationIndex: number;\n`;
+      code += `${indent}if (isSameArrayCorrelation) {\n`;
+      code += `${indent}  // Same-array: use current type's occurrence index\n`;
+      code += `${indent}  const typeOccurrenceIndex = context.arrayIterations.${arrayPath}.typeIndices.get(currentType) ?? 0;\n`;
+      code += `${indent}  if (typeOccurrenceIndex === 0) {\n`;
+      code += `${indent}    throw new Error(\`Field '${fieldName}' uses corresponding correlation but current type '\${currentType}' has not been seen yet in '${arrayPath}'\`);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  // Subtract 1 because counter was incremented after we started encoding this item\n`;
+      code += `${indent}  correlationIndex = typeOccurrenceIndex - 1;\n`;
+      code += `${indent}} else {\n`;
+      code += `${indent}  // Cross-array: use current array index\n`;
+      code += `${indent}  let currentArrayIndex = -1;\n`;
+      code += `${indent}  for (const [arrayName, arrayInfo] of Object.entries(context.arrayIterations)) {\n`;
+      code += `${indent}    if (arrayName !== '${arrayPath}' && arrayInfo.items.includes(${itemVarPattern})) {\n`;
+      code += `${indent}      currentArrayIndex = arrayInfo.index;\n`;
+      code += `${indent}      break;\n`;
+      code += `${indent}    }\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  if (currentArrayIndex === -1) {\n`;
+      code += `${indent}    throw new Error(\`Could not determine current array index for corresponding correlation\`);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}  correlationIndex = currentArrayIndex;\n`;
       code += `${indent}}\n`;
-      code += `${indent}// Subtract 1 because counter was incremented after we started encoding this item\n`;
-      code += `${indent}const correlationIndex = typeOccurrenceIndex - 1;\n`;
       code += `${indent}// Look up the position of the Nth ${filterType}\n`;
       code += `${indent}const ${fieldName}_positions_array = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
+      code += `${indent}if (process.env.DEBUG_TEST) console.log('[DEBUG] position_of ${fieldName}: positions array for ${arrayPath}_${filterType}:', ${fieldName}_positions_array, 'correlationIndex:', correlationIndex);\n`;
       code += `${indent}const ${fieldName}_computed = ${fieldName}_positions_array[correlationIndex];\n`;
       code += `${indent}if (${fieldName}_computed === undefined) {\n`;
-      code += `${indent}  throw new Error(\`corresponding correlation failed: no ${filterType} at occurrence index \${correlationIndex} for current type \${currentType}\`);\n`;
+      code += `${indent}  throw new Error(\`corresponding correlation failed: no ${filterType} at occurrence index \${correlationIndex}\`);\n`;
       code += `${indent}}\n`;
     } else if (firstLastInfo) {
       // first/last selector - look up position from tracking array

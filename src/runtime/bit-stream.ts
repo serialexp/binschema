@@ -239,6 +239,28 @@ export class BitStreamEncoder {
   }
 
   /**
+   * Debug logging: Log field start position
+   */
+  logFieldStart(fieldName: string, indent: string = ""): void {
+    if (process.env.DEBUG_ENCODE) {
+      console.log(`${indent}[${this.byteOffset}] ${fieldName}:`);
+    }
+  }
+
+  /**
+   * Debug logging: Log field end position with bytes written
+   */
+  logFieldEnd(fieldName: string, startPos: number, indent: string = ""): void {
+    if (process.env.DEBUG_ENCODE) {
+      const endPos = this.byteOffset;
+      const size = endPos - startPos;
+      const bytesWritten = this.bytes.slice(startPos, endPos);
+      const bytesStr = bytesWritten.map(b => b.toString(16).padStart(2, '0')).join(' ');
+      console.log(`${indent}  → ${fieldName}: ${size} bytes [${bytesStr}]`);
+    }
+  }
+
+  /**
    * Get bits as array (for testing)
    * Returns only the exact bits that were written, not padded to byte boundary
    */

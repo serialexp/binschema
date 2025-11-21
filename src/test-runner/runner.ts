@@ -309,6 +309,9 @@ async function runTestCase(
       if (testCase.error_message) {
         const errorStr = String(error);
         if (!errorStr.includes(testCase.error_message)) {
+          logger.debug(`Error message mismatch for "${testCase.description}":`);
+          logger.debug(`  Expected substring: "${testCase.error_message}"`);
+          logger.debug(`  Actual error: "${errorStr}"`);
           failures.push({
             description: testCase.description,
             type: "validation",
@@ -348,6 +351,9 @@ async function runTestCase(
       if (testCase.error_message) {
         const errorStr = String(error);
         if (!errorStr.includes(testCase.error_message)) {
+          logger.debug(`Error message mismatch for "${testCase.description}":`);
+          logger.debug(`  Expected substring: "${testCase.error_message}"`);
+          logger.debug(`  Actual error: "${errorStr}"`);
           failures.push({
             description: testCase.description,
             type: "validation",

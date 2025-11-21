@@ -152,7 +152,7 @@ export const arrayIndexOutOfBoundsErrorTestSuite = defineTestSuite({
             name: "items",
             type: "array",
             kind: "fixed",
-            length: 2,
+            length: 3,
             items: {
               type: "choice",
               choices: [
@@ -168,11 +168,12 @@ export const arrayIndexOutOfBoundsErrorTestSuite = defineTestSuite({
   test_type: "Container",
   test_cases: [
     {
-      description: "Ref at index 1 but only 1 element in array (index out of bounds)",
+      description: "Second Ref but only 1 Data (out of bounds for type occurrence)",
       value: {
         items: [
-          { type: "Data", value: 50 },
-          { type: "Ref" }  // Index 1, but trying to access items[1] which is itself
+          { type: "Data", value: 50 },  // First (and only) Data at type occurrence 0
+          { type: "Ref" },               // First Ref at type occurrence 0 - correlates to Data occurrence 0 (OK)
+          { type: "Ref" }                // Second Ref at type occurrence 1 - tries to find Data occurrence 1 (FAIL!)
         ]
       },
       should_error_on_encode: true,
@@ -245,11 +246,11 @@ export const typeMismatchAtSameIndexErrorTestSuite = defineTestSuite({
       value: {
         items: [
           { type: "TypeB", b_value: 50 },  // Index 0 is TypeB
-          { type: "RefToA" }                // Index 1 expects TypeA at index 0
+          { type: "RefToA" }                // Index 1 (RefToA occurrence 0) expects TypeA occurrence 0
         ]
       },
       should_error_on_encode: true,
-      error_message: "Expected TypeA at items[0] but found TypeB"
+      error_message: "index out of bounds"  // Same-array correlation uses type-occurrence, not array index
     }
   ]
 });

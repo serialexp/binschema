@@ -25,7 +25,8 @@ export function generateArrayContextExtension(
   indent: string,
   schema: BinarySchema,
   isChoiceArray: boolean = false,
-  choiceTypes: string[] = []
+  choiceTypes: string[] = [],
+  baseContextVar: string = 'context'
 ): string {
   if (!schemaRequiresContext(schema)) {
     return ''; // No context extension needed
@@ -40,14 +41,14 @@ export function generateArrayContextExtension(
 
   let code = `${indent}// Extend context for array iteration\n`;
   code += `${indent}const ${contextVarName}: EncodingContext = {\n`;
-  code += `${indent}  ...context,\n`;
+  code += `${indent}  ...${baseContextVar},\n`;
   code += `${indent}  parents: [\n`;
-  code += `${indent}    ...context.parents,\n`;
+  code += `${indent}    ...${baseContextVar}.parents,\n`;
   // Pass entire parent object so nested types can access sibling fields
   code += `${indent}    ${parentPath}\n`;
   code += `${indent}  ],\n`;
   code += `${indent}  arrayIterations: {\n`;
-  code += `${indent}    ...context.arrayIterations,\n`;
+  code += `${indent}    ...${baseContextVar}.arrayIterations,\n`;
   code += `${indent}    ${fieldName}: {\n`;
   code += `${indent}      items: ${valuePath},\n`;
   code += `${indent}      index: ${indexVar},\n`;
@@ -63,7 +64,7 @@ export function generateArrayContextExtension(
   code += `${indent}    }\n`;
   code += `${indent}  },\n`;
   code += `${indent}  // Positions map is shared (not copied) so updates are visible to all\n`;
-  code += `${indent}  positions: context.positions\n`;
+  code += `${indent}  positions: ${baseContextVar}.positions\n`;
   code += `${indent}};\n`;
 
   return code;
@@ -101,6 +102,7 @@ export function generateNestedTypeContextExtension(
   // Pass entire parent object so nested types can access sibling fields via ../
   code += `${indent}    ${parentValue}\n`;
   code += `${indent}  ],\n`;
+  code += `${indent}  arrayIterations: ${baseContextVarName}.arrayIterations,\n`;
   code += `${indent}  positions: ${baseContextVarName}.positions\n`;
   code += `${indent}};\n`;
 

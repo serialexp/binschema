@@ -1569,9 +1569,25 @@ function generateEncoder(
           const precedingFieldType = (precedingField as any).type;
           if (precedingFieldType && schema.types[precedingFieldType]) {
             // Nested struct - encode to measure size
-            code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
-            const contextParam = schemaRequiresContext(schema) ? ', context' : '';
-            code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}${contextParam}).length;\n`;
+            // Must extend context so nested struct can access parent fields
+            if (schemaRequiresContext(schema)) {
+              const prepassContextVarName = `prepassContext_${precedingField.name}`;
+              code += `    // Extend context for pre-pass encoding of nested type\n`;
+              code += `    const ${prepassContextVarName}: EncodingContext = {\n`;
+              code += `      ...context,\n`;
+              code += `      parents: [\n`;
+              code += `        ...context.parents,\n`;
+              code += `        value\n`;
+              code += `      ],\n`;
+              code += `      arrayIterations: context.arrayIterations,\n`;
+              code += `      positions: context.positions\n`;
+              code += `    };\n`;
+              code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
+              code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}, ${prepassContextVarName}).length;\n`;
+            } else {
+              code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
+              code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}).length;\n`;
+            }
           }
         }
 
@@ -1614,8 +1630,63 @@ function generateEncoder(
     }
   }
 
-  for (const field of fields) {
-    code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields);
+  // If schema uses context and has arrays,
+  // create accumulated context to preserve array iteration info for sibling arrays and nested types
+  // This allows:
+  // 1. Sibling arrays to reference each other via corresponding correlation
+  // 2. Nested types to reference arrays from outer scopes
+  const needsAccumulatedContext = hasContext && fields.filter(f =>
+    'type' in f && f.type === 'array'
+  ).length >= 1;
+
+  if (needsAccumulatedContext) {
+    code += `    // Accumulated context for sibling array corresponding correlation\n`;
+    code += `    let currentContext: EncodingContext = context;\n`;
+
+    // Transfer pre-computed positions into context.positions
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i];
+      if ('type' in field && field.type === 'array') {
+        const fieldName = field.name;
+        const firstLastTypes = detectFirstLastTracking(fieldName, schema);
+
+        if (firstLastTypes.size > 0) {
+          for (const itemType of firstLastTypes) {
+            code += `    currentContext.positions.set('${fieldName}_${itemType}', this._positions_${fieldName}_${itemType});\n`;
+          }
+        }
+      }
+    }
+    code += `\n`;
+  }
+
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    const isArray = 'type' in field && field.type === 'array';
+    const isChoiceArray = isArray && (field as any).items?.type === 'choice';
+    const baseContextVarForField = needsAccumulatedContext ? 'currentContext' : 'context';
+
+    code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields, baseContextVarForField);
+
+    // After encoding any array, preserve its iteration info in accumulated context
+    // This allows subsequent sibling arrays to access it via corresponding correlation
+    if (needsAccumulatedContext && isArray) {
+      const fieldName = field.name;
+      const typeIndicesRef = isChoiceArray ? `value_${fieldName}_typeIndices` : `new Map<string, number>()`;
+      code += `    // Preserve ${fieldName} array context for sibling arrays\n`;
+      code += `    currentContext = {\n`;
+      code += `      ...currentContext,\n`;
+      code += `      arrayIterations: {\n`;
+      code += `        ...currentContext.arrayIterations,\n`;
+      code += `        ${fieldName}: {\n`;
+      code += `          items: value.${fieldName},\n`;
+      code += `          index: value.${fieldName}.length - 1,\n`;
+      code += `          fieldName: '${fieldName}',\n`;
+      code += `          typeIndices: ${typeIndicesRef}\n`;
+      code += `        }\n`;
+      code += `      }\n`;
+      code += `    };\n\n`;
+    }
   }
 
   code += `    return this.finish();\n`;
@@ -1646,7 +1717,8 @@ function generateEncodeField(
   globalEndianness: Endianness,
   indent: string,
   typeName?: string,
-  allFields?: Field[]
+  allFields?: Field[],
+  baseContextVar?: string
 ): string {
   if (!('type' in field)) return "";
 
@@ -1661,13 +1733,13 @@ function generateEncodeField(
   // Handle const fields - write the constant value directly
   if (fieldAny.const !== undefined) {
     const constValue = fieldAny.const;
-    return generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent);
+    return generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent, undefined, baseContextVar);
   }
 
   const valuePath = `value.${fieldName}`;
 
   // generateEncodeFieldCore handles both conditional and non-conditional fields
-  return generateEncodeFieldCore(field, schema, globalEndianness, valuePath, indent);
+  return generateEncodeFieldCore(field, schema, globalEndianness, valuePath, indent, undefined, undefined, baseContextVar);
 }
 
 /**
@@ -1680,41 +1752,60 @@ function generateEncodeFieldCore(
   valuePath: string,
   indent: string,
   typeName?: string,
-  containingFields?: Field[]
+  containingFields?: Field[],
+  baseContextVar?: string
 ): string {
   if (!('type' in field)) return "";
 
   const fieldAny = field as any;
+  const fieldName = field.name;
+
+  let code = "";
+
+  // Log field start (only for non-computed, non-const fields to keep logs clean)
+  // Use timestamp to make variable names unique across nested/repeated fields
+  const isSpecialField = fieldAny.computed || fieldAny.const !== undefined;
+  const startPosVar = `${fieldName}_startPos_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  if (!isSpecialField) {
+    code += `${indent}const ${startPosVar} = this.byteOffset;\n`;
+    code += `${indent}this.logFieldStart("${fieldName}", "${indent}");\n`;
+  }
 
   // Handle computed fields - generate computation code instead of reading from value
   if (fieldAny.computed) {
     // Extract the base object path (remove the field name)
     const lastDotIndex = valuePath.lastIndexOf('.');
     const baseObjectPath = lastDotIndex > 0 ? valuePath.substring(0, lastDotIndex) : "value";
-    return generateEncodeComputedField(field, schema, globalEndianness, indent, baseObjectPath, typeName, containingFields);
+    code += generateEncodeComputedField(field, schema, globalEndianness, indent, baseObjectPath, typeName, containingFields);
   }
-
   // Handle const fields - write the constant value directly
-  if (fieldAny.const !== undefined) {
+  else if (fieldAny.const !== undefined) {
     const constValue = fieldAny.const;
-    return generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent);
+    code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent, undefined, baseContextVar);
   }
-
   // Handle conditional fields
-  if (isFieldConditional(field)) {
+  else if (isFieldConditional(field)) {
     const condition = field.conditional!;
     // Extract parent path from valuePath (e.g., "value.maybe_id.present" -> "value.maybe_id")
     const lastDotIndex = valuePath.lastIndexOf('.');
     const basePath = lastDotIndex > 0 ? valuePath.substring(0, lastDotIndex) : "value";
     const tsCondition = convertConditionalToTypeScript(condition, basePath);
     // Encode field if condition is true AND value is defined
-    let code = `${indent}if (${tsCondition} && ${valuePath} !== undefined) {\n`;
-    code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent + "  ");
+    code += `${indent}if (${tsCondition} && ${valuePath} !== undefined) {\n`;
+    code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent + "  ", undefined, baseContextVar);
     code += `${indent}}\n`;
-    return code;
+  }
+  else {
+    code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent, undefined, baseContextVar);
   }
 
-  return generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent);
+  // Log field end (only for non-computed, non-const fields)
+  if (!isSpecialField) {
+    code += `${indent}this.logFieldEnd("${fieldName}", ${startPosVar}, "${indent}");\n`;
+  }
+
+  return code;
 }
 
 /**
@@ -1726,7 +1817,8 @@ function generateEncodeFieldCoreImpl(
   globalEndianness: Endianness,
   valuePath: string,
   indent: string,
-  contextVarName?: string
+  contextVarName?: string,
+  baseContextVar?: string
 ): string {
   if (!('type' in field)) return "";
 
@@ -1769,7 +1861,7 @@ function generateEncodeFieldCoreImpl(
       return `${indent}this.writeFloat64(${valuePath}, "${endianness}");\n`;
 
     case "array":
-      return generateEncodeArray(field, schema, globalEndianness, valuePath, indent, generateEncodeFieldCoreImpl);
+      return generateEncodeArray(field, schema, globalEndianness, valuePath, indent, generateEncodeFieldCoreImpl, baseContextVar || 'context');
 
     case "string":
       return generateEncodeString(field, globalEndianness, valuePath, indent);
@@ -1791,7 +1883,7 @@ function generateEncodeFieldCoreImpl(
 
     default:
       // Type reference - need to encode nested struct
-      return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent, contextVarName);
+      return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent, contextVarName, baseContextVar);
   }
 }
 
@@ -2052,7 +2144,8 @@ function generateEncodeTypeReference(
   globalEndianness: Endianness,
   valuePath: string,
   indent: string,
-  contextVarName?: string
+  contextVarName?: string,
+  baseContextVar?: string
 ): string {
   // Check if this is a generic type instantiation (e.g., Optional<uint64>)
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
@@ -2111,21 +2204,35 @@ function generateEncodeTypeReference(
   // If context is required, use encoder class to properly pass context
   if (schemaRequiresContext(schema)) {
     // Extract field name and parent path from valuePath (e.g., "value.inner" -> field="inner", parent="value")
-    // For array items (e.g., "value_items__iter"), use the item itself as parent
     const lastDot = valuePath.lastIndexOf('.');
     const fieldName = lastDot >= 0 ? valuePath.substring(lastDot + 1) : valuePath;
     const parentPath = lastDot >= 0 ? valuePath.substring(0, lastDot) : valuePath;
-    const nestedContextVarName = `extendedContext_${fieldName}`;
     const encoderVarName = `encoder_${fieldName}`;
     const encodedVarName = `encoded_${fieldName}`;
 
-    // Use provided context variable name as base, or default to 'context'
-    const baseContextVarName = contextVarName || 'context';
+    // Use provided base context variable, or fallback to contextVarName, or default to 'context'
+    // baseContextVar is the accumulated context (e.g., 'currentContext'), which preserves sibling array info
+    const baseContextVarName = baseContextVar || contextVarName || 'context';
 
-    code += `${indent}// Extend context for nested type\n`;
-    code += generateNestedTypeContextExtension(fieldName, parentPath, indent, schema, baseContextVarName);
+    // Check if we're already in an array iteration context
+    // Array context already has parent in parents array, so don't extend again
+    const isInArrayContext = contextVarName && contextVarName.startsWith('extendedContext_');
+
+    let contextToPass: string;
+    if (isInArrayContext) {
+      // Directly use array context - it already has parent struct in parents
+      contextToPass = baseContextVarName;
+      code += `${indent}// Use existing array context (already has parent)\n`;
+    } else {
+      // Not in array - extend context with parent field
+      const nestedContextVarName = `extendedContext_${fieldName}`;
+      contextToPass = nestedContextVarName;
+      code += `${indent}// Extend context for nested type\n`;
+      code += generateNestedTypeContextExtension(fieldName, parentPath, indent, schema, baseContextVarName);
+    }
+
     code += `${indent}const ${encoderVarName} = new ${typeRef}Encoder();\n`;
-    code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath}, ${nestedContextVarName});\n`;
+    code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath}, ${contextToPass});\n`;
     code += `${indent}for (const byte of ${encodedVarName}) {\n`;
     code += `${indent}  this.writeUint8(byte);\n`;
     code += `${indent}}\n`;

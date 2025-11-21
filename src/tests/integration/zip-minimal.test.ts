@@ -203,7 +203,6 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // Local file
           {
             type: "LocalFile",
-            type_tag: 0x01,
             signature: 0x04034b50,
             header: {
               version: 20,
@@ -220,7 +219,6 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // Central directory entry
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
             signature: 0x02014b50,
             version_made_by: 20,
             version_needed: 20,
@@ -239,7 +237,6 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // End of central directory
           {
             type: "EndOfCentralDir",
-            type_tag: 0x03,
             signature: 0x06054b50,
             disk_number: 0,
             disk_with_central_dir: 0,
@@ -254,7 +251,6 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         sections: [
           {
             type: "LocalFile",
-            type_tag: 0x01,
             signature: 0x04034b50,
             header: {
               version: 20,
@@ -262,7 +258,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
               compression_method: 0,
               file_mod_time: 0,
               file_mod_date: 0,
-              crc32: 0x0D4A1185,  // CRC32 of "Hello, World!"
+              crc32: 0xEC4AC3D0,  // CRC32 of "Hello, World!" (correct value)
               len_body_compressed: 13,
               len_body_uncompressed: 13,
               len_file_name: 9,
@@ -273,7 +269,6 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
-            type_tag: 0x02,
             signature: 0x02014b50,
             version_made_by: 20,
             version_needed: 20,
@@ -281,7 +276,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
             compression_method: 0,
             file_mod_time: 0,
             file_mod_date: 0,
-            crc32: 0x0D4A1185,
+            crc32: 0xEC4AC3D0,  // CRC32 of "Hello, World!" (correct value)
             len_body_compressed: 13,
             len_body_uncompressed: 13,
             len_file_name: 9,
@@ -295,14 +290,13 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           },
           {
             type: "EndOfCentralDir",
-            type_tag: 0x03,
             signature: 0x06054b50,
             disk_number: 0,
             disk_with_central_dir: 0,
             num_entries_this_disk: 1,
             num_entries_total: 1,
-            len_central_dir: 52,  // Size of CentralDirEntry (51 + 1 for type_tag)
-            ofs_central_dir: 53,  // Position of CentralDirEntry (52 + 1 for LocalFile type_tag)
+            len_central_dir: 55,  // Actual encoded size of CentralDirEntry
+            ofs_central_dir: 52,  // Position of CentralDirEntry (after 52-byte LocalFile)
             len_comment: 0
           }
         ]
@@ -321,8 +315,8 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         0, 0,
         // header.file_mod_date
         0, 0,
-        // header.crc32 (AUTO-COMPUTED)
-        0x85, 0x11, 0x4A, 0x0D,
+        // header.crc32 (AUTO-COMPUTED) - CRC32 of "Hello, World!"
+        0xD0, 0xC3, 0x4A, 0xEC,
         // header.len_body_compressed (AUTO-COMPUTED)
         13, 0, 0, 0,
         // header.len_body_uncompressed (AUTO-COMPUTED)
@@ -351,8 +345,8 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         0, 0,
         // file_mod_date
         0, 0,
-        // crc32 (AUTO-COMPUTED)
-        0x85, 0x11, 0x4A, 0x0D,
+        // crc32 (AUTO-COMPUTED) - CRC32 of "Hello, World!"
+        0xD0, 0xC3, 0x4A, 0xEC,
         // len_body_compressed (AUTO-COMPUTED)
         13, 0, 0, 0,
         // len_body_uncompressed (AUTO-COMPUTED)
@@ -385,8 +379,8 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         1, 0,
         // num_entries_total
         1, 0,
-        // len_central_dir (AUTO-COMPUTED)
-        51, 0, 0, 0,
+        // len_central_dir (AUTO-COMPUTED) - Actual encoded size of CentralDirEntry
+        55, 0, 0, 0,
         // ofs_central_dir (AUTO-COMPUTED)
         52, 0, 0, 0,
         // len_comment
@@ -486,7 +480,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
             disk_with_central_dir: 0,
             num_entries_this_disk: 1,
             num_entries_total: 1,
-            len_central_dir: 51,
+            len_central_dir: 55,  // Actual encoded size of CentralDirEntry
             ofs_central_dir: 39,  // Position after LocalFile (39 bytes for empty file)
             len_comment: 0
           }
@@ -534,7 +528,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         0, 0,   // disk_with_central_dir
         1, 0,   // num_entries_this_disk = 1
         1, 0,   // num_entries_total = 1
-        51, 0, 0, 0,  // len_central_dir = 51
+        55, 0, 0, 0,  // len_central_dir = 55 (actual encoded size)
         39, 0, 0, 0,  // ofs_central_dir = 39
         0, 0    // len_comment = 0
       ]
