@@ -2936,13 +2936,13 @@ function generateDecodeTypeReference(
         field,
         schema,
         globalEndianness,
-        `${tempVar}.${field.name}`,
+        field.name,
         indent
       );
-      // Replace target path to use tempVar instead of value/item
+      // Replace target path to use tempVar instead of value
       const modifiedCode = subFieldCode.replace(
-        new RegExp(`${isArrayItem ? fieldName : `value\\.${fieldName}`}\\.`, 'g'),
-        `${tempVar}.`
+        new RegExp(`value\\.${field.name}`, 'g'),
+        `${tempVar}.${field.name}`
       );
       code += modifiedCode;
     }

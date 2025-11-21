@@ -3,11 +3,11 @@
 ## Summary
 
 **Starting state:** 53 failing tests out of 540 total
-**Current state:** 1 execution failure out of 540 total
-**Progress:** 52 tests fixed (98% reduction in failures)
-**Overall:** 539/540 tests passing (99.8%)
+**Current state:** 0 execution failures out of 540 total ✅
+**Progress:** 53 tests fixed (100% reduction in failures)
+**Overall:** 540/540 tests passing (100%) 🎉
 
-## Latest Session: Context Threading and Path Reference Fixes (Current)
+## Latest Session: Final Test Fix - Decoder Variable Scoping (Complete) ✅
 
 ### Issues Fixed
 
@@ -126,37 +126,68 @@ for (let i = 0; i < fields.length; i++) {
 
 ---
 
-### Remaining Issue: `zip_like_format` (1 test - decoder bug)
+#### 4. Decoder Variable Scoping Bug for Array Items with Instances (1 test fixed) ✅
 
-**Problem:** Test fails with `TypeError: undefined is not an object (evaluating 'value.entries__iter_data.file_offset = this.readUint16("little_endian")')`
+**Problem:** `zip_like_format` test failed with `TypeError: undefined is not an object (evaluating 'value.entries__iter_data.file_offset = this.readUint16("little_endian")')`
 
-**Root Cause:** Decoder code generation bug with array items that have `instances` fields.
+**Root Cause:** Decoder code generation bug in `generateDecodeTypeReference` when handling array items that have `instances` fields. The code was passing the wrong fieldName to `generateDecodeFieldCore`, causing it to generate assignments to `value.entries__iter_data` instead of the local variable `entries__iter_data`.
 
-**Location:** Generated decoder at `.generated/zip_like_format.ts:453-454`
+**Test Fixed:**
+- `zip_like_format`
 
-**Buggy Generated Code:**
+**File Modified:**
+- `src/generators/typescript.ts` (lines 2933-2947)
+
+**Buggy Code:**
 ```typescript
-for (let i = 0; i < entries_length; i++) {
-  let entries__iter: any;
-  const entries__iter_data: any = {};  // Local variable created
-  value.entries__iter_data.file_offset = this.readUint16("little_endian");  // BUG: assigns to value.entries__iter_data (doesn't exist)
-  value.entries__iter_data.file_size = this.readUint16("little_endian");    // BUG: should be entries__iter_data (local var)
-  entries__iter = new DirEntryInstance(this.context?._rootDecoder || this, entries__iter_data, this.context?._root || this as any);
-  value.entries.push(entries__iter);
+// Decode all sequence fields into temp variable
+for (const field of sequenceFields) {
+  const subFieldCode = generateDecodeFieldCore(
+    field,
+    schema,
+    globalEndianness,
+    `${tempVar}.${field.name}`,  // BUG: Passing tempVar path causes wrong target generation
+    indent
+  );
+  // Replace target path to use tempVar instead of value/item
+  const modifiedCode = subFieldCode.replace(
+    new RegExp(`${isArrayItem ? fieldName : `value\\.${fieldName}`}\\.`, 'g'),
+    `${tempVar}.`  // BUG: Regex doesn't match actual generated code
+  );
+  code += modifiedCode;
 }
 ```
 
-**Expected Code:**
+**Fixed Code:**
 ```typescript
-for (let i = 0; i < entries_length; i++) {
-  let entries__iter: any;
-  const entries__iter_data: any = {};
-  entries__iter_data.file_offset = this.readUint16("little_endian");  // Should assign to local var
-  entries__iter_data.file_size = this.readUint16("little_endian");
-  entries__iter = new DirEntryInstance(this.context?._rootDecoder || this, entries__iter_data, this.context?._root || this as any);
-  value.entries.push(entries__iter);
+// Decode all sequence fields into temp variable
+for (const field of sequenceFields) {
+  const subFieldCode = generateDecodeFieldCore(
+    field,
+    schema,
+    globalEndianness,
+    field.name,  // FIXED: Pass just field.name
+    indent
+  );
+  // Replace target path to use tempVar instead of value
+  const modifiedCode = subFieldCode.replace(
+    new RegExp(`value\\.${field.name}`, 'g'),  // FIXED: Match actual pattern
+    `${tempVar}.${field.name}`
+  );
+  code += modifiedCode;
 }
 ```
+
+**Why This Happened:**
+1. `fieldName` = "entries__iter" (array item variable)
+2. `tempVar` = "entries__iter_data" (local variable for decoded fields)
+3. OLD: Called `generateDecodeFieldCore(field, ..., "${tempVar}.${field.name}", ...)` → "entries__iter_data.file_offset"
+4. In `generateDecodeFieldCoreImpl`, `isArrayItem` check failed (doesn't match array item pattern)
+5. Generated code: `value.entries__iter_data.file_offset = ...` (wrong!)
+6. Regex replacement tried to replace `entries__iter.` but found `value.entries__iter_data.`
+7. NEW: Call `generateDecodeFieldCore(field, ..., field.name, ...)` → "file_offset"
+8. Generated code: `value.file_offset = ...`
+9. Regex replacement: `value.file_offset` → `entries__iter_data.file_offset` ✅
 
 **Schema Context:**
 ```typescript
@@ -169,22 +200,13 @@ for (let i = 0; i < entries_length; i++) {
     {
       name: "file",
       type: "LocalFile",
-      position: "file_offset"  // Instance uses position reference
+      position: "file_offset"  // Instance field with position reference
     }
   ]
 }
 ```
 
-**Analysis:**
-- The decoder needs to generate code that uses `instances` pattern (lazy-loaded fields)
-- For array items with instances, it creates a local `entries__iter_data` object to hold the decoded fields
-- But the assignment incorrectly references `value.entries__iter_data` (which doesn't exist) instead of the local variable
-- This appears to be a variable scoping bug in the decoder generator when handling arrays of types that have `instances`
-
-**Next Steps:**
-- Search for decoder array generation code that handles instances
-- Look for where `${arrayItemVar}_data` assignments are generated
-- Fix the code to use the local variable name instead of prefixing with `value.`
+**Commit:** (pending)
 
 ---
 
