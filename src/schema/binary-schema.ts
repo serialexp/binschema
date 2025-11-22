@@ -567,6 +567,103 @@ const Int64FieldSchema = z.object({
 });
 
 /**
+ * Variable-length integer encoding schemes
+ */
+export const VarlengthEncodingSchema = z.enum(["der", "leb128", "ebml"]);
+export type VarlengthEncoding = z.infer<typeof VarlengthEncodingSchema>;
+
+/**
+ * Variable-length integer field
+ *
+ * Supports three encoding schemes commonly used in binary protocols:
+ * - "der": ASN.1 DER/BER length encoding (Kerberos, X.509, LDAP, SNMP)
+ * - "leb128": Little Endian Base 128 (Protocol Buffers, WebAssembly, DWARF)
+ * - "ebml": EBML variable-size integer (Matroska/WebM multimedia containers)
+ */
+const VarlengthFieldSchema = z.object({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("varlength").meta({
+    description: "Field type (always 'varlength')"
+  }),
+  encoding: VarlengthEncodingSchema.meta({
+    description: "Variable-length encoding scheme: 'der' (ASN.1 length), 'leb128' (protobuf-style), or 'ebml' (Matroska-style)"
+  }),
+  max_bytes: z.number().int().min(1).max(8).optional().meta({
+    description: "Maximum number of bytes for the encoded value (default: 4 for der, 5 for leb128, 8 for ebml)"
+  }),
+  computed: ComputedFieldSchema.optional().meta({
+    description: "Marks this field as automatically computed (e.g., length_of)"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
+}).meta({
+  title: "Variable-Length Integer",
+  description: "Variable-length integer encoding that uses 1-N bytes depending on the value magnitude. Supports three encoding schemes: DER (ASN.1), LEB128 (protobuf), and EBML (Matroska/WebM).",
+  use_for: "Length fields in TLV protocols, space-efficient integer encoding, protocol buffer varints, EBML element IDs",
+  wire_format: "1-N bytes depending on value and encoding scheme",
+
+  code_generation: {
+    typescript: {
+      type: "number | bigint",
+      notes: [
+        "number for values up to 2^53-1",
+        "bigint for larger values",
+        "Encoding/decoding handled by runtime library"
+      ]
+    },
+    go: {
+      type: "uint64",
+      notes: [
+        "Native Go uint64 type",
+        "Encoding/decoding methods provided by runtime"
+      ]
+    },
+    rust: {
+      type: "u64",
+      notes: [
+        "Native Rust u64 type",
+        "Encoding/decoding traits provided by runtime"
+      ]
+    }
+  },
+
+  notes: [
+    "DER encoding: 0x00-0x7F = short form (1 byte), 0x80+N = long form (1+N bytes)",
+    "LEB128 encoding: MSB continuation bit, little-endian, 7 bits per byte",
+    "EBML encoding: Leading zeros indicate width, self-synchronizing",
+    "Choose encoding based on protocol requirements, not personal preference",
+    "max_bytes limits maximum encoded size (default depends on encoding)"
+  ],
+
+  examples: [
+    { name: "content_length", type: "varlength", encoding: "der", description: "ASN.1 DER length field" },
+    { name: "field_number", type: "varlength", encoding: "leb128", description: "Protocol buffer field number" },
+    { name: "element_size", type: "varlength", encoding: "ebml", description: "EBML element data size" }
+  ],
+
+  examples_values: {
+    typescript: `{
+  content_length: 500,      // DER: 0x81 0xC8 (2 bytes)
+  field_number: 150,        // LEB128: 0x96 0x01 (2 bytes)
+  element_size: 1024        // EBML: varies by width marker
+}`,
+    go: `Message{
+  ContentLength: 500,       // DER encoded
+  FieldNumber:   150,       // LEB128 encoded
+  ElementSize:   1024,      // EBML encoded
+}`,
+    rust: `Message {
+  content_length: 500,      // DER encoded
+  field_number: 150,        // LEB128 encoded
+  element_size: 1024,       // EBML encoded
+}`
+  }
+});
+
+/**
  * Floating point types
  */
 const Float32FieldSchema = z.object({
@@ -667,6 +764,7 @@ const ArrayKindSchema = z.enum([
   "fixed",           // Fixed size array
   "length_prefixed", // Length prefix, then elements
   "length_prefixed_items", // Length prefix, then per-item length prefix + elements
+  "byte_length_prefixed", // Byte-length prefix, then elements (read until N bytes consumed)
   "null_terminated", // Elements until null/zero terminator
   "signature_terminated", // Elements until specific multi-byte signature value
   "eof_terminated",  // Elements until end of stream
@@ -1135,10 +1233,11 @@ const ArrayFieldSchema = z.object({
   get items() {
     return ElementTypeSchema; // Recursive: array of element types (no name required)
   },
-  length: z.number().int().min(1).optional(), // For fixed arrays
+  length: z.number().int().min(0).optional(), // For fixed arrays
   length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
   item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
-  length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation like "flags.opcode")
+  length_field: z.string().optional(), // For field_referenced: field name to read item count from (supports dot notation like "flags.opcode")
+  byte_length_field: z.string().optional(), // For byte_length_prefixed: field name with byte length to consume
   terminator_value: z.number().optional(), // For signature_terminated: signature value to stop on
   terminator_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For signature_terminated: type to peek for terminator
   terminator_endianness: EndiannessSchema.optional(), // For signature_terminated: endianness of terminator (required for uint16/uint32/uint64)
@@ -1154,15 +1253,16 @@ const ArrayFieldSchema = z.object({
     if (data.kind === "length_prefixed") return data.length_type !== undefined;
     if (data.kind === "length_prefixed_items") return data.length_type !== undefined && data.item_length_type !== undefined;
     if (data.kind === "field_referenced") return data.length_field !== undefined;
+    if (data.kind === "byte_length_prefixed") return data.byte_length_field !== undefined;
     if (data.kind === "signature_terminated") return data.terminator_value !== undefined && data.terminator_type !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', signature_terminated arrays require 'terminator_value' and 'terminator_type'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', byte_length_prefixed arrays require 'byte_length_field', signature_terminated arrays require 'terminator_value' and 'terminator_type'",
   }
 ).meta({
   title: "Array",
-  description: "Collection of elements of the same type. Supports fixed-length, length-prefixed, field-referenced, and null-terminated arrays.",
+  description: "Collection of elements of the same type. Supports fixed-length, length-prefixed, byte-length-prefixed, field-referenced, and null-terminated arrays.",
   use_for: "Lists of items, message batches, repeated structures, variable-length data",
   wire_format: "Depends on kind: fixed (N items), length_prefixed (count + items), length_prefixed_items (count + per-item lengths + items), null_terminated (items + terminator), field_referenced (length from earlier field)",
   
@@ -1196,32 +1296,45 @@ const ArrayFieldSchema = z.object({
 /**
  * String field (variable or fixed length)
  */
-const StringFieldSchema = z.object({
+// Base string field properties shared by all kinds
+const StringFieldBaseSchema = z.object({
   name: z.string().meta({
     description: "Field name"
   }),
   type: z.literal("string").meta({
     description: "Field type (always 'string')"
   }),
-  kind: ArrayKindSchema,
   encoding: StringEncodingSchema.optional().default("utf8"),
-  length: z.number().int().min(1).optional(), // For fixed length
-  length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed
-  length_field: z.string().optional(), // For field_referenced: field name to read length from
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
-}).refine(
-  (data) => {
-    if (data.kind === "fixed") return data.length !== undefined || data.length_field !== undefined;
-    if (data.kind === "length_prefixed") return data.length_type !== undefined;
-    if (data.kind === "field_referenced") return data.length_field !== undefined;
-    return true;
-  },
-  {
-    message: "Fixed strings require 'length' or 'length_field', length_prefixed strings require 'length_type', field_referenced strings require 'length_field'",
-  }
-).meta({
+});
+
+// Discriminated union for string field kinds
+const StringFieldSchema = z.discriminatedUnion("kind", [
+  // Fixed-length string
+  StringFieldBaseSchema.extend({
+    kind: z.literal("fixed"),
+    length: z.number().int().min(1),
+  }).strict(),
+
+  // Length-prefixed string (encoder writes length automatically)
+  StringFieldBaseSchema.extend({
+    kind: z.literal("length_prefixed"),
+    length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]),
+  }).strict(),
+
+  // Field-referenced string (length comes from another field)
+  StringFieldBaseSchema.extend({
+    kind: z.literal("field_referenced"),
+    length_field: z.string(),
+  }).strict(),
+
+  // Null-terminated string
+  StringFieldBaseSchema.extend({
+    kind: z.literal("null_terminated"),
+  }).strict(),
+]).meta({
   title: "String",
   description: "Variable or fixed-length text field with UTF-8 or ASCII encoding. Can be length-prefixed, fixed-length, or null-terminated.",
   use_for: "Usernames, messages, labels, text data, identifiers",
@@ -1375,7 +1488,17 @@ const TypeRefFieldSchema = z.object({
   name: z.string().meta({
     description: "Field name"
   }),
-  type: z.string(), // Name of another type or generic like "Optional<uint64>"
+  type: z.string().refine(
+    (t) => {
+      // Extract base type name (before any generic brackets)
+      const baseName = t.split('<')[0];
+      // User-defined types must start with uppercase letter
+      return /^[A-Z]/.test(baseName);
+    },
+    {
+      message: "Type references must start with uppercase letter (built-in types use specific field schemas)"
+    }
+  ), // Name of another type or generic like "Optional<uint64>"
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
@@ -1456,6 +1579,7 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     Int16FieldSchema,
     Int32FieldSchema,
     Int64FieldSchema,
+    VarlengthFieldSchema,
     Float32FieldSchema,
     Float64FieldSchema,
     OptionalFieldSchema,

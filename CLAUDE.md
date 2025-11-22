@@ -13,6 +13,29 @@ BinSchema is a binary protocol schema definition and code generation tool. It al
 - Random-access support (seekable streams, position/length fields)
 - Cross-language test validation (JSON test format)
 
+## Working with Temporary Files
+
+**IMPORTANT:** When creating temporary test files or scratch files:
+- **DO** use `./tmp/` relative to the project root (e.g., `./tmp/test-file.ts`)
+- **DO NOT** use `/tmp/` (absolute path) - imports from `src/` won't work from there
+- The `./tmp/` directory is gitignored and safe for temporary files
+- Files in `./tmp/` can import from `src/` and use relative paths normally
+
+**Example:**
+```bash
+# Good - relative to project root
+cat > ./tmp/test-varlength.ts << 'EOF'
+import { BitStreamEncoder } from '../src/runtime/bit-stream.js';
+// ... test code
+EOF
+bun ./tmp/test-varlength.ts
+
+# Bad - absolute path, imports won't work
+cat > /tmp/test-varlength.ts << 'EOF'
+import { BitStreamEncoder } from './src/runtime/bit-stream.js';  // ERROR: won't resolve
+EOF
+```
+
 ## Testing
 
 ### Running Tests
@@ -23,13 +46,14 @@ make test
 
 # Run TypeScript/Bun tests only
 npm test                                       # Run all BinSchema tests (~0.15s with bun!)
-npm test -- --filter=<pattern>                 # Run tests matching pattern
+npm test -- --filter=<pattern>                 # Run tests matching pattern (supports pipe: 'foo|bar')
 npm test -- --failures                         # Show only failing tests
 npm test -- --filter=uint16 --failures         # Combine flags for focused debugging
 npm test -- --summary                          # Minimal output (just final summary)
 
 # Examples
 npm test -- --filter=optional                  # Only tests with 'optional' in name
+npm test -- --filter='uint8|uint16|uint32'     # Tests matching ANY of the patterns (OR logic)
 npm test -- --failures                         # Only show test suites with failures
 DEBUG_TEST=1 npm test -- --filter=zip          # Debug zip tests with verbose output
 

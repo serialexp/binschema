@@ -6,9 +6,7 @@ import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation
 import { generateRuntimeHelpers } from "./typescript/runtime-helpers.js";
 import {
   generateEncodeBitfield,
-  generateDecodeBitfield,
-  generateFunctionalEncodeBitfield,
-  generateFunctionalDecodeBitfield
+  generateDecodeBitfield
 } from "./typescript/bitfield-support.js";
 import {
   generateEncodeComputedField,
@@ -21,21 +19,16 @@ import {
   generateEncodeBackReference,
   generateDecodeBackReference,
   generateInlinedBackReferenceDecoder,
-  generateFunctionalBackReference,
   resolveBackReferenceType,
   capitalize
 } from "./typescript/back-references.js";
 import {
   generateEncodeString,
-  generateDecodeString,
-  generateFunctionalEncodeString,
-  generateFunctionalDecodeString
+  generateDecodeString
 } from "./typescript/string-support.js";
 import {
   generateEncodeArray,
   generateDecodeArray,
-  generateFunctionalEncodeArray,
-  generateFunctionalDecodeArray,
   getItemSize
 } from "./typescript/array-support.js";
 import { generateContextInterface, schemaRequiresContext } from "./typescript/context-analysis.js";
@@ -48,46 +41,6 @@ import { generateNestedTypeContextExtension } from "./typescript/context-extensi
  */
 
 export type { GeneratedCode };
-
-/**
- * Generate TypeScript code for all types in the schema (functional style with standalone functions)
- *
- * ⚠️ WARNING: THIS GENERATOR IS INCOMPLETE AND NOT TESTED
- *
- * Known issues:
- * - Does not properly handle Optional<T> generic expansion (inlines incorrectly)
- * - Decoder does not handle generic types at all
- * - No test coverage (all tests use class-based generator)
- *
- * TODO: Either complete this generator with proper tests, or create functional wrappers
- * around the class-based generator (e.g., encode(value) => new Encoder().encode(value))
- *
- * For production use, use generateTypeScript() (class-based) instead.
- */
-export function generateTypeScriptCode(schema: BinarySchema): string {
-  const globalEndianness = schema.config?.endianness || "big_endian";
-  const globalBitOrder = schema.config?.bit_order || "msb_first";
-
-  // Import runtime library (from same directory)
-  let code = `import { BitStreamEncoder, BitStreamDecoder } from "./bit-stream.js";\n\n`;
-
-  // Add global visitedOffsets for back_reference circular reference detection
-  code += `// Global set for circular reference detection in back references\n`;
-  code += `let visitedOffsets: Set<number>;\n\n`;
-
-  // Generate code for each type (skip generic templates)
-  for (const [typeName, typeDef] of Object.entries(schema.types)) {
-    if (typeName.includes('<')) {
-      continue;
-    }
-
-    const sanitizedName = sanitizeTypeName(typeName);
-    code += generateFunctionalTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder);
-    code += "\n\n";
-  }
-
-  return code;
-}
 
 /**
  * Generate TypeScript code for all types in the schema (class-based style)
@@ -118,8 +71,6 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
 
   // Generate code for each type (skip generic templates like Optional<T>)
   for (const [typeName, typeDef] of Object.entries(schema.types)) {
-    // Skip only generic type templates (e.g., "Optional<T>", "Array<T>")
-    // Don't skip regular types that happen to contain 'T' (e.g., "ThreeBitValue", "Triangle")
     if (typeName.includes('<')) {
       continue;
     }
@@ -131,732 +82,6 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
 
   return code;
 }
-
-/**
- * Generate functional-style code for a single type
- */
-function generateFunctionalTypeCode(
-  typeName: string,
-  typeDef: TypeDef,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  globalBitOrder: string
-): string {
-  // Check if this is a discriminated union or back_reference type alias
-  const typeDefAny = typeDef as any;
-
-  if (typeDefAny.type === "discriminated_union") {
-    return generateFunctionalDiscriminatedUnion(typeName, typeDefAny, schema, globalEndianness);
-  }
-
-  if (isBackReferenceTypeDef(typeDefAny)) {
-    return generateFunctionalBackReference(typeName, typeDefAny, schema, globalEndianness);
-  }
-
-  // Handle string types - generate type alias + functions
-  if (typeDefAny.type === "string") {
-    let code = generateJSDoc(typeDefAny.description);
-    code += `export type ${typeName} = string;`;
-    const encoderCode = generateFunctionalEncoder(typeName, typeDef, schema, globalEndianness);
-    const decoderCode = generateFunctionalDecoder(typeName, typeDef, schema, globalEndianness);
-    return `${code}\n\n${encoderCode}\n\n${decoderCode}`;
-  }
-
-  // Handle array types - generate type alias + functions
-  if (typeDefAny.type === "array") {
-    const itemType = getElementTypeScriptType(typeDefAny.items, schema);
-    let code = generateJSDoc(typeDefAny.description);
-    code += `export type ${typeName} = ${itemType}[];`;
-    const encoderCode = generateFunctionalEncoder(typeName, typeDef, schema, globalEndianness);
-    const decoderCode = generateFunctionalDecoder(typeName, typeDef, schema, globalEndianness);
-    return `${code}\n\n${encoderCode}\n\n${decoderCode}`;
-  }
-
-  // Check if this is a type alias or composite type
-  if (isTypeAlias(typeDef)) {
-    // Regular type alias
-    const aliasedType = typeDefAny;
-    const tsType = getElementTypeScriptType(aliasedType, schema);
-
-    let code = generateJSDoc(typeDefAny.description);
-    code += `export type ${typeName} = ${tsType};`;
-
-    // For simple type aliases, we might not need encode/decode functions
-    // (they'd just call the underlying type's functions)
-    return code;
-  }
-
-  // Composite type - generate interface and functions
-  const fields = getTypeFields(typeDef);
-  const interfaceCode = generateInterface(typeName, typeDef, schema);
-  const encoderCode = generateFunctionalEncoder(typeName, typeDef, schema, globalEndianness);
-  const decoderCode = generateFunctionalDecoder(typeName, typeDef, schema, globalEndianness);
-
-  const sections = [interfaceCode];
-  const enumCode = generateDiscriminatedUnionEnumsForFields(typeName, fields);
-  if (enumCode) {
-    sections.push(enumCode);
-  }
-  sections.push(encoderCode, decoderCode);
-
-  return sections.filter(Boolean).join("\n\n");
-}
-
-/**
- * Check if a type is a composite (has sequence) or a type alias
- * Note: Standalone array types (type: "array") and string types (type: "string")
- * are NOT aliases - they need encoder/decoder functions
- */
-/**
- * Generate encoder for standalone array type
- */
-function generateFunctionalEncoderForArray(
-  typeName: string,
-  typeDefAny: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const arrayField = { ...typeDefAny, name: 'value' };
-  const encodeCode = generateFunctionalEncodeArray(arrayField, schema, globalEndianness, 'value', '  ');
-
-  return `export function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n${encodeCode}}`;
-}
-
-/**
- * Generate encoder for standalone string type
- */
-function generateFunctionalEncoderForString(
-  typeName: string,
-  typeDefAny: any,
-  globalEndianness: Endianness
-): string {
-  const stringField = { ...typeDefAny, name: 'value' };
-  const encodeCode = generateFunctionalEncodeString(stringField, globalEndianness, 'value', '  ');
-
-  return `export function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n${encodeCode}}`;
-}
-
-/**
- * Generate functional-style encoder for composite types
- */
-function generateFunctionalEncoder(
-  typeName: string,
-  typeDef: TypeDef,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const typeDefAny = typeDef as any;
-
-  // Handle standalone array types
-  if (typeDefAny.type === 'array') {
-    return generateFunctionalEncoderForArray(typeName, typeDefAny, schema, globalEndianness);
-  }
-
-  // Handle standalone string types
-  if (typeDefAny.type === 'string') {
-    return generateFunctionalEncoderForString(typeName, typeDefAny, globalEndianness);
-  }
-
-  const fields = getTypeFields(typeDef);
-
-  // Optimization: if struct has exactly 1 field and it's a back_reference, encode the target directly
-  if (fields.length === 1 && 'type' in fields[0]) {
-    const field = fields[0];
-    const fieldTypeDef = schema.types[field.type];
-    if (isBackReferenceTypeDef(fieldTypeDef)) {
-      // Encode target type directly (back references are transparent during encoding)
-      const targetType = (fieldTypeDef as any).target_type;
-      let code = `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
-      code += `  encode${targetType}(stream, value.${field.name});\n`;
-      code += `}`;
-      return code;
-    }
-  }
-
-  // Regular multi-field struct
-  let code = `/**\n`;
-  code += ` * Encode ${typeName} to the stream\n`;
-  code += ` * @param stream - The bit stream to write to\n`;
-  code += ` * @param value - The ${typeName} to encode\n`;
-  code += ` */\n`;
-  code += `export function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
-
-  for (const field of fields) {
-    code += generateFunctionalEncodeField(field, schema, globalEndianness, "value", "  ");
-  }
-
-  code += `}`;
-  return code;
-}
-
-/**
- * Generate decoder for standalone array type
- */
-function generateFunctionalDecoderForArray(
-  typeName: string,
-  typeDefAny: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const arrayField = { ...typeDefAny, name: 'result' };
-  const decodeCode = generateFunctionalDecodeArray(arrayField, schema, globalEndianness, 'result', '  ', getElementTypeScriptType, generateDecodeChoice, generateDecodeDiscriminatedUnionInline);
-
-  return `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n${decodeCode}  return result;\n}`;
-}
-
-/**
- * Generate decoder for standalone string type
- */
-function generateFunctionalDecoderForString(
-  typeName: string,
-  typeDefAny: any,
-  globalEndianness: Endianness
-): string {
-  const stringField = { ...typeDefAny, name: 'result' };
-  const decodeCode = generateFunctionalDecodeString(stringField, globalEndianness, 'result', '  ');
-
-  return `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n${decodeCode}  return result;\n}`;
-}
-
-/**
- * Generate functional-style decoder for composite types
- */
-function generateFunctionalDecoder(
-  typeName: string,
-  typeDef: TypeDef,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const typeDefAny = typeDef as any;
-
-  // Handle standalone array types
-  if (typeDefAny.type === 'array') {
-    return generateFunctionalDecoderForArray(typeName, typeDefAny, schema, globalEndianness);
-  }
-
-  // Handle standalone string types
-  if (typeDefAny.type === 'string') {
-    return generateFunctionalDecoderForString(typeName, typeDefAny, globalEndianness);
-  }
-
-  const fields = getTypeFields(typeDef);
-
-  // Optimization: if struct has exactly 1 field and it's a back_reference, inline the logic
-  if (fields.length === 1 && 'type' in fields[0]) {
-    const field = fields[0];
-    const fieldTypeDef = schema.types[field.type];
-    if (isBackReferenceTypeDef(fieldTypeDef)) {
-      // Inline back_reference logic
-      return generateInlinedBackReferenceDecoder(typeName, field.name, fieldTypeDef as any, schema, globalEndianness);
-    }
-  }
-
-  // Check if any field is a field-based discriminated union
-  const fieldBasedUnionIndex = fields.findIndex(f => {
-    if (!('type' in f)) return false;
-    if (f.type === 'discriminated_union') {
-      const discriminator = (f as any).discriminator;
-      return discriminator && discriminator.field;
-    }
-    return false;
-  });
-
-  if (fieldBasedUnionIndex >= 0) {
-    // Generate decoder with early returns for field-based discriminated union
-    return generateFunctionalDecoderWithEarlyReturns(typeName, fields, fieldBasedUnionIndex, schema, globalEndianness);
-  }
-
-  // Regular multi-field struct
-  let code = `/**\n`;
-  code += ` * Decode ${typeName} from the stream\n`;
-  code += ` * @param stream - The bit stream to read from\n`;
-  code += ` * @returns The decoded ${typeName}\n`;
-  code += ` */\n`;
-  code += `export function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
-
-  // Decode each field
-  for (const field of fields) {
-    code += generateFunctionalDecodeField(field, schema, globalEndianness, "  ");
-  }
-
-  // Build return object
-  const returnFields = fields
-    .filter(f => 'name' in f)
-    .map(f => {
-      const originalName = f.name;
-      const sanitizedName = sanitizeVarName(originalName);
-      // If sanitized, use explicit mapping: field: varName
-      // If not sanitized, use shorthand: field
-      return sanitizedName === originalName ? originalName : `${originalName}: ${sanitizedName}`;
-    });
-  code += `  return { ${returnFields.join(", ")} };\n`;
-  code += `}`;
-  return code;
-}
-
-/**
- * Generate functional decoder with early returns for field-based discriminated unions
- */
-function generateFunctionalDecoderWithEarlyReturns(
-  typeName: string,
-  fields: Field[],
-  unionFieldIndex: number,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  let code = `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
-
-  // Decode all fields before the discriminated union
-  for (let i = 0; i < unionFieldIndex; i++) {
-    code += generateFunctionalDecodeField(fields[i], schema, globalEndianness, "  ");
-  }
-
-  // Get the discriminated union field
-  const unionField = fields[unionFieldIndex] as any;
-  const unionFieldName = unionField.name;
-  const discriminator = unionField.discriminator;
-  const variants = unionField.variants || [];
-  const discriminatorField = sanitizeVarName(discriminator.field);
-
-  // Collect names of fields decoded before the union
-  const beforeFieldNames = fields.slice(0, unionFieldIndex)
-    .filter(f => 'name' in f)
-    .map(f => {
-      const originalName = f.name;
-      const sanitizedName = sanitizeVarName(originalName);
-      return sanitizedName === originalName ? originalName : `${originalName}: ${sanitizedName}`;
-    });
-
-  // Generate if-else chain with early returns
-  for (let i = 0; i < variants.length; i++) {
-    const variant = variants[i];
-    if (variant.when) {
-      const condition = variant.when.replace(/\bvalue\b/g, discriminatorField);
-      const ifKeyword = i === 0 ? "if" : "else if";
-
-      code += `  ${ifKeyword} (${condition}) {\n`;
-      code += `    const ${unionFieldName} = decode${variant.type}(stream);\n`;
-
-      // Build return object with inlined discriminated union
-      const returnFields = [
-        ...beforeFieldNames,
-        `${unionFieldName}: { type: '${variant.type}', value: ${unionFieldName} }`
-      ];
-      code += `    return { ${returnFields.join(", ")} };\n`;
-      code += `  }`;
-      if (i < variants.length - 1) {
-        code += "\n";
-      }
-    } else {
-      // Fallback variant
-      code += ` else {\n`;
-      code += `    const ${unionFieldName} = decode${variant.type}(stream);\n`;
-
-      const returnFields = [
-        ...beforeFieldNames,
-        `${unionFieldName}: { type: '${variant.type}', value: ${unionFieldName} }`
-      ];
-      code += `    return { ${returnFields.join(", ")} };\n`;
-      code += `  }\n`;
-      code += `}`;
-      return code;
-    }
-  }
-
-  // No fallback - throw error
-  code += ` else {\n`;
-  code += `    throw new Error(\`Unknown discriminator value: \${${discriminatorField}}\`);\n`;
-  code += `  }\n`;
-  code += `}`;
-
-  return code;
-}
-
-
-/**
- * Generate functional-style discriminated union
- */
-function generateFunctionalDiscriminatedUnion(
-  typeName: string,
-  unionDef: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness
-): string {
-  const discriminator = unionDef.discriminator || {};
-  const variants = unionDef.variants || [];
-  const enumName = `${typeName}Variant`;
-
-  // Generate TypeScript union type
-  const headerSections: string[] = [];
-  const unionDocString = generateJSDoc(getFieldDocumentation({ ...unionDef, name: typeName } as Field, schema));
-  if (unionDocString) {
-    headerSections.push(unionDocString.trimEnd());
-  }
-  headerSections.push(`export type ${typeName} = ${generateDiscriminatedUnionType(unionDef, schema)};`);
-  const enumCode = generateDiscriminatedUnionEnum(unionDef, enumName, "", typeName);
-  if (enumCode) {
-    headerSections.push(enumCode.trimEnd());
-  }
-  let code = headerSections.join("\n\n") + "\n\n";
-
-  // Generate encoder
-  code += `function encode${typeName}(stream: BitStreamEncoder, value: ${typeName}): void {\n`;
-  for (let i = 0; i < variants.length; i++) {
-    const variant = variants[i];
-    const ifKeyword = i === 0 ? "if" : "else if";
-    code += `  ${ifKeyword} (value.type === '${variant.type}') {\n`;
-    code += `    encode${variant.type}(stream, value.value);\n`;
-    code += `  }`;
-    if (i < variants.length - 1) {
-      code += "\n";
-    }
-  }
-  code += ` else {\n`;
-  code += `    throw new Error(\`Unknown variant type: \${(value as any).type}\`);\n`;
-  code += `  }\n`;
-  code += `}\n\n`;
-
-  // Generate decoder
-  code += `function decode${typeName}(stream: BitStreamDecoder): ${typeName} {\n`;
-
-  if (discriminator.peek) {
-    // Peek-based discriminator
-    const peekType = discriminator.peek;
-    const endianness = discriminator.endianness || globalEndianness;
-    const endiannessArg = peekType !== "uint8" ? `'${endianness}'` : "";
-
-    code += `  const discriminator = stream.peek${capitalize(peekType)}(${endiannessArg});\n`;
-
-    for (let i = 0; i < variants.length; i++) {
-      const variant = variants[i];
-      if (variant.when) {
-        const condition = variant.when.replace(/\bvalue\b/g, 'discriminator');
-        const ifKeyword = i === 0 ? "if" : "else if";
-        code += `  ${ifKeyword} (${condition}) {\n`;
-        code += `    const value = decode${variant.type}(stream);\n`;
-        code += `    return { type: '${variant.type}', value };\n`;
-        code += `  }`;
-        if (i < variants.length - 1) {
-          code += "\n";
-        }
-      } else {
-        // Fallback
-        code += ` else {\n`;
-        code += `    const value = decode${variant.type}(stream);\n`;
-        code += `    return { type: '${variant.type}', value };\n`;
-        code += `  }\n`;
-        code += `}`;
-        return code;
-      }
-    }
-
-    // No fallback - error
-    code += ` else {\n`;
-    code += `    throw new Error(\`Unknown discriminator: 0x\${discriminator.toString(16)}\`);\n`;
-    code += `  }\n`;
-
-  } else if (discriminator.field) {
-    // Field-based discriminator
-    const discriminatorField = discriminator.field;
-
-    for (let i = 0; i < variants.length; i++) {
-      const variant = variants[i];
-      if (variant.when) {
-        const condition = variant.when.replace(/\bvalue\b/g, discriminatorField);
-        const ifKeyword = i === 0 ? "if" : "else if";
-        code += `  ${ifKeyword} (${condition}) {\n`;
-        code += `    const payload = decode${variant.type}(stream);\n`;
-        code += `    return { type: '${variant.type}', value: payload };\n`;
-        code += `  }`;
-        if (i < variants.length - 1) {
-          code += "\n";
-        }
-      } else {
-        // Fallback
-        code += ` else {\n`;
-        code += `    const payload = decode${variant.type}(stream);\n`;
-        code += `    return { type: '${variant.type}', value: payload };\n`;
-        code += `  }\n`;
-        code += `}`;
-        return code;
-      }
-    }
-
-    // No fallback - error
-    code += ` else {\n`;
-    code += `    throw new Error(\`Unknown discriminator value: \${${discriminatorField}}\`);\n`;
-    code += `  }\n`;
-  }
-
-  code += `}`;
-  return code;
-}
-
-
-/**
- * Generate functional encoding for a field
- */
-function generateFunctionalEncodeField(
-  field: Field,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  if (!('type' in field)) return "";
-
-  const fieldName = field.name;
-  const fieldPath = `${valuePath}.${fieldName}`;
-  const fieldEndianness = 'endianness' in field && field.endianness ? field.endianness : globalEndianness;
-
-  switch (field.type) {
-    case "uint8":
-      return `${indent}stream.writeUint8(${fieldPath});\n`;
-    case "uint16":
-      return `${indent}stream.writeUint16(${fieldPath}, '${fieldEndianness}');\n`;
-    case "uint32":
-      return `${indent}stream.writeUint32(${fieldPath}, '${fieldEndianness}');\n`;
-    case "uint64":
-      return `${indent}stream.writeUint64(${fieldPath}, '${fieldEndianness}');\n`;
-    case "int8":
-      return `${indent}stream.writeInt8(${fieldPath});\n`;
-    case "int16":
-      return `${indent}stream.writeInt16(${fieldPath}, '${fieldEndianness}');\n`;
-    case "int32":
-      return `${indent}stream.writeInt32(${fieldPath}, '${fieldEndianness}');\n`;
-    case "int64":
-      return `${indent}stream.writeInt64(${fieldPath}, '${fieldEndianness}');\n`;
-    case "array":
-      return generateFunctionalEncodeArray(field, schema, globalEndianness, fieldPath, indent);
-    case "string":
-      return generateFunctionalEncodeString(field, globalEndianness, fieldPath, indent);
-    case "bitfield":
-      return generateFunctionalEncodeBitfield(field, fieldPath, indent);
-    case "discriminated_union":
-      return generateFunctionalEncodeDiscriminatedUnionField(field as any, schema, globalEndianness, fieldPath, indent);
-    default:
-      // Check for generic type instantiation (e.g., Optional<uint64>)
-      const genericMatch = field.type.match(/^(\w+)<(.+)>$/);
-      if (genericMatch) {
-        const [, genericType, typeArg] = genericMatch;
-        const templateDef = schema.types[`${genericType}<T>`] as TypeDef | undefined;
-
-        if (templateDef) {
-          const templateFields = getTypeFields(templateDef);
-          // Inline expand the generic by replacing T with the type argument
-          let code = "";
-          for (const tmplField of templateFields) {
-            // Replace T with the actual type
-            const expandedField = JSON.parse(
-              JSON.stringify(tmplField).replace(/"T"/g, `"${typeArg}"`)
-            );
-            const newFieldPath = `${fieldPath}.${expandedField.name}`;
-            code += generateFunctionalEncodeField(expandedField, schema, globalEndianness, newFieldPath, indent);
-          }
-          return code;
-        }
-      }
-      // Type reference - resolve back_reference types to their target type
-      const resolvedType = resolveBackReferenceType(field.type, schema);
-      return `${indent}encode${resolvedType}(stream, ${fieldPath});\n`;
-  }
-}
-
-/**
- * Generate functional encoding for bitfield
- */
-
-/**
- * Generate functional encoding for discriminated union field
- */
-function generateFunctionalEncodeDiscriminatedUnionField(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  let code = "";
-  const variants = field.variants || [];
-
-  // Generate if-else chain for each variant
-  for (let i = 0; i < variants.length; i++) {
-    const variant = variants[i];
-    const ifKeyword = i === 0 ? "if" : "else if";
-
-    code += `${indent}${ifKeyword} (${valuePath}.type === '${variant.type}') {\n`;
-    code += `${indent}  encode${variant.type}(stream, ${valuePath}.value);\n`;
-    code += `${indent}}`;
-    if (i < variants.length - 1) {
-      code += "\n";
-    }
-  }
-
-  // Add fallthrough error
-  code += ` else {\n`;
-  code += `${indent}  throw new Error(\`Unknown variant type: \${(${valuePath} as any).type}\`);\n`;
-  code += `${indent}}\n`;
-
-  return code;
-}
-
-/**
- * Resolve back_reference types to their target type (for encoding - references are transparent)
- */
-/**
- * Generate functional encoding for array
- */
-
-/**
- * Generate functional encoding for string
- */
-
-/**
- * Generate functional decoding for a field
- */
-function generateFunctionalDecodeField(
-  field: Field,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  indent: string
-): string {
-  if (!('type' in field)) return "";
-
-  const fieldName = sanitizeVarName(field.name);
-  const fieldEndianness = 'endianness' in field && field.endianness ? field.endianness : globalEndianness;
-
-  switch (field.type) {
-    case "uint8":
-      return `${indent}const ${fieldName} = stream.readUint8();\n`;
-    case "uint16":
-      return `${indent}const ${fieldName} = stream.readUint16('${fieldEndianness}');\n`;
-    case "uint32":
-      return `${indent}const ${fieldName} = stream.readUint32('${fieldEndianness}');\n`;
-    case "uint64":
-      return `${indent}const ${fieldName} = stream.readUint64('${fieldEndianness}');\n`;
-    case "int8":
-      return `${indent}const ${fieldName} = stream.readInt8();\n`;
-    case "int16":
-      return `${indent}const ${fieldName} = stream.readInt16('${fieldEndianness}');\n`;
-    case "int32":
-      return `${indent}const ${fieldName} = stream.readInt32('${fieldEndianness}');\n`;
-    case "int64":
-      return `${indent}const ${fieldName} = stream.readInt64('${fieldEndianness}');\n`;
-    case "array":
-      return generateFunctionalDecodeArray(field, schema, globalEndianness, fieldName, indent, getElementTypeScriptType, generateDecodeChoice, generateDecodeDiscriminatedUnionInline);
-    case "string":
-      return generateFunctionalDecodeString(field, globalEndianness, fieldName, indent);
-    case "bitfield":
-      return generateFunctionalDecodeBitfield(field, fieldName, indent);
-    case "discriminated_union":
-      return generateFunctionalDecodeDiscriminatedUnionField(field as any, schema, globalEndianness, fieldName, indent);
-    default:
-      // Type reference - always call the decoder function
-      return `${indent}const ${fieldName} = decode${field.type}(stream);\n`;
-  }
-}
-
-/**
- * Generate functional decoding for bitfield
- */
-
-/**
- * Generate functional decoding for discriminated union field
- */
-function generateFunctionalDecodeDiscriminatedUnionField(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string
-): string {
-  let code = "";
-  const discriminator = field.discriminator || {};
-  const variants = field.variants || [];
-
-  // Get the union type for the field
-  const unionType = generateDiscriminatedUnionType(field, schema);
-
-  // Declare variable with let (will be assigned conditionally)
-  code += `${indent}let ${fieldName}: ${unionType};\n`;
-
-  if (discriminator.peek) {
-    // Peek-based discriminator
-    const peekType = discriminator.peek;
-    const endianness = discriminator.endianness || globalEndianness;
-    const endiannessArg = peekType !== "uint8" ? `'${endianness}'` : "";
-
-    code += `${indent}const discriminator = stream.peek${capitalize(peekType)}(${endiannessArg});\n`;
-
-    for (let i = 0; i < variants.length; i++) {
-      const variant = variants[i];
-      if (variant.when) {
-        const condition = variant.when.replace(/\bvalue\b/g, 'discriminator');
-        const ifKeyword = i === 0 ? "if" : "else if";
-        code += `${indent}${ifKeyword} (${condition}) {\n`;
-        code += `${indent}  const value = decode${variant.type}(stream);\n`;
-        code += `${indent}  ${fieldName} = { type: '${variant.type}', value };\n`;
-        code += `${indent}}`;
-        if (i < variants.length - 1) {
-          code += "\n";
-        }
-      } else {
-        // Fallback
-        code += ` else {\n`;
-        code += `${indent}  const value = decode${variant.type}(stream);\n`;
-        code += `${indent}  ${fieldName} = { type: '${variant.type}', value };\n`;
-        code += `${indent}}\n`;
-        return code;
-      }
-    }
-
-    // No fallback - error
-    code += ` else {\n`;
-    code += `${indent}  throw new Error(\`Unknown discriminator: 0x\${discriminator.toString(16)}\`);\n`;
-    code += `${indent}}\n`;
-
-  } else if (discriminator.field) {
-    // Field-based discriminator
-    const discriminatorField = discriminator.field;
-
-    for (let i = 0; i < variants.length; i++) {
-      const variant = variants[i];
-      if (variant.when) {
-        const condition = variant.when.replace(/\bvalue\b/g, discriminatorField);
-        const ifKeyword = i === 0 ? "if" : "else if";
-        code += `${indent}${ifKeyword} (${condition}) {\n`;
-        code += `${indent}  const value = decode${variant.type}(stream);\n`;
-        code += `${indent}  ${fieldName} = { type: '${variant.type}', value };\n`;
-        code += `${indent}}`;
-        if (i < variants.length - 1) {
-          code += "\n";
-        }
-      } else {
-        // Fallback
-        code += ` else {\n`;
-        code += `${indent}  const value = decode${variant.type}(stream);\n`;
-        code += `${indent}  ${fieldName} = { type: '${variant.type}', value };\n`;
-        code += `${indent}}\n`;
-        return code;
-      }
-    }
-
-    // No fallback - error
-    code += ` else {\n`;
-    code += `${indent}  throw new Error(\`Unknown discriminator value: \${${discriminatorField}}\`);\n`;
-    code += `${indent}}\n`;
-  }
-
-  return code;
-}
-
-/**
- * Generate functional decoding for array
- */
-
-/**
- * Generate functional decoding for string
- */
 
 /**
  * Generate code for a single type
@@ -1105,6 +330,7 @@ function getElementTypeScriptType(element: any, schema: BinarySchema): string {
       case "int8":
       case "int16":
       case "int32":
+      case "varlength":
       case "float32":
       case "float64":
         return "number";
@@ -1362,6 +588,7 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
       case "int8":
       case "int16":
       case "int32":
+      case "varlength":
       case "float32":
       case "float64":
         return "number";
@@ -1854,6 +1081,17 @@ function generateEncodeFieldCoreImpl(
     case "int64":
       return `${indent}this.writeInt64(${valuePath}, "${endianness}");\n`;
 
+    case "varlength": {
+      const encoding = 'encoding' in field ? field.encoding : 'der';
+      const methodMap = {
+        'der': 'writeVarlengthDER',
+        'leb128': 'writeVarlengthLEB128',
+        'ebml': 'writeVarlengthEBML'
+      };
+      const method = methodMap[encoding as 'der' | 'leb128' | 'ebml'];
+      return `${indent}this.${method}(${valuePath});\n`;
+    }
+
     case "float32":
       return `${indent}this.writeFloat32(${valuePath}, "${endianness}");\n`;
 
@@ -2172,7 +1410,7 @@ function generateEncodeTypeReference(
   // Regular type reference (not generic)
   const typeDef = schema.types[typeRef] as TypeDef | undefined;
   if (!typeDef) {
-    return `${indent}// TODO: Unknown type ${typeRef}\n`;
+    throw new Error(`Unknown type '${typeRef}' - not found in schema.types and not a built-in primitive`);
   }
 
   const typeDefAny = typeDef as any;
@@ -2449,6 +1687,17 @@ function generateDecodeFieldCoreImpl(
 
     case "int64":
       return `${indent}${target} = this.readInt64("${endianness}");\n`;
+
+    case "varlength": {
+      const encoding = 'encoding' in field ? field.encoding : 'der';
+      const methodMap = {
+        'der': 'readVarlengthDER',
+        'leb128': 'readVarlengthLEB128',
+        'ebml': 'readVarlengthEBML'
+      };
+      const method = methodMap[encoding as 'der' | 'leb128' | 'ebml'];
+      return `${indent}${target} = this.${method}();\n`;
+    }
 
     case "float32":
       return `${indent}${target} = this.readFloat32("${endianness}");\n`;
@@ -2888,7 +2137,7 @@ function generateDecodeTypeReference(
   // Regular type reference (not generic)
   const typeDef = schema.types[typeRef] as TypeDef | undefined;
   if (!typeDef) {
-    return `${indent}// TODO: Unknown type ${typeRef}\n`;
+    throw new Error(`Unknown type '${typeRef}' - not found in schema.types and not a built-in primitive`);
   }
 
   const typeDefAny = typeDef as any;

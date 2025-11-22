@@ -1,0 +1,180 @@
+{
+  "config": {
+    "endianness": "big_endian",
+    "description": "Kerberos V5 Protocol (RFC 4120) - ASN.1 DER encoding"
+  },
+  "types": {
+    "DERLength": {
+      "description": "DER/BER length encoding - used throughout ASN.1 structures",
+      "sequence": [
+        {
+          "name": "value",
+          "type": "varlength",
+          "encoding": "der",
+          "description": "Variable-length integer (0-127: 1 byte, 128+: long form)"
+        }
+      ]
+    },
+    "DERTag": {
+      "description": "DER tag byte - identifies the type that follows",
+      "sequence": [
+        {
+          "name": "value",
+          "type": "uint8",
+          "description": "Tag byte (e.g., 0x30=SEQUENCE, 0x02=INTEGER, 0x04=OCTET STRING)"
+        }
+      ]
+    },
+    "Int32": {
+      "description": "ASN.1 INTEGER (32-bit signed) - Kerberos uses this for version numbers, message types, etc.",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x02, "description": "INTEGER tag" },
+        { "name": "length", "type": "varlength", "encoding": "der" },
+        {
+          "name": "value",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Big-endian signed integer bytes"
+        }
+      ]
+    },
+    "OctetString": {
+      "description": "ASN.1 OCTET STRING - arbitrary byte sequences",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x04, "description": "OCTET STRING tag" },
+        { "name": "length", "type": "varlength", "encoding": "der" },
+        {
+          "name": "value",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Raw octets"
+        }
+      ]
+    },
+    "KerberosString": {
+      "description": "ASN.1 GeneralString - UTF-8 encoded strings in Kerberos",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x1B, "description": "GeneralString tag" },
+        { "name": "length", "type": "varlength", "encoding": "der" },
+        {
+          "name": "value",
+          "type": "string",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "encoding": "utf8",
+          "description": "UTF-8 encoded string"
+        }
+      ]
+    },
+    "ContextTag": {
+      "description": "ASN.1 context-specific tag [N] - used for field numbering in SEQUENCE",
+      "sequence": [
+        {
+          "name": "value",
+          "type": "uint8",
+          "description": "Context tag (0xA0 + field_number)"
+        }
+      ]
+    },
+    "PrincipalName": {
+      "description": "Kerberos principal name (user@REALM or service/host@REALM)",
+      "notes": [
+        "RFC 4120 Section 5.2.2",
+        "PrincipalName ::= SEQUENCE {",
+        "  name-type   [0] Int32,",
+        "  name-string [1] SEQUENCE OF KerberosString",
+        "}"
+      ],
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE tag" },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der" },
+
+        { "name": "name_type_tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
+        { "name": "name_type_length", "type": "varlength", "encoding": "der" },
+        { "name": "name_type", "type": "Int32", "description": "0=unknown, 1=principal, 2=service, 3=SRV-INST" },
+
+        { "name": "name_string_tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
+        { "name": "name_string_length", "type": "varlength", "encoding": "der" },
+        { "name": "name_string_seq_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE OF" },
+        { "name": "name_string_seq_length", "type": "varlength", "encoding": "der" },
+        {
+          "name": "name_string",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "byte_length_field": "name_string_seq_length",
+          "items": { "type": "KerberosString" },
+          "description": "Array of string components (e.g., ['user'] or ['service', 'host'])"
+        }
+      ]
+    },
+    "Realm": {
+      "description": "Kerberos realm name - typically uppercase domain (e.g., EXAMPLE.COM)",
+      "notes": [
+        "RFC 4120: Realm ::= KerberosString"
+      ],
+      "type": "KerberosString"
+    },
+    "EncryptedData": {
+      "description": "Encrypted data container - holds encrypted content with algorithm ID",
+      "notes": [
+        "RFC 4120 Section 5.2.9",
+        "EncryptedData ::= SEQUENCE {",
+        "  etype   [0] Int32,        -- Encryption algorithm",
+        "  kvno    [1] UInt32 OPTIONAL,  -- Key version number",
+        "  cipher  [2] OCTET STRING  -- Ciphertext",
+        "}"
+      ],
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der" },
+
+        { "name": "etype_tag", "type": "uint8", "const": 0xA0, "description": "Context [0] - encryption type" },
+        { "name": "etype_length", "type": "varlength", "encoding": "der" },
+        { "name": "etype", "type": "Int32", "description": "Encryption algorithm ID" },
+
+        { "name": "cipher_tag", "type": "uint8", "const": 0xA2, "description": "Context [2] - ciphertext" },
+        { "name": "cipher_length", "type": "varlength", "encoding": "der" },
+        { "name": "cipher", "type": "OctetString", "description": "Encrypted bytes" }
+      ]
+    },
+    "Ticket": {
+      "description": "Kerberos ticket - credentials for authenticating to a service",
+      "notes": [
+        "RFC 4120 Section 5.3",
+        "Ticket ::= [APPLICATION 1] SEQUENCE {",
+        "  tkt-vno     [0] INTEGER (5),",
+        "  realm       [1] Realm,",
+        "  sname       [2] PrincipalName,",
+        "  enc-part    [3] EncryptedData",
+        "}"
+      ],
+      "sequence": [
+        { "name": "application_tag", "type": "uint8", "const": 0x61, "description": "APPLICATION 1 tag" },
+        { "name": "application_length", "type": "varlength", "encoding": "der" },
+
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der" },
+
+        { "name": "version_tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
+        { "name": "version_length", "type": "varlength", "encoding": "der" },
+        { "name": "tkt_vno", "type": "Int32", "description": "Ticket version (always 5)" },
+
+        { "name": "realm_tag", "type": "uint8", "const": 0xA1 },
+        { "name": "realm_length", "type": "varlength", "encoding": "der" },
+        { "name": "realm", "type": "Realm" },
+
+        { "name": "sname_tag", "type": "uint8", "const": 0xA2 },
+        { "name": "sname_length", "type": "varlength", "encoding": "der" },
+        { "name": "sname", "type": "PrincipalName", "description": "Service principal name" },
+
+        { "name": "enc_part_tag", "type": "uint8", "const": 0xA3 },
+        { "name": "enc_part_length", "type": "varlength", "encoding": "der" },
+        { "name": "enc_part", "type": "EncryptedData", "description": "Encrypted ticket contents" }
+      ]
+    }
+  }
+}

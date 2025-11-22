@@ -681,12 +681,22 @@ export function printTestResults(results: TestResult[], functionResults: Functio
     functionTestsFailed += funcResult.failed;
   }
 
-  logger.info(`\nTotal: ${kleur.green(totalPassed)} passed, ${totalFailed === 0 ? kleur.green(totalFailed) : kleur.red(totalFailed)} failed`);
+  // Calculate totals including function tests
+  const allTestsPassed = totalPassed + functionTestsPassed;
+  const allTestsFailed = totalFailed + functionTestsFailed;
 
   // Count non-empty test suites
   const nonEmptyResults = results.filter(r => r.passed > 0 || r.failed > 0);
   const nonEmptyFunctionResults = functionResults.filter(fr => fr.passed > 0 || fr.failed > 0);
   const totalTests = nonEmptyResults.length + nonEmptyFunctionResults.length;
 
-  logger.always(`${totalTests} test suites, ${schemaErrors === 0 ? kleur.green(schemaErrors) : kleur.red(schemaErrors)} schema errors, ${generationErrors === 0 ? kleur.green(generationErrors) : kleur.red(generationErrors)} generation errors, ${executionFailures === 0 ? kleur.green(executionFailures) : kleur.red(executionFailures)} execution failures`);
+  // Count suites with failures
+  const suitesWithFailures = results.filter(r => r.failed > 0).length + functionResults.filter(fr => fr.failed > 0).length;
+
+  // Print combined summary
+  if (!summaryMode) {
+    logger.info(`\nTotal: ${kleur.green(allTestsPassed)} passed, ${allTestsFailed === 0 ? kleur.green(allTestsFailed) : kleur.red(allTestsFailed)} failed`);
+  }
+
+  logger.always(`${totalTests} test suites, ${kleur.green(allTestsPassed)} passed, ${allTestsFailed === 0 ? kleur.green(allTestsFailed) : kleur.red(allTestsFailed)} failed, ${schemaErrors === 0 ? kleur.green(schemaErrors) : kleur.red(schemaErrors)} schema errors, ${generationErrors === 0 ? kleur.green(generationErrors) : kleur.red(generationErrors)} generation errors, ${suitesWithFailures === 0 ? kleur.green(suitesWithFailures) : kleur.red(suitesWithFailures)} suites with failures`);
 }

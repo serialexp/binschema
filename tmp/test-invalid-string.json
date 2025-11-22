@@ -1,0 +1,18 @@
+{
+  "config": { "endianness": "big_endian" },
+  "types": {
+    "InvalidString": {
+      "sequence": [
+        { "name": "length", "type": "uint8" },
+        {
+          "name": "value",
+          "type": "string",
+          "kind": "length_prefixed",
+          "length_field": "length",
+          "length_type": "uint8",
+          "encoding": "utf8"
+        }
+      ]
+    }
+  }
+}

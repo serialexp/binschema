@@ -70,7 +70,8 @@ export function generateEncodeArray(
         break;
     }
   }
-  // Note: field_referenced arrays don't write their own length - the length field was already written earlier
+  // Note: field_referenced and byte_length_prefixed arrays don't write their own length -
+  // the length field was already written earlier (or will be computed)
 
   // Safety check for items field
   if (!field.items || typeof field.items !== 'object' || !('type' in field.items)) {
@@ -509,6 +510,38 @@ export function generateDecodeArray(
       code += `${indent}}\n`;
     }
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
+  } else if (field.kind === "byte_length_prefixed") {
+    // Read items until we've consumed N bytes (ASN.1 SEQUENCE pattern)
+    const byteLengthField = field.byte_length_field;
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+
+    // Similar to field_referenced, handle _root references
+    if (byteLengthField.startsWith('_root.')) {
+      const rootPath = byteLengthField.substring(6);
+      code += `${indent}const ${lengthVarName} = this.context?._root?.${rootPath};\n`;
+      code += `${indent}if (${lengthVarName} === undefined) {\n`;
+      code += `${indent}  throw new Error('Byte-length-prefixed array length field "${byteLengthField}" not found in context._root');\n`;
+      code += `${indent}}\n`;
+    } else {
+      const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
+      const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
+      const fullLengthPath = parentPath + byteLengthField;
+
+      if (isArrayItem) {
+        code += `${indent}const ${lengthVarName} = ${fullLengthPath} ?? this.context?.${byteLengthField};\n`;
+      } else {
+        code += `${indent}const ${lengthVarName} = value.${fullLengthPath} ?? this.context?.${byteLengthField};\n`;
+      }
+      code += `${indent}if (${lengthVarName} === undefined) {\n`;
+      code += `${indent}  throw new Error('Byte-length-prefixed array length field "${byteLengthField}" not found in value or context');\n`;
+      code += `${indent}}\n`;
+    }
+
+    const startOffsetVar = fieldName.replace(/\./g, "_") + "_startOffset";
+    const endOffsetVar = fieldName.replace(/\./g, "_") + "_endOffset";
+    code += `${indent}const ${startOffsetVar} = this.byteOffset;\n`;
+    code += `${indent}const ${endOffsetVar} = ${startOffsetVar} + ${lengthVarName};\n`;
+    code += `${indent}while (this.byteOffset < ${endOffsetVar}) {\n`;
   } else if (field.kind === "null_terminated") {
     // For null-terminated arrays, we need to peek ahead to check for null terminator
     // If item type is uint8, we can optimize by reading bytes directly
@@ -613,146 +646,3 @@ export function generateDecodeArray(
   return code;
 }
 
-/**
- * Generate functional-style array encoding.
- * Used by the experimental functional generator.
- */
-export function generateFunctionalEncodeArray(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  valuePath: string,
-  indent: string
-): string {
-  let code = "";
-
-  // Write length prefix if length_prefixed
-  if (field.kind === "length_prefixed") {
-    const lengthType = field.length_type;
-    switch (lengthType) {
-      case "uint8":
-        code += `${indent}stream.writeUint8(${valuePath}.length);\n`;
-        break;
-      case "uint16":
-        code += `${indent}stream.writeUint16(${valuePath}.length, '${globalEndianness}');\n`;
-        break;
-      case "uint32":
-        code += `${indent}stream.writeUint32(${valuePath}.length, '${globalEndianness}');\n`;
-        break;
-    }
-  }
-
-  // Write array elements
-  const itemVar = valuePath.replace(/[.\[\]]/g, "_") + ARRAY_ITER_SUFFIX;
-  code += `${indent}for (const ${itemVar} of ${valuePath}) {\n`;
-  const itemType = field.items?.type || "unknown";
-  if (itemType === "uint8") {
-    code += `${indent}  stream.writeUint8(${itemVar});\n`;
-  } else {
-    code += `${indent}  encode${itemType}(stream, ${itemVar});\n`;
-  }
-  code += `${indent}}\n`;
-
-  // Write null terminator for null-terminated arrays
-  if (field.kind === "null_terminated") {
-    if (itemType === "uint8") {
-      code += `${indent}stream.writeUint8(0);\n`;
-    }
-    // For complex types with terminal variants, the terminal variant IS the terminator
-    // so we don't add anything extra
-  }
-
-  return code;
-}
-
-/**
- * Generate functional-style array decoding.
- * Used by the experimental functional generator.
- */
-export function generateFunctionalDecodeArray(
-  field: any,
-  schema: BinarySchema,
-  globalEndianness: Endianness,
-  fieldName: string,
-  indent: string,
-  getElementTypeScriptType: (element: any, schema: BinarySchema) => string,
-  generateDecodeChoice: (field: any, schema: BinarySchema, endianness: Endianness, indent: string, arrayName: string) => string,
-  generateDecodeDiscriminatedUnionInline: (field: any, schema: BinarySchema, endianness: Endianness, indent: string, arrayName: string) => string
-): string {
-  // Get proper type annotation for array
-  const itemType = field.items?.type || "any";
-  const tsItemType = getElementTypeScriptType(field.items, schema);
-  const typeAnnotation = `${tsItemType}[]`;
-  let code = `${indent}const ${fieldName}: ${typeAnnotation} = [];\n`;
-
-  // Read length if length_prefixed
-  if (field.kind === "length_prefixed") {
-    const lengthType = field.length_type;
-    let lengthRead = "";
-    switch (lengthType) {
-      case "uint8":
-        lengthRead = "stream.readUint8()";
-        break;
-      case "uint16":
-        lengthRead = `stream.readUint16('${globalEndianness}')`;
-        break;
-      case "uint32":
-        lengthRead = `stream.readUint32('${globalEndianness}')`;
-        break;
-    }
-    code += `${indent}const ${fieldName}_length = ${lengthRead};\n`;
-    code += `${indent}for (let i = 0; i < ${fieldName}_length; i++) {\n`;
-  } else if (field.kind === "fixed") {
-    code += `${indent}for (let i = 0; i < ${field.length}; i++) {\n`;
-  } else if (field.kind === "field_referenced") {
-    // Length comes from a previously-decoded field in the same sequence
-    const lengthField = sanitizeVarName(field.length_field);
-    code += `${indent}for (let i = 0; i < ${lengthField}; i++) {\n`;
-  } else if (field.kind === "null_terminated") {
-    // Null-terminated array - read until null terminator or terminal variant
-    code += `${indent}while (true) {\n`;
-
-    // Check for terminal variants if specified
-    if (field.terminal_variants && field.terminal_variants.length > 0) {
-      // For discriminated unions with terminal variants, check if we got a terminal
-      code += `${indent}  const item = decode${itemType}(stream);\n`;
-      code += `${indent}  ${fieldName}.push(item);\n`;
-      // Check if this item is a terminal variant
-      code += `${indent}  if (`;
-      code += field.terminal_variants.map((v: string) => `item.type === '${v}'`).join(' || ');
-      code += `) break;\n`;
-      // Also check for empty label/string (common terminator pattern in protocols like DNS)
-      code += `${indent}  if (item.type === 'Label' && item.value === '') break;\n`;
-      code += `${indent}}\n`;
-      return code;
-    }
-
-    // For simple types, check for zero byte
-    if (itemType === "uint8") {
-      code += `${indent}  const byte = stream.readUint8();\n`;
-      code += `${indent}  if (byte === 0) break;\n`;
-      code += `${indent}  ${fieldName}.push(byte);\n`;
-      code += `${indent}}\n`;
-      return code;
-    }
-
-    // For complex types without terminal variants, this is an error
-    throw new Error(`Null-terminated array of ${itemType} requires terminal_variants`);
-  }
-
-  // Read array item (for non-null-terminated arrays)
-  if (itemType === "uint8") {
-    code += `${indent}  ${fieldName}.push(stream.readUint8());\n`;
-  } else if (itemType === "choice") {
-    // Inline choice - need to decode discriminated union inline
-    code += generateDecodeChoice(field.items, schema, globalEndianness, `${indent}  `, fieldName);
-  } else if (itemType === "discriminated_union") {
-    // Inline discriminated union - need to decode inline
-    code += generateDecodeDiscriminatedUnionInline(field.items, schema, globalEndianness, `${indent}  `, fieldName);
-  } else {
-    code += `${indent}  ${fieldName}.push(decode${itemType}(stream));\n`;
-  }
-  code += `${indent}}\n`;
-
-  return code;
-}

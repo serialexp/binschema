@@ -8,7 +8,7 @@
 import { createSocket } from "dgram";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { resolve } from "path";
-import { generateTypeScriptCode } from "../generators/typescript.js";
+import { generateTypeScript } from "../generators/typescript.js";
 import { defineBinarySchema, type BinarySchema } from "../schema/binary-schema.js";
 import JSON5 from "json5";
 
@@ -19,7 +19,7 @@ const schema = defineBinarySchema(rawSchema);
 
 // Generate code
 console.log("Generating DNS message encoder/decoder...");
-const generatedCode = generateTypeScriptCode(schema);
+const generatedCode = generateTypeScript(schema);
 
 // Write generated code to temp file
 const tempDir = resolve(__dirname, "../../.generated-examples");

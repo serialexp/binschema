@@ -216,6 +216,109 @@ export class BitStreamEncoder {
   }
 
   /**
+   * Write variable-length integer (DER encoding)
+   * - Short form: 0x00-0x7F (values 0-127)
+   * - Long form: 0x80+N followed by N bytes big-endian (values 128+)
+   */
+  writeVarlengthDER(value: number | bigint): void {
+    const val = typeof value === 'bigint' ? Number(value) : value;
+
+    if (val < 0) {
+      throw new Error(`DER length encoding requires non-negative value, got ${val}`);
+    }
+
+    if (val < 128) {
+      // Short form: single byte
+      this.writeUint8(val);
+    } else {
+      // Long form: determine number of bytes needed
+      let numBytes = 0;
+      let temp = val;
+      while (temp > 0) {
+        numBytes++;
+        temp = Math.floor(temp / 256);
+      }
+
+      // Write length-of-length byte
+      this.writeUint8(0x80 | numBytes);
+
+      // Write length bytes in big-endian order
+      for (let i = numBytes - 1; i >= 0; i--) {
+        this.writeUint8((val >> (i * 8)) & 0xFF);
+      }
+    }
+  }
+
+  /**
+   * Write variable-length integer (LEB128 encoding)
+   * - MSB continuation bit, little-endian, 7 bits per byte
+   * - Used in Protocol Buffers, WebAssembly, DWARF
+   */
+  writeVarlengthLEB128(value: number | bigint): void {
+    let val = typeof value === 'bigint' ? value : BigInt(value);
+
+    if (val < 0n) {
+      throw new Error(`LEB128 encoding requires non-negative value, got ${val}`);
+    }
+
+    do {
+      let byte = Number(val & 0x7Fn); // Get lower 7 bits
+      val >>= 7n; // Shift right by 7 bits
+
+      if (val !== 0n) {
+        byte |= 0x80; // Set continuation bit
+      }
+
+      this.writeUint8(byte);
+    } while (val !== 0n);
+  }
+
+  /**
+   * Write variable-length integer (EBML encoding)
+   * - Leading zeros indicate width, self-synchronizing
+   * - Used in Matroska/WebM
+   */
+  writeVarlengthEBML(value: number | bigint): void {
+    const val = typeof value === 'bigint' ? Number(value) : value;
+
+    if (val < 0) {
+      throw new Error(`EBML VINT encoding requires non-negative value, got ${val}`);
+    }
+
+    // Determine width needed (including marker bit)
+    // 1 byte: 0-126 (7 bits data)
+    // 2 bytes: 127-16382 (14 bits data)
+    // 3 bytes: 16383-2097151 (21 bits data)
+    // etc.
+
+    let width = 1;
+    let maxVal = (1 << 7) - 2; // -2 because marker bit takes one value
+
+    while (val > maxVal && width < 8) {
+      width++;
+      maxVal = (1 << (width * 7)) - 2;
+    }
+
+    if (val > maxVal) {
+      throw new Error(`EBML VINT value ${val} too large for 8-byte encoding`);
+    }
+
+    // Set marker bit: leading zeros followed by 1
+    // Width 1: 1xxxxxxx (0x80 | value) -> bit 7
+    // Width 2: 01xxxxxx xxxxxxxx (0x4000 | value) -> bit 14
+    // Width 3: 001xxxxx xxxxxxxx xxxxxxxx (0x200000 | value) -> bit 21
+    // Pattern: bit position = width * 7
+
+    const markerBit = 1 << (width * 7);
+    const encoded = markerBit | val;
+
+    // Write bytes in big-endian order
+    for (let i = width - 1; i >= 0; i--) {
+      this.writeUint8((encoded >> (i * 8)) & 0xFF);
+    }
+  }
+
+  /**
    * Get current byte offset (position in buffer)
    * Returns the number of complete bytes written (for compression dictionary tracking)
    */
@@ -500,6 +603,100 @@ export class BitStreamDecoder {
     }
 
     return view.getFloat64(0, endianness === "little_endian");
+  }
+
+  /**
+   * Read variable-length integer (DER encoding)
+   * - Short form: 0x00-0x7F (values 0-127)
+   * - Long form: 0x80+N followed by N bytes big-endian (values 128+)
+   */
+  readVarlengthDER(): number {
+    const firstByte = this.readUint8();
+
+    if (firstByte < 0x80) {
+      // Short form: single byte value
+      return firstByte;
+    }
+
+    // Long form: 0x80 + number of length bytes
+    const numBytes = firstByte & 0x7F;
+
+    if (numBytes === 0) {
+      throw new Error("DER indefinite length (0x80) not supported");
+    }
+
+    if (numBytes > 4) {
+      throw new Error(`DER length too large: ${numBytes} bytes (max 4 supported)`);
+    }
+
+    // Read length bytes in big-endian order
+    let value = 0;
+    for (let i = 0; i < numBytes; i++) {
+      value = (value << 8) | this.readUint8();
+    }
+
+    return value;
+  }
+
+  /**
+   * Read variable-length integer (LEB128 encoding)
+   * - MSB continuation bit, little-endian, 7 bits per byte
+   * - Used in Protocol Buffers, WebAssembly, DWARF
+   */
+  readVarlengthLEB128(): number {
+    let result = 0n;
+    let shift = 0;
+
+    while (true) {
+      const byte = this.readUint8();
+      const value = BigInt(byte & 0x7F); // Get lower 7 bits
+
+      result |= value << BigInt(shift);
+      shift += 7;
+
+      if ((byte & 0x80) === 0) {
+        // No continuation bit, we're done
+        break;
+      }
+
+      if (shift > 64) {
+        throw new Error("LEB128 value too large (exceeds 64 bits)");
+      }
+    }
+
+    return Number(result);
+  }
+
+  /**
+   * Read variable-length integer (EBML encoding)
+   * - Leading zeros indicate width, self-synchronizing
+   * - Used in Matroska/WebM
+   */
+  readVarlengthEBML(): number {
+    const firstByte = this.readUint8();
+
+    // Find width by counting leading zeros
+    let width = 1;
+    let mask = 0x80;
+
+    while (width <= 8 && (firstByte & mask) === 0) {
+      width++;
+      mask >>= 1;
+    }
+
+    if (width > 8) {
+      throw new Error("EBML VINT: no marker bit found in first byte");
+    }
+
+    // Start with first byte, removing marker bit
+    let value = firstByte & (mask - 1);
+
+    // Read remaining bytes
+    for (let i = 1; i < width; i++) {
+      value = (value << 8) | this.readUint8();
+    }
+
+    return value;
   }
 
   /**

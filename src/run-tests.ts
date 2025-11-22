@@ -127,9 +127,13 @@ async function loadTestSuitesFromTypeScript(filePath: string, filter?: string): 
       if (typeof value === 'function' && (key.startsWith('run') || key.endsWith('Tests'))) {
         totalFunctionTests++; // Count all function tests
 
-        // Skip running function tests that don't match the filter
-        if (filter && !key.toLowerCase().includes(filter.toLowerCase())) {
-          continue;
+        // Skip running function tests that don't match the filter (support pipe-separated patterns)
+        if (filter) {
+          const patterns = filter.toLowerCase().split('|');
+          const matches = patterns.some(pattern => key.toLowerCase().includes(pattern.trim()));
+          if (!matches) {
+            continue;
+          }
         }
 
         try {
@@ -286,6 +290,7 @@ async function main() {
       console.log("");
       console.log("Options:");
       console.log("  --filter=<pattern>  Only run tests with names containing <pattern>");
+      console.log("                      Supports pipe-separated patterns: 'foo|bar|baz'");
       console.log("  --failures          Show only tests with failures");
       console.log("  --summary           Show only final summary (suppress verbose output)");
       console.log("  --help, -h          Show this help message");
@@ -294,11 +299,12 @@ async function main() {
       console.log("  DEBUG_TEST=1        Enable verbose debug output (input values, bytes, stack traces)");
       console.log("");
       console.log("Examples:");
-      console.log("  bun run src/run-tests.ts                    # Run all tests");
-      console.log("  bun run src/run-tests.ts --filter=optional  # Run tests with 'optional' in name");
-      console.log("  bun run src/run-tests.ts --failures         # Show only failing tests");
-      console.log("  bun run src/run-tests.ts --summary          # Run all tests, show only summary");
-      console.log("  DEBUG_TEST=1 npm test -- --filter=uint8     # Debug uint8 tests with verbose output");
+      console.log("  bun run src/run-tests.ts                          # Run all tests");
+      console.log("  bun run src/run-tests.ts --filter=optional        # Run tests with 'optional' in name");
+      console.log("  bun run src/run-tests.ts --filter='uint8|uint16'  # Run tests matching 'uint8' OR 'uint16'");
+      console.log("  bun run src/run-tests.ts --failures               # Show only failing tests");
+      console.log("  bun run src/run-tests.ts --summary                # Run all tests, show only summary");
+      console.log("  DEBUG_TEST=1 npm test -- --filter=uint8           # Debug uint8 tests with verbose output");
       process.exit(0);
     }
   }
@@ -340,9 +346,12 @@ async function main() {
   for (const category of sortedCategories) {
     const suites = allSuites.get(category)!;
 
-    // Filter suites
+    // Filter suites (support pipe-separated patterns: "foo|bar|baz")
     const filteredGroupSuites = filter
-      ? suites.filter(suite => suite.name.toLowerCase().includes(filter.toLowerCase()))
+      ? suites.filter(suite => {
+          const patterns = filter.toLowerCase().split('|');
+          return patterns.some(pattern => suite.name.toLowerCase().includes(pattern.trim()));
+        })
       : suites;
 
     totalSuites += suites.length;

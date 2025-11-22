@@ -50,7 +50,7 @@ export const zipMinimalTestSuite = defineTestSuite({
           {
             "name": "filename",
             "type": "string",
-            "kind": "fixed",
+            "kind": "field_referenced",
             "length_field": "filename_length",
             "encoding": "utf8"
           }
@@ -90,7 +90,7 @@ export const zipMinimalTestSuite = defineTestSuite({
           {
             "name": "filename",
             "type": "string",
-            "kind": "fixed",
+            "kind": "field_referenced",
             "length_field": "filename_length",
             "encoding": "utf8"
           }

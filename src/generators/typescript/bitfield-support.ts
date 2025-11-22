@@ -43,28 +43,3 @@ export function generateDecodeBitfield(
 
   return code;
 }
-
-/**
- * Generate encoding code for a bitfield (functional style).
- * Used by the experimental functional generator.
- */
-export function generateFunctionalEncodeBitfield(field: any, valuePath: string, indent: string): string {
-  let code = "";
-  for (const subField of field.fields) {
-    code += `${indent}stream.writeBits(${valuePath}.${subField.name}, ${subField.size});\n`;
-  }
-  return code;
-}
-
-/**
- * Generate decoding code for a bitfield (functional style).
- * Used by the experimental functional generator.
- */
-export function generateFunctionalDecodeBitfield(field: any, fieldName: string, indent: string): string {
-  let code = `${indent}const ${fieldName} = {\n`;
-  for (const subField of field.fields) {
-    code += `${indent}  ${subField.name}: Number(stream.readBits(${subField.size})),\n`;
-  }
-  code += `${indent}};\n`;
-  return code;
-}

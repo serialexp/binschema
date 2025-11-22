@@ -58,27 +58,36 @@ Reviewed all documentation in the `docs/` folder to identify items marked as "in
    - Test-driven roadmap provided
    - Keep as reference documentation
 
-## Recommendations
+## Actions Taken (2025-01-21)
 
-### Immediate Actions
+### Completed Moves
 
-1. **Move COMPUTED_FIELDS_PLAN.md to docs/finished/**
-   ```bash
-   git mv docs/COMPUTED_FIELDS_PLAN.md docs/finished/
-   ```
+1. ✅ **Moved COMPUTED_FIELDS_PLAN.md to docs/finished/**
+   - All three phases complete (length_of, crc32_of, position_of)
+   - Verified with passing tests
 
-2. **Update ARRAY_SELECTOR_IMPLEMENTATION.md**
-   - Change "Status: In Progress" to "Status: ✅ COMPLETE"
-   - OR move to docs/finished/ if no longer actively referenced
+2. ✅ **Moved ARRAY_SELECTOR_IMPLEMENTATION.md to docs/finished/**
+   - Implementation complete, all selector tests passing
+   - Tests: first/last/corresponding selectors all working
 
-3. **Clean up TODO.md**
+3. ✅ **Moved SAME_INDEX_STANDALONE_ENCODER_ISSUE.md to docs/finished/**
+   - Context threading complete, corresponding<Type> working
+   - All ZIP and cross-struct tests passing (8 test suites)
+
+4. ✅ **Moved CROSS_STRUCT_REFERENCES.md to docs/finished/**
+   - Needed features implemented for ZIP support
+   - All cross-struct reference tests passing (3 test suites)
+
+### Remaining Actions
+
+1. **Clean up TODO.md**
    - Remove or check off completed items from:
      - DNS Compression Plan (all items checked)
      - Fix Decoder Conditional Logic (marked complete)
    - Consider archiving old Go Implementation Plan items to separate file
    - Keep only active/relevant TODO items
 
-4. **Archive old finished plans**
+2. **Archive old finished plans**
    - Many items in docs/finished/ are from older work
    - Consider creating docs/archive/ for very old completed work
 

@@ -1,4 +1,0 @@
-# ./go/test
-main module (github.com/aeolun/superchat) does not contain package github.com/aeolun/superchat/tools/binschema/go/test
-FAIL	./go/test [setup failed]
-FAIL
