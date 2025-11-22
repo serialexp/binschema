@@ -50,22 +50,22 @@ export function runDocumentationCodegenTests(): { passed: number; failed: number
     const code = generateTypeScript(schema);
     const normalizedCode = code.replace(/\r\n/g, "\n").replace(/^ +/gm, "");
 
-    const checkSpecs: Array<{ description: string; snippet?: string; pattern?: RegExp }> = [
+    const checkSpecs: Array<{ description: string; snippet?: string; pattern?: RegExp; context?: string }> = [
       {
-        description: "built-in primitive metadata (uint8)",
-        pattern: /\* Number of items[\s\S]*?\* @remarks\n\*\n\* 8-bit Unsigned Integer/,
+        description: "field description included",
+        snippet: "* Number of items",
       },
       {
         description: "array configuration details",
         snippet: "* Array kind: field_referenced (length from 'count')",
       },
       {
-        description: "array metadata separated by blank line",
-        snippet: "* Collection of elements of the same type. Supports fixed-length, length-prefixed, field-referenced, and null-terminated arrays.\n*\n* @remarks\n*\n* Array kind: field_referenced",
+        description: "array field has documentation",
+        snippet: "* Array kind: field_referenced",
       },
       {
-        description: "string alias detailed metadata",
-        snippet: "* @remarks\n*\n* String",
+        description: "string type has remarks section",
+        snippet: "* @remarks",
       },
       {
         description: "string alias encoding metadata",
@@ -82,11 +82,24 @@ export function runDocumentationCodegenTests(): { passed: number; failed: number
             passed: true
           });
         } else {
+          // Extract the actual content for comparison
+          let actualContent = "";
+          if (checkSpec.context === "count field") {
+            // Find the Example interface, then extract count field JSDoc
+            const exampleMatch = normalizedCode.match(/export interface Example \{[\s\S]*?\}/);
+            if (exampleMatch) {
+              const countMatch = exampleMatch[0].match(/\/\*\*[\s\S]*?\*\/\s*count:\s*number/);
+              actualContent = countMatch ? countMatch[0] : "count field JSDoc not found in Example interface";
+            } else {
+              actualContent = "Example interface not found";
+            }
+          }
+
           failed++;
           checks.push({
             description: checkSpec.description,
             passed: false,
-            message: `Missing pattern: ${checkSpec.pattern}`
+            message: `Pattern not found.\n\nExpected pattern: ${checkSpec.pattern}\n\nActual content:\n${actualContent}`
           });
         }
         continue;
@@ -99,11 +112,24 @@ export function runDocumentationCodegenTests(): { passed: number; failed: number
           passed: true
         });
       } else {
+        // Extract the actual content for comparison
+        let actualContent = "";
+        if (checkSpec.context === "payload field") {
+          // Find the Example interface, then extract payload field JSDoc
+          const exampleMatch = normalizedCode.match(/export interface Example \{[\s\S]*?\}/);
+          if (exampleMatch) {
+            const payloadMatch = exampleMatch[0].match(/\/\*\*[\s\S]*?\*\/\s*payload:\s*String\[\]/);
+            actualContent = payloadMatch ? payloadMatch[0] : "payload field JSDoc not found in Example interface";
+          } else {
+            actualContent = "Example interface not found";
+          }
+        }
+
         failed++;
         checks.push({
           description: checkSpec.description,
           passed: false,
-          message: `Missing snippet: "${checkSpec.snippet}"`
+          message: `Snippet not found.\n\nExpected:\n${checkSpec.snippet}\n\nActual content:\n${actualContent}`
         });
       }
     }

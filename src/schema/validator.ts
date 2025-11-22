@@ -1089,6 +1089,19 @@ function validateBackReference(
     });
   }
 
+  // Validate offset_from field
+  if (!field.offset_from) {
+    errors.push({ path: `${path} (${field.name})`, message: "Back reference missing 'offset_from' property" });
+  } else {
+    const validOffsetFrom = ["message_start", "current_position"];
+    if (!validOffsetFrom.includes(field.offset_from)) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Invalid offset_from value '${field.offset_from}' (must be 'message_start' or 'current_position')`
+      });
+    }
+  }
+
   // Check endianness requirements
   if (field.storage === "uint8" && field.endianness) {
     errors.push({

@@ -45,6 +45,21 @@ export function transformProtocolToBinary(
   // 2. Normalize codes and check for duplicates
   const messageCodes = new Set<string>();
   for (const msg of protocol.messages) {
+    // Pre-validate code format to give better error messages
+    if (typeof msg.code === 'string') {
+      const trimmed = msg.code.trim();
+
+      // Check if code is missing 0x prefix (e.g., '01' instead of '0x01')
+      if (/^[0-9a-fA-F]+$/.test(trimmed)) {
+        throw new Error(`Message code '${msg.code}' for message '${msg.name}' is not valid hex (must start with 0x)`);
+      }
+
+      // Check if code starts with 0x but has invalid hex characters (e.g., '0xGG')
+      if (trimmed.startsWith('0x') && !/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+        throw new Error(`Message code '${msg.code}' for message '${msg.name}' is not valid hex`);
+      }
+    }
+
     const normalizedCode = normalizeMessageCode(msg.code);
     if (messageCodes.has(normalizedCode)) {
       throw new Error(`Duplicate message code '${normalizedCode}' for message '${msg.name}'`);
@@ -55,29 +70,35 @@ export function transformProtocolToBinary(
 
   // 3. Check that combined type name doesn't already exist
   if (schema.types[combinedTypeName]) {
-    throw new Error(`Combined type name '${combinedTypeName}' already exists in schema`);
+    throw new Error(`Combined type name '${combinedTypeName}' already exists in binary schema`);
   }
 
-  // 4. Verify header type exists
-  if (!schema.types[protocol.header]) {
-    throw new Error(`Header type '${protocol.header}' not found in schema types`);
-  }
+  // 4. Verify header type exists (if header is specified)
+  let headerFields: any[] = [];
+  let headerFieldNames: Set<string> = new Set();
 
-  // 5. Get header fields
-  const headerType = schema.types[protocol.header];
-  const headerFields = getFieldsFromType(headerType);
+  if (protocol.header) {
+    if (!schema.types[protocol.header]) {
+      throw new Error(`Header format type '${protocol.header}' not found in binary schema`);
+    }
 
-  // Check that header doesn't have reserved 'payload' field name
-  const hasPayloadField = headerFields.some((f: any) => f.name === "payload");
-  if (hasPayloadField) {
-    throw new Error(`Header type '${protocol.header}' cannot have a field named 'payload' (reserved for generated union)`);
+    // 5. Get header fields
+    const headerType = schema.types[protocol.header];
+    headerFields = getFieldsFromType(headerType);
+
+    // Check that header doesn't have reserved 'payload' field name
+    const hasPayloadField = headerFields.some((f: any) => f.name === "payload");
+    if (hasPayloadField) {
+      throw new Error(`Header type '${protocol.header}' cannot have a field named 'payload' (reserved for generated union)`);
+    }
+
+    headerFieldNames = new Set(headerFields.map((f: any) => f.name));
   }
 
   // 6. Check for field name collisions between header and payloads
-  const headerFieldNames = new Set(headerFields.map((f: any) => f.name));
   for (const msg of protocol.messages) {
     if (!schema.types[msg.payload_type]) {
-      throw new Error(`Payload type '${msg.payload_type}' for message '${msg.name}' not found in schema types`);
+      throw new Error(`Payload type '${msg.payload_type}' for message '${msg.name}' not found in binary schema`);
     }
 
     const payloadType = schema.types[msg.payload_type];
@@ -104,6 +125,19 @@ export function transformProtocolToBinary(
     });
   } else {
     // Multiple messages OR single message with discriminator: use discriminated union
+
+    // Validate that discriminator_field is specified for multi-message protocols
+    if (!protocol.discriminator) {
+      throw new Error("Protocol has multiple messages but no discriminator_field specified");
+    }
+
+    // Validate that discriminator field exists in header
+    // Support dot notation (e.g., 'flags.qr') by checking the root field name
+    const rootDiscriminatorField = protocol.discriminator.split('.')[0];
+    if (!headerFieldNames.has(rootDiscriminatorField)) {
+      throw new Error(`Discriminator field '${protocol.discriminator}' not found in header type '${protocol.header}'`);
+    }
+
     const variants = protocol.messages.map((msg) => ({
       when: `value == ${msg.code}`,
       type: msg.payload_type
@@ -113,7 +147,7 @@ export function transformProtocolToBinary(
       name: "payload",
       type: "discriminated_union",
       discriminator: {
-        field: protocol.discriminator!
+        field: protocol.discriminator
       },
       variants
     });

@@ -1067,6 +1067,9 @@ const BackReferenceElementSchema = z.object({
   offset_mask: z.string().regex(/^0x[0-9A-Fa-f]+$/, "Must be a valid hex mask (e.g., '0x3FFF')").meta({
     description: "Hex bitmask to extract offset bits from the storage integer (e.g., '0x3FFF' extracts lower 14 bits). Allows packing flags or type tags in unused bits."
   }),
+  offset_from: z.enum(["message_start", "current_position"]).meta({
+    description: "Reference point for offset calculation. 'message_start' = offset from beginning of message (byte 0), 'current_position' = relative offset from current read position"
+  }),
   target_type: z.string().meta({
     description: "Name of the type to parse at the referenced offset location. When decoder jumps to the offset, it will decode this type."
   }),

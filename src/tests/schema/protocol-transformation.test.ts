@@ -869,10 +869,30 @@ export function runProtocolTransformationTests(): { passed: number; failed: numb
       const protocol = tc.protocolSchema.protocol;
       const header = (protocol as any).header_format || (protocol as any).header;
       const discriminator = (protocol as any).discriminator_field || (protocol as any).discriminator;
-      const normalizedMessages = protocol.messages.map((msg) => ({
-        ...msg,
-        code: normalizeMessageCode(msg.code),
-      }));
+
+      // Normalize message codes with better error messages
+      const normalizedMessages = protocol.messages.map((msg) => {
+        try {
+          return {
+            ...msg,
+            code: normalizeMessageCode(msg.code),
+          };
+        } catch (error: any) {
+          const message = error.message || String(error);
+
+          // Check if code is missing 0x prefix (e.g., '01' instead of '0x01')
+          if (typeof msg.code === 'string' && /^[0-9a-fA-F]+$/.test(msg.code.trim())) {
+            throw new Error(`Message code '${msg.code}' for message '${msg.name}' is not valid hex (must start with 0x)`);
+          }
+
+          // Check if code starts with 0x but has invalid hex characters (e.g., '0xGG')
+          if (typeof msg.code === 'string' && msg.code.trim().startsWith('0x') && !/^0x[0-9a-fA-F]+$/.test(msg.code.trim())) {
+            throw new Error(`Message code '${msg.code}' for message '${msg.name}' is not valid hex`);
+          }
+
+          throw error;
+        }
+      });
       const normalizedGroups = protocol.message_groups?.map((group) => ({
         ...group,
         messages: group.messages.map((code) => normalizeMessageCode(code)),
