@@ -2,7 +2,7 @@
 // ABOUTME: Used when encoding arrays and nested types to provide context to child encoders
 
 import type { BinarySchema } from "../../schema/binary-schema.js";
-import { analyzeContextRequirements, schemaRequiresContext } from "./context-analysis.js";
+import { analyzeSchemaContextRequirements, schemaRequiresContext } from "./context-analysis.js";
 
 /**
  * Generate code to extend context when entering an array iteration
@@ -32,6 +32,9 @@ export function generateArrayContextExtension(
     return ''; // No context extension needed
   }
 
+  const requirements = analyzeSchemaContextRequirements(schema);
+  const needsByteOffset = requirements.usesBackReferences;
+
   // Use field-specific variable name to avoid redeclaration when multiple arrays exist
   const contextVarName = `extendedContext_${fieldName}`;
 
@@ -43,12 +46,12 @@ export function generateArrayContextExtension(
   code += `${indent}const ${contextVarName}: EncodingContext = {\n`;
   code += `${indent}  ...${baseContextVar},\n`;
   code += `${indent}  parents: [\n`;
-  code += `${indent}    ...${baseContextVar}.parents,\n`;
+  code += `${indent}    ...(${baseContextVar}.parents || []),\n`;
   // Pass entire parent object so nested types can access sibling fields
   code += `${indent}    ${parentPath}\n`;
   code += `${indent}  ],\n`;
   code += `${indent}  arrayIterations: {\n`;
-  code += `${indent}    ...${baseContextVar}.arrayIterations,\n`;
+  code += `${indent}    ...(${baseContextVar}.arrayIterations || {}),\n`;
   code += `${indent}    ${fieldName}: {\n`;
   code += `${indent}      items: ${valuePath},\n`;
   code += `${indent}      index: ${indexVar},\n`;
@@ -64,8 +67,18 @@ export function generateArrayContextExtension(
   code += `${indent}    }\n`;
   code += `${indent}  },\n`;
   code += `${indent}  // Positions map is shared (not copied) so updates are visible to all\n`;
-  code += `${indent}  positions: ${baseContextVar}.positions\n`;
-  code += `${indent}};\n`;
+  code += `${indent}  positions: ${baseContextVar}.positions`;
+
+  // Add byteOffset tracking for back_references (absolute position across encoder boundaries)
+  if (needsByteOffset) {
+    code += `,\n`;
+    code += `${indent}  // Update absolute byte offset for nested encoder (parent offset + current position)\n`;
+    code += `${indent}  byteOffset: (${baseContextVar}.byteOffset || 0) + this.byteOffset,\n`;
+    code += `${indent}  // Share compression dict across encoder boundaries\n`;
+    code += `${indent}  compressionDict: ${baseContextVar}.compressionDict || this.compressionDict`;
+  }
+
+  code += `\n${indent}};\n`;
 
   return code;
 }
@@ -91,6 +104,9 @@ export function generateNestedTypeContextExtension(
     return ''; // No context extension needed
   }
 
+  const requirements = analyzeSchemaContextRequirements(schema);
+  const needsByteOffset = requirements.usesBackReferences;
+
   // Use field-specific variable name to avoid redeclaration when multiple nested types exist
   const contextVarName = `extendedContext_${parentFieldName}`;
 
@@ -98,13 +114,23 @@ export function generateNestedTypeContextExtension(
   code += `${indent}const ${contextVarName}: EncodingContext = {\n`;
   code += `${indent}  ...${baseContextVarName},\n`;
   code += `${indent}  parents: [\n`;
-  code += `${indent}    ...${baseContextVarName}.parents,\n`;
+  code += `${indent}    ...(${baseContextVarName}.parents || []),\n`;
   // Pass entire parent object so nested types can access sibling fields via ../
   code += `${indent}    ${parentValue}\n`;
   code += `${indent}  ],\n`;
-  code += `${indent}  arrayIterations: ${baseContextVarName}.arrayIterations,\n`;
-  code += `${indent}  positions: ${baseContextVarName}.positions\n`;
-  code += `${indent}};\n`;
+  code += `${indent}  arrayIterations: ${baseContextVarName}.arrayIterations || {},\n`;
+  code += `${indent}  positions: ${baseContextVarName}.positions`;
+
+  // Add byteOffset tracking for back_references (absolute position across encoder boundaries)
+  if (needsByteOffset) {
+    code += `,\n`;
+    code += `${indent}  // Update absolute byte offset for nested encoder (parent offset + current position)\n`;
+    code += `${indent}  byteOffset: (${baseContextVarName}.byteOffset || 0) + this.byteOffset,\n`;
+    code += `${indent}  // Share compression dict across encoder boundaries\n`;
+    code += `${indent}  compressionDict: ${baseContextVarName}.compressionDict || this.compressionDict`;
+  }
+
+  code += `\n${indent}};\n`;
 
   return code;
 }

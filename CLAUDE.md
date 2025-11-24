@@ -129,6 +129,42 @@ DEBUG_TEST=1 npm test -- --failures            # Debug only failing tests
 - Check if exception happens during encoding or decoding
 - Look for off-by-one errors in byte positions (common with discriminator fields)
 
+### Field-Level Encoding Debugging
+
+**IMPORTANT: Use DEBUG_ENCODE to trace encoding at the field level.**
+
+When you need to see **exactly which fields are being encoded and their byte positions**:
+```bash
+DEBUG_ENCODE=1 npm test -- --filter=test_name
+DEBUG_ENCODE=1 bun your-script.ts
+```
+
+**Output format:**
+```
+[0] id:
+  → id: 2 bytes [12 34]
+[2] flags:
+  → flags: 2 bytes [81 80]
+[4] questions:
+  [4] qname:
+    [4] Label:
+      → Label: 8 bytes [07 65 78 61 6d 70 6c 65]
+    [12] Label:
+      → Label: 4 bytes [03 63 6f 6d]
+```
+
+**When to use DEBUG_ENCODE:**
+1. **Debugging byte position issues** - See exactly where each field is written
+2. **Tracing encoding order** - Verify fields are encoded in the expected sequence
+3. **Finding missing/extra bytes** - Compare expected vs actual positions
+4. **Debugging nested structures** - See the full encoding hierarchy with indentation
+5. **Validating from_after_field** - Check that length fields are at correct positions
+
+**Key differences from DEBUG_TEST:**
+- `DEBUG_TEST`: Shows test-level input/output (what you're testing)
+- `DEBUG_ENCODE`: Shows field-level encoding trace (how it's encoded)
+- Use both together for complete debugging: `DEBUG_TEST=1 DEBUG_ENCODE=1 npm test --filter=test_name`
+
 **Example workflow:**
 ```bash
 # 1. Identify failing tests
@@ -190,6 +226,36 @@ export const myFeatureTestSuite: TestSuite = {
 - Automatically generates encoder/decoder from schema
 - Tests both encoding (value → bytes) and decoding (bytes → value)
 - Exported to JSON for cross-language validation (Go, Rust)
+
+**Using `decoded_value` for computed fields:**
+
+When a type has computed fields (like `length_of` with `from_after_field`), the encoding input omits these fields (they're computed), but the decoded output includes them (they're in the byte stream). Use `decoded_value` to specify different expected output:
+
+```typescript
+{
+  description: "ASN.1 INTEGER with computed length",
+  value: {
+    tag: 0x02,
+    // length is omitted - computed during encoding
+    value: [0x05]
+  },
+  decoded_value: {
+    tag: 0x02,
+    length: 1,  // Computed field appears in decoded output
+    value: [0x05]
+  },
+  bytes: [0x02, 0x01, 0x05]  // tag, length, value
+}
+```
+
+**When to use `decoded_value`:**
+- **Computed fields**: Types with `length_of`, `position_of`, `count_of` fields that are computed during encoding but appear during decoding
+- **ASN.1/DER encoding**: Length prefixes are computed from content but appear in decoded structures
+- **Metadata fields**: Any field that's automatically calculated during encoding but is part of the wire format
+
+**When NOT to use `decoded_value`:**
+- Simple types without computed fields - decoder output matches encoder input
+- If omitted, test framework uses `value` as expected decoded output
 
 #### 2. Custom Function Tests (for everything else)
 

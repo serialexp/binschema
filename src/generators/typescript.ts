@@ -16,6 +16,9 @@ import {
   detectFirstLastTracking
 } from "./typescript/computed-fields.js";
 import {
+  generateCalculateSizeMethod
+} from "./typescript/size-calculation.js";
+import {
   generateEncodeBackReference,
   generateDecodeBackReference,
   generateInlinedBackReferenceDecoder,
@@ -440,6 +443,11 @@ function generateTypeAliasEncoder(
 
   code += `    return this.finish();\n`;
   code += `  }\n`;
+
+  // Generate calculateSize method for type alias
+  // Create a pseudo-fields array with just this one field
+  code += generateCalculateSizeMethod(typeName, [pseudoField as Field], schema, globalEndianness, hasContext);
+
   code += `}`;
 
   return code;
@@ -887,11 +895,37 @@ function generateEncoder(
     code += `\n`;
   }
 
+  // Pre-scan for from_after_field to determine which fields are already encoded
+  const fromAfterFieldRanges: Array<{ lengthFieldIndex: number; fromAfterFieldIndex: number }> = [];
+  for (let i = 0; i < fields.length; i++) {
+    const fieldAny = fields[i] as any;
+    if (fieldAny.computed?.type === "length_of" && fieldAny.computed.from_after_field) {
+      const fromAfterIndex = fields.findIndex(f => (f as any).name === fieldAny.computed.from_after_field);
+      if (fromAfterIndex !== -1) {
+        fromAfterFieldRanges.push({
+          lengthFieldIndex: i,
+          fromAfterFieldIndex: fromAfterIndex
+        });
+      }
+    }
+  }
+
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
     const isArray = 'type' in field && field.type === 'array';
     const isChoiceArray = isArray && (field as any).items?.type === 'choice';
     const baseContextVarForField = needsAccumulatedContext ? 'currentContext' : 'context';
+
+    // Check if this field is after a from_after_field and should be skipped
+    // (it's already encoded as part of the from_after_field's content)
+    const isEncodedByFromAfterField = fromAfterFieldRanges.some(range =>
+      i > range.lengthFieldIndex && i > range.fromAfterFieldIndex
+    );
+
+    if (isEncodedByFromAfterField) {
+      // Skip this field - it's already been encoded by from_after_field content-first encoding
+      continue;
+    }
 
     code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields, baseContextVarForField);
 
@@ -918,6 +952,10 @@ function generateEncoder(
 
   code += `    return this.finish();\n`;
   code += `  }\n`;
+
+  // Generate calculateSize method
+  code += generateCalculateSizeMethod(typeName, fields, schema, globalEndianness, hasContext);
+
   code += `}`;
 
   return code;
@@ -1108,7 +1146,7 @@ function generateEncodeFieldCoreImpl(
       return generateEncodeBitfield(field, valuePath, indent);
 
     case "discriminated_union":
-      return generateEncodeDiscriminatedUnion(field, schema, globalEndianness, valuePath, indent);
+      return generateEncodeDiscriminatedUnion(field, schema, globalEndianness, valuePath, indent, contextVarName);
 
     case "choice":
       return generateEncodeChoice(field, schema, globalEndianness, valuePath, indent, contextVarName);
@@ -1268,7 +1306,8 @@ function generateEncodeDiscriminatedUnion(
   schema: BinarySchema,
   globalEndianness: Endianness,
   valuePath: string,
-  indent: string
+  indent: string,
+  contextVarName: string = 'context'
 ): string {
   let code = "";
   const variants = field.variants || [];
@@ -1290,10 +1329,12 @@ function generateEncodeDiscriminatedUnion(
       const isStringType = variantTypeDef && (variantTypeDef as any).type === "string";
 
       if (isStringType) {
-        // Non-reference string variant: record offset before encoding so back references can reuse it
+        // Non-reference string variant: record absolute offset before encoding so back references can reuse it
         code += `${indent}  const valueKey = JSON.stringify(${valuePath}.value);\n`;
-        code += `${indent}  const currentOffset = this.byteOffset;\n`;
-        code += `${indent}  this.compressionDict.set(valueKey, currentOffset);\n`;
+        code += `${indent}  // Use shared compression dict from context (if available) for cross-encoder compression\n`;
+        code += `${indent}  const compressionDict = ${contextVarName}?.compressionDict || this.compressionDict;\n`;
+        code += `${indent}  const currentOffset = (${contextVarName}?.byteOffset || 0) + this.byteOffset;\n`;
+        code += `${indent}  compressionDict.set(valueKey, currentOffset);\n`;
       }
     }
 
@@ -1435,19 +1476,20 @@ function generateEncodeTypeReference(
     return generateEncodeFieldCoreImpl(pseudoField, schema, globalEndianness, valuePath, indent);
   }
 
-  // Composite type - encode all fields
-  const fields = getTypeFields(typeDef);
+  // Composite type - always use encoder class for correctness
+  // This ensures each type's encode() method handles its own skip logic,
+  // especially important for types with from_after_field computed fields
   let code = "";
 
-  // If context is required, use encoder class to properly pass context
-  if (schemaRequiresContext(schema)) {
-    // Extract field name and parent path from valuePath (e.g., "value.inner" -> field="inner", parent="value")
-    const lastDot = valuePath.lastIndexOf('.');
-    const fieldName = lastDot >= 0 ? valuePath.substring(lastDot + 1) : valuePath;
-    const parentPath = lastDot >= 0 ? valuePath.substring(0, lastDot) : valuePath;
-    const encoderVarName = `encoder_${fieldName}`;
-    const encodedVarName = `encoded_${fieldName}`;
+  // Extract field name and parent path from valuePath (e.g., "value.inner" -> field="inner", parent="value")
+  const lastDot = valuePath.lastIndexOf('.');
+  const fieldName = lastDot >= 0 ? valuePath.substring(lastDot + 1) : valuePath;
+  const parentPath = lastDot >= 0 ? valuePath.substring(0, lastDot) : valuePath;
+  const encoderVarName = `encoder_${fieldName}`;
+  const encodedVarName = `encoded_${fieldName}`;
 
+  // If context is required, extend context and pass it
+  if (schemaRequiresContext(schema)) {
     // Use provided base context variable, or fallback to contextVarName, or default to 'context'
     // baseContextVar is the accumulated context (e.g., 'currentContext'), which preserves sibling array info
     const baseContextVarName = baseContextVar || contextVarName || 'context';
@@ -1475,22 +1517,12 @@ function generateEncodeTypeReference(
     code += `${indent}  this.writeUint8(byte);\n`;
     code += `${indent}}\n`;
   } else {
-    // Inline encoding when no context needed
-    // Add runtime validation for computed fields in nested struct
-    const computedFields = fields.filter(f => (f as any).computed);
-    if (computedFields.length > 0) {
-      code += `${indent}// Runtime validation: reject computed fields in nested struct\n`;
-      for (const field of computedFields) {
-        code += `${indent}if ((${valuePath} as any).${field.name} !== undefined) {\n`;
-        code += `${indent}  throw new Error("Field '${field.name}' is computed and cannot be set manually");\n`;
-        code += `${indent}}\n`;
-      }
-    }
-
-    for (const field of fields) {
-      const newValuePath = `${valuePath}.${field.name}`;
-      code += generateEncodeFieldCore(field, schema, globalEndianness, newValuePath, indent, typeRef, fields);
-    }
+    // No context needed - call encode() without context parameter
+    code += `${indent}const ${encoderVarName} = new ${typeRef}Encoder();\n`;
+    code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath});\n`;
+    code += `${indent}for (const byte of ${encodedVarName}) {\n`;
+    code += `${indent}  this.writeUint8(byte);\n`;
+    code += `${indent}}\n`;
   }
 
   return code;
