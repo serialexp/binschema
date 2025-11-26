@@ -1,0 +1,52 @@
+{
+  "name": "binschema",
+  "version": "0.1.0",
+  "description": "Bit-level binary serialization schema and code generator",
+  "type": "module",
+  "bin": {
+    "binschema": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/tests",
+    "!dist/examples"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "bun run src/run-tests.ts",
+    "test:filter": "bun run src/run-tests.ts --filter",
+    "watch": "tsc --watch",
+    "cli": "bun run src/cli/index.ts"
+  },
+  "keywords": [
+    "binary",
+    "serialization",
+    "codegen",
+    "protocol"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": "https://github.com/serialexp/binschema",
+  "devDependencies": {
+    "@types/node": "^24.7.1",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "json5": "^2.2.3",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "kleur": "^4.1.5",
+    "zod": "^4.1.12",
+    "zod-metadata-extractor": "workspace:*"
+  }
+}
