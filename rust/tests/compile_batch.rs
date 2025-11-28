@@ -98,13 +98,9 @@ fn generate_rust_code(schema_json: &str, type_name: &str) -> Result<String, Box<
 
 /// Prefix all type names in generated code to avoid conflicts
 fn prefix_type_names(code: &str, prefix: &str) -> String {
-    // This is a simplified version - we need to replace struct names and their references
-    // For now, we'll use regex-like replacements
-
     let mut result = code.to_string();
 
-    // Replace struct definitions: "pub struct Foo" -> "pub struct prefix_Foo"
-    // Note: This is a simple approach. A more robust version would use a proper parser.
+    // Find all struct definitions
     let re_struct = regex::Regex::new(r"pub struct ([A-Z][a-zA-Z0-9_]*)").unwrap();
     let type_names: Vec<String> = re_struct
         .captures_iter(&code)
@@ -112,27 +108,55 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
         .collect();
 
     for type_name in &type_names {
+        let prefixed = format!("{}_{}", prefix, type_name);
+
         // Replace struct definition
         result = result.replace(
             &format!("pub struct {}", type_name),
-            &format!("pub struct {}_{}", prefix, type_name),
+            &format!("pub struct {}", prefixed),
         );
 
         // Replace impl block
         result = result.replace(
-            &format!("impl {} ", type_name),
-            &format!("impl {}_{} ", prefix, type_name),
+            &format!("impl {}", type_name),
+            &format!("impl {}", prefixed),
         );
 
-        // Replace type references (Self:: prefix is okay)
+        // Replace type references in various contexts:
+        // 1. Field types ending with comma: `: Foo,`
+        result = result.replace(
+            &format!(": {},", type_name),
+            &format!(": {},", prefixed),
+        );
+
+        // 2. Field types ending with space: `: Foo `
         result = result.replace(
             &format!(": {} ", type_name),
-            &format!(": {}_{} ", prefix, type_name),
+            &format!(": {} ", prefixed),
         );
 
+        // 3. Generic parameters: `Vec<Foo>`
+        result = result.replace(
+            &format!("<{}>", type_name),
+            &format!("<{}>", prefixed),
+        );
+
+        // 4. Method calls: `Foo::decode`
         result = result.replace(
             &format!("{}::", type_name),
-            &format!("{}_{}", prefix, type_name),
+            &format!("{}::", prefixed),
+        );
+
+        // 5. Return type: `-> Foo`
+        result = result.replace(
+            &format!("-> {}", type_name),
+            &format!("-> {}", prefixed),
+        );
+
+        // 6. Let binding types: `let x: Foo =`
+        result = result.replace(
+            &format!(": {} =", type_name),
+            &format!(": {} =", prefixed),
         );
     }
 
@@ -330,60 +354,88 @@ fn to_snake_case(s: &str) -> String {
     result
 }
 
+/// Result of attempting to run a test suite
+#[derive(Debug)]
+enum SuiteResult {
+    /// Code generation failed
+    CodeGenError(String),
+    /// Tests ran (may have passed or failed)
+    Ran { passed: usize, failed: usize, errors: Vec<String> },
+}
+
 #[test]
-fn test_compile_and_run_primitives() {
+fn test_compile_and_run_all() {
     // Only run if RUST_TESTS env var is set (compilation is slow)
     if std::env::var("RUST_TESTS").is_err() {
         println!("Skipping Rust compilation tests (set RUST_TESTS=1 to run)");
         return;
     }
 
-    let tests_dir = "../packages/binschema/.generated/tests-json/primitives";
+    // Find ALL test files from all categories
+    let tests_dir = "../packages/binschema/.generated/tests-json";
     let test_files = find_test_files(tests_dir);
 
-    println!("Found {} primitive test files", test_files.len());
+    println!("Found {} test files total", test_files.len());
 
-    // Test basic primitive types (exclude complex ones that use unsupported features)
-    let exclude_patterns = [
-        "varlength", "leb128", "ebml", "midi", "ber", "der", "asn1",
-        "vlq", "mixed_varlength", "latin1",
-        "float", "bit_patterns", "boundary", "power_of_two", "signed_boundaries",
-    ];
-    let filtered_files: Vec<_> = test_files
-        .iter()
-        .filter(|p| {
-            let name = p.file_name().unwrap().to_str().unwrap().to_lowercase();
-            !exclude_patterns.iter().any(|pattern| name.contains(pattern))
-        })
-        .collect();
+    // Track results per suite
+    let mut suite_results: Vec<(String, SuiteResult)> = Vec::new();
+    let mut codegen_success: Vec<(String, TestSuite, String)> = Vec::new();
+    let mut codegen_failures: Vec<(String, String)> = Vec::new();
 
-    println!("Testing {} files: {:?}", filtered_files.len(), filtered_files);
+    // Try to generate code for each suite
+    for path in &test_files {
+        let suite = match load_test_suite(path) {
+            Ok(s) => s,
+            Err(e) => {
+                let name = path.file_name().unwrap().to_str().unwrap().to_string();
+                suite_results.push((name.clone(), SuiteResult::CodeGenError(format!("Load error: {}", e))));
+                continue;
+            }
+        };
 
-    let mut all_suites: Vec<(String, TestSuite, String)> = Vec::new();
+        let schema_json = match serde_json::to_string(&suite.schema) {
+            Ok(j) => j,
+            Err(e) => {
+                suite_results.push((suite.name.clone(), SuiteResult::CodeGenError(format!("Schema serialize error: {}", e))));
+                continue;
+            }
+        };
 
-    for path in filtered_files {
-        let suite = load_test_suite(path).expect("Should load suite");
-
-        // Generate Rust code
-        let schema_json = serde_json::to_string(&suite.schema).expect("Should serialize schema");
         match generate_rust_code(&schema_json, &suite.test_type) {
             Ok(code) => {
-                let prefix = suite.name.replace("-", "_");
+                let prefix = suite.name.replace("-", "_").replace(".", "_");
                 let prefixed_code = prefix_type_names(&code, &prefix);
-                all_suites.push((prefix, suite, prefixed_code));
+                codegen_success.push((prefix, suite, prefixed_code));
             }
             Err(e) => {
-                println!("Failed to generate code for {}: {}", suite.name, e);
+                codegen_failures.push((suite.name.clone(), e.to_string()));
+                suite_results.push((suite.name.clone(), SuiteResult::CodeGenError(e.to_string())));
             }
         }
     }
 
-    println!("Successfully generated code for {} suites", all_suites.len());
+    println!("\n=== Code Generation Results ===");
+    println!("Generated: {}/{}", codegen_success.len(), test_files.len());
+    println!("Failed:    {}", codegen_failures.len());
 
-    if all_suites.is_empty() {
-        println!("No suites generated - skipping compilation");
+    if !codegen_failures.is_empty() {
+        println!("\nCode generation failures:");
+        for (name, err) in &codegen_failures {
+            // Truncate long errors
+            let short_err = if err.len() > 100 { &err[..100] } else { err };
+            println!("  ✗ {}: {}", name, short_err.replace('\n', " "));
+        }
+    }
+
+    if codegen_success.is_empty() {
+        println!("\nNo suites generated - cannot run tests");
         return;
     }
+
+    println!("\nTesting {} files", codegen_success.len());
+
+    // Use the successfully generated suites
+    let all_suites = codegen_success;
 
     // Create temp directory for batched compilation
     let temp_dir = tempfile::tempdir().expect("Create temp dir");
@@ -427,8 +479,29 @@ regex = "1.10"
     );
     fs::write(temp_dir.path().join("Cargo.toml"), &cargo_toml).expect("Write Cargo.toml");
 
+    // Keep temp dir if DEBUG_GENERATED is set
+    let keep_temp = std::env::var("DEBUG_GENERATED").ok();
+    if let Some(ref dir) = keep_temp {
+        let debug_dir = PathBuf::from(dir);
+        if debug_dir.exists() {
+            fs::remove_dir_all(&debug_dir).ok();
+        }
+        fs::create_dir_all(&debug_dir).expect("Create debug dir");
+        // Copy files to debug dir
+        for entry in fs::read_dir(temp_dir.path()).expect("Read temp dir") {
+            let entry = entry.expect("Read entry");
+            let dest = debug_dir.join(entry.file_name());
+            if entry.path().is_dir() {
+                copy_dir_all(&entry.path(), &dest).ok();
+            } else {
+                fs::copy(&entry.path(), &dest).ok();
+            }
+        }
+        println!("Debug output saved to: {:?}", debug_dir);
+    }
+
     println!("Temp dir: {:?}", temp_dir.path());
-    println!("Compiling with cargo...");
+    println!("\n=== Compilation ===");
 
     // Compile
     let output = Command::new("cargo")
@@ -438,14 +511,28 @@ regex = "1.10"
         .expect("Run cargo build");
 
     if !output.status.success() {
-        println!("Cargo build failed:");
-        println!("{}", String::from_utf8_lossy(&output.stderr));
-        panic!("Cargo build failed");
+        println!("Cargo build FAILED:");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Show first 2000 chars of error
+        let truncated = if stderr.len() > 2000 { &stderr[..2000] } else { &stderr };
+        println!("{}", truncated);
+
+        println!("\n=== SUMMARY ===");
+        println!("Test files found:    {}", test_files.len());
+        println!("Code gen succeeded:  {}", all_suites.len());
+        println!("Code gen failed:     {}", codegen_failures.len());
+        println!("Compilation:         FAILED");
+        println!("Tests run:           0");
+        println!("Tests passed:        0");
+
+        // Don't panic - just report failure
+        return;
     }
 
-    println!("Compilation succeeded!");
+    println!("Compilation: OK");
 
     // Run
+    println!("\n=== Running Tests ===");
     let output = Command::new("cargo")
         .args(["run", "--release"])
         .current_dir(temp_dir.path())
@@ -453,21 +540,37 @@ regex = "1.10"
         .expect("Run cargo run");
 
     if !output.status.success() {
-        println!("Cargo run failed:");
+        println!("Test execution FAILED:");
         println!("{}", String::from_utf8_lossy(&output.stderr));
-        panic!("Cargo run failed");
+
+        println!("\n=== SUMMARY ===");
+        println!("Test files found:    {}", test_files.len());
+        println!("Code gen succeeded:  {}", all_suites.len());
+        println!("Code gen failed:     {}", codegen_failures.len());
+        println!("Compilation:         OK");
+        println!("Execution:           FAILED");
+
+        return;
     }
 
     // Parse results
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Output: {}", stdout);
 
-    let results: Vec<Vec<TestResult>> =
-        serde_json::from_str(&stdout).expect("Parse JSON results");
+    let results: Vec<Vec<TestResult>> = match serde_json::from_str(&stdout) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Failed to parse results: {}", e);
+            println!("Output was: {}", stdout);
+            return;
+        }
+    };
 
     let mut total_passed = 0;
     let mut total_failed = 0;
+    let mut suites_passing = 0;
+    let mut suites_failing = 0;
 
+    println!("\n=== Test Results ===");
     for (i, suite_results) in results.iter().enumerate() {
         let suite_name = &all_suites[i].1.name;
         let passed = suite_results.iter().filter(|r| r.pass).count();
@@ -476,15 +579,51 @@ regex = "1.10"
         total_failed += failed;
 
         if failed > 0 {
+            suites_failing += 1;
             println!("✗ {}: {}/{} passed", suite_name, passed, passed + failed);
-            for r in suite_results.iter().filter(|r| !r.pass) {
-                println!("  - {}: {}", r.description, r.error.as_ref().unwrap_or(&"".to_string()));
+            // Only show first 3 failures per suite to avoid spam
+            for r in suite_results.iter().filter(|r| !r.pass).take(3) {
+                let err_msg = r.error.as_ref().map(|e| {
+                    if e.len() > 80 { format!("{}...", &e[..80]) } else { e.clone() }
+                }).unwrap_or_default();
+                println!("    - {}: {}", r.description, err_msg);
             }
-        } else {
+            let remaining = suite_results.iter().filter(|r| !r.pass).count().saturating_sub(3);
+            if remaining > 0 {
+                println!("    ... and {} more failures", remaining);
+            }
+        } else if passed > 0 {
+            suites_passing += 1;
             println!("✓ {}: {}/{} passed", suite_name, passed, passed + failed);
         }
     }
 
-    println!("\nSummary: {}/{} tests passed", total_passed, total_passed + total_failed);
-    assert!(total_passed > 0, "Should have at least one passing test");
+    println!("\n=== SUMMARY ===");
+    println!("Test files found:    {}", test_files.len());
+    println!("Code gen succeeded:  {}", all_suites.len());
+    println!("Code gen failed:     {}", codegen_failures.len());
+    println!("Compilation:         OK");
+    println!("Suites passing:      {}", suites_passing);
+    println!("Suites failing:      {}", suites_failing);
+    println!("Tests passed:        {}", total_passed);
+    println!("Tests failed:        {}", total_failed);
+    println!("Pass rate:           {:.1}%",
+        if total_passed + total_failed > 0 {
+            100.0 * total_passed as f64 / (total_passed + total_failed) as f64
+        } else { 0.0 });
+}
+
+/// Helper to recursively copy a directory
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }

@@ -801,16 +801,32 @@ function mapPrimitiveToRustType(typeName: string): string {
   }
 }
 
+// Rust reserved keywords that need r# prefix
+const RUST_KEYWORDS = new Set([
+  'as', 'break', 'const', 'continue', 'crate', 'else', 'enum', 'extern',
+  'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod',
+  'move', 'mut', 'pub', 'ref', 'return', 'self', 'Self', 'static', 'struct',
+  'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while',
+  'async', 'await', 'dyn', 'abstract', 'become', 'box', 'do', 'final',
+  'macro', 'override', 'priv', 'typeof', 'unsized', 'virtual', 'yield', 'try'
+]);
+
 /**
  * Converts a field name to Rust field name (snake_case)
  */
 function toRustFieldName(name: string): string {
   // Already snake_case in schema, just ensure valid Rust identifier
   // Handle camelCase to snake_case conversion if needed
-  return name
+  let result = name
     .replace(/([A-Z])/g, '_$1')
     .toLowerCase()
     .replace(/^_/, '');
+
+  // Escape Rust reserved keywords with r# prefix
+  if (RUST_KEYWORDS.has(result)) {
+    return `r#${result}`;
+  }
+  return result;
 }
 
 /**
