@@ -36,6 +36,21 @@ import { BitStreamEncoder } from './src/runtime/bit-stream.js';  // ERROR: won't
 EOF
 ```
 
+## Task Tracking with CURRENT_TASK.md
+
+**IMPORTANT:** `CURRENT_TASK.md` is a local-only file for tracking work in progress. It is gitignored and should **NEVER** be committed, even after making updates to it.
+
+**Purpose:**
+- Tracks the current task state between conversations
+- Documents completed work with commit references
+- Lists next steps and implementation phases
+- Contains references to external resources (Kaitai schemas, etc.)
+
+**Usage:**
+- Read this file at the start of a session to understand current context
+- Update it as you complete work (add commit hashes, move items to "Completed")
+- Keep it current so the next session can pick up where you left off
+
 ## Testing
 
 ### Running Tests
