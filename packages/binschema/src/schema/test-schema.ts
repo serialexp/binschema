@@ -89,20 +89,30 @@ export const TestSuiteSchema = z.object({
   test_type: z.string(),
 
   // Test cases (omit for schema validation error tests)
+  // Supports both "test_cases" and "tests" as field names
   test_cases: z.array(TestCaseSchema).min(1).optional(),
+  tests: z.array(TestCaseSchema).min(1).optional(),
 
   // Optional: expect schema validation to fail
   schema_validation_error: z.boolean().optional(),
 
   // Optional: expected schema validation error message (partial match)
   error_message: z.string().optional(),
+}).transform((data) => {
+  // Normalize: if "tests" is provided but not "test_cases", copy it over
+  if (data.tests && !data.test_cases) {
+    return { ...data, test_cases: data.tests, tests: undefined };
+  }
+  return data;
 }).refine(
   (data) => {
     // Either have test_cases OR be a schema validation error test
-    return (data.test_cases !== undefined && data.test_cases.length > 0) || data.schema_validation_error === true;
+    const hasTests = (data.test_cases !== undefined && data.test_cases.length > 0) ||
+                     (data.tests !== undefined && data.tests.length > 0);
+    return hasTests || data.schema_validation_error === true;
   },
   {
-    message: "Must provide either test_cases or schema_validation_error=true",
+    message: "Must provide either test_cases/tests or schema_validation_error=true",
   }
 );
 export type TestSuite = z.infer<typeof TestSuiteSchema>;

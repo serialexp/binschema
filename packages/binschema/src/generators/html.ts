@@ -155,9 +155,13 @@ function linkifyType(typeName: string, schema: BinarySchema): string {
     const markerParts = typeName.substring("__ARRAY_WITH_VARIANTS__".length).split("__");
     try {
       const variantsJson = markerParts[0];
-      const itemType = markerParts[1] || "uint8";
+      const itemType = markerParts[1] || "";
       const variants = JSON.parse(variantsJson) as string[];
       const linkedVariants = variants.map(v => linkifyType(v, schema)).join(" | ");
+      // For choice types (no base item type), just show the variants
+      if (!itemType) {
+        return `(${linkedVariants})[]`;
+      }
       return `${itemType}[] (${linkedVariants})`;
     } catch (e) {
       return "array";
@@ -284,7 +288,9 @@ export function generateHTML(
   }
 
   const { inlineCSS = true, includeExamples = true } = options;
-  const title = options.title || protocolSchema?.protocol.name || "Binary Schema Documentation";
+  const title = options.title || protocolSchema?.protocol.name || binarySchema.meta?.title || "Binary Schema Documentation";
+  const description = protocolSchema?.protocol.description || binarySchema.meta?.description;
+  const version = protocolSchema?.protocol.version || binarySchema.meta?.version;
 
   let html = `<!DOCTYPE html>
 <html lang="en">
@@ -312,12 +318,30 @@ export function generateHTML(
         }
       }
 
-      // Handle hash changes (clicking type links)
-      window.addEventListener('hashchange', () => {
-        const target = document.querySelector(window.location.hash);
-        if (target && target.tagName === 'DETAILS') {
-          target.open = true;
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Intercept clicks on type links to open details BEFORE browser scrolls
+      document.addEventListener('click', (e) => {
+        const link = e.target.closest('a[href^="#type-"]');
+        if (link) {
+          const targetId = link.getAttribute('href');
+          const target = document.querySelector(targetId);
+          if (target && target.tagName === 'DETAILS') {
+            e.preventDefault();
+            target.open = true;
+            // Update URL hash and scroll
+            history.pushState(null, '', targetId);
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }
+      });
+
+      // Handle browser back/forward navigation
+      window.addEventListener('popstate', () => {
+        if (window.location.hash) {
+          const target = document.querySelector(window.location.hash);
+          if (target && target.tagName === 'DETAILS') {
+            target.open = true;
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
         }
       });
     });
@@ -326,13 +350,13 @@ export function generateHTML(
 <body>
   <header class="protocol-header">
     <h1>${escapeHtml(title)}</h1>
-    ${protocolSchema ? `<div class="protocol-version">Version ${escapeHtml(protocolSchema.protocol.version)}</div>` : ""}
+    ${version ? `<div class="protocol-version">Version ${escapeHtml(version)}</div>` : ""}
   </header>
 
   <nav class="toc">
     <h2>Table of Contents</h2>
     <ul>
-      ${protocolSchema?.protocol.description ? `<li><a href="#overview">Overview</a></li>` : ""}
+      ${description ? `<li><a href="#overview">Overview</a></li>` : ""}
       ${protocolSchema?.protocol.header_format ? `<li><a href="#frame-format">Frame Format</a></li>` : ""}
       <li><a href="#data-types">Data Types</a></li>
       ${protocolSchema?.protocol.messages?.length ? `<li><a href="#messages">Messages</a></li>` : ""}
@@ -342,14 +366,14 @@ export function generateHTML(
   <main>
 `;
 
-  // Overview section (only if protocol has description)
-  if (protocolSchema?.protocol.description) {
+  // Overview section (if description available from protocol or meta)
+  if (description) {
     html += `    <section id="overview" class="section">
       <h2>Overview</h2>
-      <p>${escapeHtml(protocolSchema.protocol.description)}</p>
+      <p>${escapeHtml(description)}</p>
 `;
 
-    if (protocolSchema.protocol.notes) {
+    if (protocolSchema?.protocol.notes) {
       html += `      <div class="notes">\n`;
       html += renderNotes(protocolSchema.protocol.notes);
       html += `      </div>\n`;
@@ -475,7 +499,7 @@ function generateFrameFormatSection(
 
     html += `          <div class="field" style="flex: ${width}">
             <div class="field-name">${escapeHtml(field.name)}</div>
-            <div class="field-type">${linkifyType(typeInfo.displayType, binarySchema)}</div>
+            <div class="field-type">${typeInfo.constValue ? `<code>${escapeHtml(typeInfo.constValue)}</code>` : linkifyType(typeInfo.displayType, binarySchema)}</div>
             <div class="field-size">${escapeHtml(typeInfo.size)}</div>
           </div>
 `;
@@ -637,7 +661,10 @@ function generateDataTypesSection(
 `;
 
   // Custom types from schema
-  for (const [typeName, typeDef] of Object.entries(binarySchema.types)) {
+  // Sort types alphabetically by name
+  const sortedTypes = Object.entries(binarySchema.types).sort(([a], [b]) => a.localeCompare(b));
+
+  for (const [typeName, typeDef] of sortedTypes) {
     const typeDefObj = typeDef as TypeDef;
     const description = (typeDefObj as any).description || "";
     const isGeneric = typeName.includes("<");
@@ -684,11 +711,13 @@ function generateDataTypesSection(
         const conditional = "conditional" in field && field.conditional;
         const width = calculateFieldWidth(typeInfo.bytes);
 
-        html += `              <div class="field${conditional ? " conditional" : ""}" style="flex: ${width}">
+        const isComputed = !!typeInfo.computed;
+        html += `              <div class="field${conditional ? " conditional" : ""}${isComputed ? " computed" : ""}" style="flex: ${width}">
                 <div class="field-name">${escapeHtml(field.name)}</div>
-                <div class="field-type">${linkifyType(typeInfo.displayType, binarySchema)}</div>
+                <div class="field-type">${typeInfo.constValue ? `<code>${escapeHtml(typeInfo.constValue)}</code>` : linkifyType(typeInfo.displayType, binarySchema)}</div>
                 <div class="field-size">${escapeHtml(typeInfo.size)}</div>
                 ${conditional ? `<div class="field-condition">if ${escapeHtml(field.conditional as string)}</div>` : ""}
+                ${isComputed ? `<div class="field-computed">${escapeHtml(typeInfo.computed!.type.replace(/_/g, ' '))} ${escapeHtml(typeInfo.computed!.target)}</div>` : ""}
               </div>
 `;
       }
@@ -835,11 +864,13 @@ function generateMessageDetails(
         const conditional = "conditional" in field && field.conditional;
         const width = calculateFieldWidth(typeInfo.bytes);
 
-        html += `            <div class="field${conditional ? " conditional" : ""}" style="flex: ${width}">
+        const isComputed = !!typeInfo.computed;
+        html += `            <div class="field${conditional ? " conditional" : ""}${isComputed ? " computed" : ""}" style="flex: ${width}">
               <div class="field-name">${escapeHtml(field.name)}</div>
-              <div class="field-type">${linkifyType(typeInfo.displayType, binarySchema)}</div>
+              <div class="field-type">${typeInfo.constValue ? `<code>${escapeHtml(typeInfo.constValue)}</code>` : linkifyType(typeInfo.displayType, binarySchema)}</div>
               <div class="field-size">${escapeHtml(typeInfo.size)}</div>
               ${conditional ? `<div class="field-condition">if ${escapeHtml(field.conditional as string)}</div>` : ""}
+              ${isComputed ? `<div class="field-computed">${escapeHtml(typeInfo.computed!.type.replace(/_/g, ' '))} ${escapeHtml(typeInfo.computed!.target)}</div>` : ""}
             </div>
 `;
       }
@@ -932,28 +963,44 @@ function generateMessageDetails(
 function getFieldTypeInfo(
   field: Field,
   schema: BinarySchema,
-): { displayType: string; size: string; bytes: number } {
+): { displayType: string; size: string; bytes: number; constValue?: string; computed?: { type: string; target: string } } {
   if (!("type" in field)) {
     return { displayType: "unknown", size: "?", bytes: 1 };
   }
 
   const type = field.type;
 
+  // Check for const value
+  const constValue = "const" in field && field.const !== undefined
+    ? (typeof field.const === "number" ? `0x${field.const.toString(16).toUpperCase().padStart(2, '0')}` : String(field.const))
+    : undefined;
+
+  // Check for computed field
+  const computedField = "computed" in field && field.computed
+    ? {
+        type: (field.computed as any).type as string,
+        target: (field.computed as any).target || (field.computed as any).from_after_field || "?"
+      }
+    : undefined;
+
   switch (type) {
     case "uint8":
     case "int8":
-      return { displayType: type, size: "1 byte", bytes: 1 };
+      return { displayType: type, size: "1 byte", bytes: 1, constValue, computed: computedField };
     case "uint16":
     case "int16":
-      return { displayType: type, size: "2 bytes", bytes: 2 };
+      return { displayType: type, size: "2 bytes", bytes: 2, constValue, computed: computedField };
     case "uint32":
     case "int32":
     case "float32":
-      return { displayType: type, size: "4 bytes", bytes: 4 };
+      return { displayType: type, size: "4 bytes", bytes: 4, constValue, computed: computedField };
     case "uint64":
     case "int64":
     case "float64":
-      return { displayType: type, size: "8 bytes", bytes: 8 };
+      return { displayType: type, size: "8 bytes", bytes: 8, constValue, computed: computedField };
+    case "varlength":
+      const varlengthEncoding = "encoding" in field ? field.encoding : "leb128";
+      return { displayType: `varlength (${varlengthEncoding})`, size: "variable", bytes: 2, computed: computedField };
     case "bit":
       const bitBytes = Math.ceil((field.size || 1) / 8);
       return {
@@ -968,6 +1015,14 @@ function getFieldTypeInfo(
       if ("variants" in field && field.variants && Array.isArray(field.variants)) {
         // Return a special marker that we'll process when linkifying
         return { displayType: `__ARRAY_WITH_VARIANTS__${JSON.stringify(field.variants)}__${itemType}`, size: "variable", bytes: 4 };
+      }
+      // Check for choice type in items - extract choices as variants
+      if (itemType === "choice" && field.items && "choices" in field.items) {
+        const choices = (field.items as any).choices as Array<{ type: string }>;
+        if (Array.isArray(choices)) {
+          const choiceTypes = choices.map(c => c.type);
+          return { displayType: `__ARRAY_WITH_VARIANTS__${JSON.stringify(choiceTypes)}__`, size: "variable", bytes: 4 };
+        }
       }
       return { displayType: `${itemType}[]`, size: "variable", bytes: 4 }; // Assume 4 bytes for variable size (length prefix)
     case "string":
@@ -1296,6 +1351,20 @@ function generateCSS(): string {
       background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     }
 
+    .field.computed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .field-computed {
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75em;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
     .field-name {
       font-weight: bold;
       color: white;
@@ -1310,6 +1379,14 @@ function generateCSS(): string {
       color: rgba(255, 255, 255, 0.9);
       font-size: 0.75em;
       margin-bottom: 2px;
+    }
+
+    .field-type code {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fde047;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
     }
 
     .field-size {

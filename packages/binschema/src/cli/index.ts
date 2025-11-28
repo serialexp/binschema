@@ -60,13 +60,25 @@ async function handleDocsBuild(command: DocsBuildCommand): Promise<void> {
 
   try {
     const schema = loadSchema(command.schemaPath);
-    const { generateHTML } = await import("../generators/html.js");
 
     // Extract binary schema (always present)
     const binarySchema = {
+      meta: schema.meta,
       config: schema.config,
       types: schema.types,
     };
+
+    // Validate schema before generating docs
+    const { validateSchema, formatValidationErrors } = await import("../schema/validator.js");
+    const validation = validateSchema(binarySchema);
+    if (!validation.valid) {
+      console.error("Schema validation failed:");
+      console.error(formatValidationErrors(validation));
+      process.exitCode = 1;
+      return;
+    }
+
+    const { generateHTML } = await import("../generators/html.js");
 
     // Extract protocol schema if present
     const protocolSchema = ("protocol" in schema && schema.protocol)

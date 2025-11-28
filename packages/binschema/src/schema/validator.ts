@@ -356,14 +356,37 @@ function validateComputedField(
     // Handle from_after_field validation
     if (hasFromAfter) {
       const fromAfterField = (computed as any).from_after_field;
-      const referencedField = parentFields.find((f: any) => f.name === fromAfterField);
+      const referencedFieldIndex = parentFields.findIndex((f: any) => f.name === fromAfterField);
+      const currentFieldIndex = parentFields.findIndex((f: any) => f.name === field.name);
 
-      if (!referencedField) {
+      if (referencedFieldIndex === -1) {
         const fieldNames = parentFields.map((f: any) => f.name).join(', ');
         errors.push({
           path: `${path} (${field.name})`,
           message: `Computed field 'from_after_field' references '${fromAfterField}' which not found in type '${typeName}' (available fields: ${fieldNames})`
         });
+        return;
+      }
+
+      // Check for invalid ordering: if from_after_field references a field before the length field,
+      // and there are non-computed fields between them, those fields would be encoded twice.
+      // Valid: from_after_field references field immediately before, or self-reference
+      // Invalid: from_after_field references a field with other content fields between it and the length field
+      if (referencedFieldIndex < currentFieldIndex - 1) {
+        // Check if there are any non-computed, non-const fields between referenced field and current field
+        const fieldsBetween = parentFields.slice(referencedFieldIndex + 1, currentFieldIndex);
+        const problematicFields = fieldsBetween.filter((f: any) => {
+          // Fields that would be encoded twice: non-computed, non-const regular fields
+          return !(f.computed || f.const !== undefined);
+        });
+
+        if (problematicFields.length > 0) {
+          const problematicNames = problematicFields.map((f: any) => f.name).join(', ');
+          errors.push({
+            path: `${path} (${field.name})`,
+            message: `Computed field 'from_after_field' references '${fromAfterField}' but there are content fields (${problematicNames}) between it and the length field that would be encoded twice. The from_after_field must reference the field immediately before the length field, or the length field itself.`
+          });
+        }
       }
       return; // No further validation needed for from_after_field
     }

@@ -1,13 +1,154 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BinSchema</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BinSchema - Binary Protocol Schema Generator</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <div class="branding">
+        <div class="logo">BinSchema</div>
+        <p class="tagline">Bit-level binary schema generator with multi-language tooling.</p>
+      </div>
+      <nav class="site-nav">
+        <a href="#overview">Overview</a>
+        <a href="#installation">Installation</a>
+        <a href="#schema-reference">Schema Reference</a>
+        <a href="#examples">Examples</a>
+        <a href="https://github.com/serialexp/binschema" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-content">
+        <div>
+          <h1>Define Binary Protocols Once, Generate Everywhere</h1>
+          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript.</p>
+          <div class="cta-group">
+            <a class="cta primary" href="#installation">Get Started</a>
+            <a class="cta secondary" href="#schema-reference">Explore the Schema</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="overview" class="content-section">
+      <div class="container">
+        <h2>Overview</h2>
+        <div class="features-grid">
+          <div class="feature">
+            <h3>Bit-Level Precision</h3>
+            <p>Define fields from 1 to 64 bits with configurable bit ordering (MSB/LSB first). Perfect for network protocols and hardware formats.</p>
+          </div>
+          <div class="feature">
+            <h3>Rich Type System</h3>
+            <p>Primitives, strings, arrays, discriminated unions, back-references, and variable-length integers (LEB128, VLQ, DER).</p>
+          </div>
+          <div class="feature">
+            <h3>Computed Fields</h3>
+            <p>Auto-calculate lengths, positions, element counts, and CRC32 checksums. No manual bookkeeping needed.</p>
+          </div>
+          <div class="feature">
+            <h3>Multi-Language Output</h3>
+            <p>Generate type-safe encoders and decoders for TypeScript today, with Go and Rust coming soon.</p>
+          </div>
+          <div class="feature">
+            <h3>IDE Support</h3>
+            <p>JSON Schema available for autocomplete and validation in VS Code, WebStorm, and any editor with JSON Schema support.</p>
+          </div>
+          <div class="feature">
+            <h3>Documentation Generation</h3>
+            <p>Generate HTML documentation directly from your schema. Keep docs and code in sync automatically.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="installation" class="content-section alt">
+      <div class="container">
+        <h2>Installation</h2>
+
+        <h3>From npm</h3>
+        <pre><code>npm install binschema</code></pre>
+
+        <h3>CLI Usage</h3>
+        <pre><code># Generate TypeScript code
+binschema generate --language ts --schema protocol.bschema.json --out ./generated
+
+# Generate HTML documentation
+binschema docs build --schema protocol.bschema.json --out docs.html</code></pre>
+
+        <h3>Programmatic API</h3>
+        <pre><code>import { generateTypeScript, validateSchema } from 'binschema';
+
+const schema = {
+  config: { endianness: 'big_endian' },
+  types: {
+    Header: {
+      sequence: [
+        { name: 'magic', type: 'uint32', const: 0x42494E53 },
+        { name: 'version', type: 'uint8' },
+        { name: 'length', type: 'uint16', computed: { type: 'length_of', target: 'payload' } },
+        { name: 'payload', type: 'array', kind: 'field_referenced', length_field: 'length', items: 'uint8' }
+      ]
+    }
+  }
+};
+
+const result = validateSchema(schema);
+const code = generateTypeScript(schema);</code></pre>
+
+        <h3>Schema Format</h3>
+        <pre><code>{
+  "$schema": "https://binschema.dev/schema.json",
+  "config": {
+    "endianness": "big_endian",
+    "bit_order": "msb_first"
+  },
+  "types": {
+    "MyMessage": {
+      "sequence": [
+        { "name": "type", "type": "uint8" },
+        { "name": "flags", "type": "bit", "size": 4 },
+        { "name": "reserved", "type": "bit", "size": 4 },
+        { "name": "length", "type": "uint16", "computed": { "type": "length_of", "target": "data" } },
+        { "name": "data", "type": "array", "kind": "field_referenced", "length_field": "length", "items": "uint8" }
+      ]
+    }
+  }
+}</code></pre>
+      </div>
+    </section>
+
+    <section id="schema-reference" class="content-section">
+      <div class="container">
+        <h2>Schema Definition Reference</h2>
+        <p class="section-lead">Full reference for every field and construct available in a BinSchema definition.</p>
+        <p><a href="docs/type-reference.html" class="cta primary">View Type Reference</a></p>
+      </div>
+    </section>
+
+    <section id="examples" class="content-section alt">
+      <div class="container">
+        <h2>Examples</h2>
+        <p class="section-lead">Explore real-world schemas and the documentation generated directly from them.</p>
+        <div id="examples-grid" class="examples-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; 2025 BinSchema. Built for protocol engineers.</p>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
 </html>

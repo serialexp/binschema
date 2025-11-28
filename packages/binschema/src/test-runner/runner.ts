@@ -47,6 +47,12 @@ export interface TestFailure {
  * Run a test suite
  */
 export async function runTestSuite(suite: TestSuite, summaryMode = false): Promise<TestResult> {
+  // Normalize: support both "tests" and "test_cases" field names
+  const suiteAny = suite as any;
+  if (suiteAny.tests && !suite.test_cases) {
+    suite = { ...suite, test_cases: suiteAny.tests };
+  }
+
   const result: TestResult = {
     testSuite: suite.name,
     passed: 0,
