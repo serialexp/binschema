@@ -309,6 +309,12 @@ function generatePrimitiveEncoding(
       code += `${indent}  }\n`;
       code += `${indent}}\n`;
       break;
+    case "varlength": {
+      const encoding = fieldAny.encoding || "der";
+      const method = getVarlengthWriteMethod(encoding);
+      code += `${indent}${encoderVar}.${method}(${valuePath});\n`;
+      break;
+    }
     case "array":
       // Arrays need special handling - delegate to array encoding helper
       // For now, throw a more informative error with a workaround
