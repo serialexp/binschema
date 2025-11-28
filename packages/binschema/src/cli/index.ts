@@ -161,10 +161,18 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       console.log(`Copied runtime dependencies → ${absoluteOut}/`);
       break;
     }
-    case "rust":
-      console.error("Rust emission is not yet implemented in the CLI.");
-      process.exitCode = 1;
+    case "rust": {
+      const typeName = resolveTypeName(schema, command.typeName);
+      if (!typeName) {
+        throw new Error("Schema does not define any types; cannot generate Rust code.");
+      }
+      const { generateRust } = await import("../generators/rust.js");
+      const result = generateRust(schema, typeName);
+      const outputPath = join(absoluteOut, "generated.rs");
+      writeFileSync(outputPath, result.code, "utf-8");
+      console.log(`Generated Rust sources → ${outputPath}`);
       break;
+    }
     default:
       console.error(`Unsupported language: ${command.language}`);
       process.exitCode = 1;

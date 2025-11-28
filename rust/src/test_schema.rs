@@ -1,10 +1,10 @@
 // ABOUTME: Test schema types for loading JSON5 test suites
 // ABOUTME: Mirrors TypeScript test schema structure for cross-language compatibility
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TestSuite {
     pub name: String,
     pub description: String,
@@ -13,14 +13,14 @@ pub struct TestSuite {
     pub test_cases: Vec<TestCase>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Schema {
     #[serde(default)]
     pub config: Option<SchemaConfig>,
     pub types: HashMap<String, TypeDef>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SchemaConfig {
     #[serde(default)]
     pub endianness: Option<String>,
@@ -28,7 +28,7 @@ pub struct SchemaConfig {
     pub bit_order: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum TypeDef {
     Sequence { sequence: Vec<Field> },
@@ -46,7 +46,7 @@ pub enum TypeDef {
     },
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Field {
     #[serde(default)]
     pub name: Option<String>,  // Optional because array items don't have names
@@ -68,7 +68,7 @@ pub struct Field {
     pub endianness: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TestCase {
     pub description: String,
     pub value: serde_json::Value,
