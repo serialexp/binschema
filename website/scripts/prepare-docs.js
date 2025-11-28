@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { mkdirSync, readdirSync, statSync, copyFileSync, unlinkSync } from 'fs';
-import { join, extname, dirname, resolve } from 'path';
+import { join, extname, basename, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const projectRoot = resolve(__dirname, '..');
-const binschemaRoot = resolve(projectRoot, '..', 'tools', 'binschema');
+const binschemaRoot = resolve(projectRoot, '..');
+const binschemaPackage = join(binschemaRoot, 'packages', 'binschema');
 
 const docsOutputDir = join(projectRoot, 'public', 'docs');
 const examplesOutputDir = join(projectRoot, 'public', 'examples');
@@ -64,8 +66,9 @@ copyIfExists(
   join(docsOutputDir, 'type-reference.html')
 );
 
-// Copy example schemas and generated docs
+// Process example schemas - copy JSON and generate HTML docs
 const examplesSourceDir = join(binschemaRoot, 'examples');
+const cliPath = join(binschemaPackage, 'dist', 'cli', 'index.js');
 
 try {
   const exampleFiles = readdirSync(examplesSourceDir);
@@ -74,9 +77,24 @@ try {
     if (statSync(sourcePath).isDirectory()) continue;
 
     const extension = extname(file);
-    if (['.json', '.html'].includes(extension)) {
+    if (extension === '.json') {
+      // Copy schema JSON
       const destinationPath = join(examplesOutputDir, file);
       copyIfExists(sourcePath, destinationPath);
+
+      // Generate HTML docs from schema
+      const baseName = basename(file, '.schema.json').replace('.bschema', '');
+      const docsPath = join(examplesOutputDir, `${baseName}-docs.html`);
+
+      try {
+        console.log(`Generating docs for ${file}...`);
+        execSync(`node "${cliPath}" docs build --schema "${sourcePath}" --out "${docsPath}"`, {
+          stdio: 'inherit'
+        });
+        console.log(`Generated ${docsPath}`);
+      } catch (error) {
+        console.warn(`Failed to generate docs for ${file}: ${error.message}`);
+      }
     }
   }
 } catch (error) {

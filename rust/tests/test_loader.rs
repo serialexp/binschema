@@ -36,7 +36,7 @@ fn load_test_suite(path: &PathBuf) -> Result<TestSuite, Box<dyn std::error::Erro
 
 #[test]
 fn test_load_all_suites() {
-    let tests_dir = "../tests-json";
+    let tests_dir = "../.generated/tests-json";
     let test_files = find_test_files(tests_dir);
 
     println!("Found {} test files", test_files.len());
@@ -69,7 +69,7 @@ fn test_load_all_suites() {
 
 #[test]
 fn test_primitive_suite_structure() {
-    let tests_dir = "../tests-json/primitives";
+    let tests_dir = "../.generated/tests-json/primitives";
     let test_files = find_test_files(tests_dir);
 
     // Find a uint8 test as an example
@@ -104,7 +104,7 @@ fn test_primitive_suite_structure() {
 
 #[test]
 fn test_float_infinity_parsing() {
-    let tests_dir = "../tests-json";
+    let tests_dir = "../.generated/tests-json";
     let test_files = find_test_files(tests_dir);
 
     // Find a float32 or float64 test with Infinity

@@ -1,0 +1,204 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://binschema.dev/schema.json",
+  "title": "BinSchema",
+  "description": "Binary protocol schema definition for BinSchema. Define binary formats with bit-level precision and generate parsers for TypeScript, Go, and Rust.",
+  "type": "object",
+  "required": ["config", "types"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for IDE autocomplete"
+    },
+    "meta": { "$ref": "#/definitions/Meta" },
+    "config": { "$ref": "#/definitions/Config" },
+    "types": {
+      "type": "object",
+      "description": "Map of type name to type definition. Type names must start with uppercase letter.",
+      "additionalProperties": { "$ref": "#/definitions/TypeDef" }
+    },
+    "protocol": { "$ref": "#/definitions/ProtocolDefinition" }
+  },
+  "definitions": {
+    "Meta": {
+      "type": "object",
+      "description": "Schema metadata for documentation",
+      "properties": {
+        "title": { "type": "string", "description": "Human-readable title (e.g., 'PNG Image Format')" },
+        "description": { "type": "string", "description": "Brief description of what this schema defines" },
+        "version": { "type": "string", "description": "Version string (e.g., '1.0', 'RFC 2083')" }
+      }
+    },
+    "Config": {
+      "type": "object",
+      "description": "Global configuration for the schema",
+      "properties": {
+        "endianness": { "type": "string", "enum": ["big_endian", "little_endian"] },
+        "bit_order": { "type": "string", "enum": ["msb_first", "lsb_first"] }
+      }
+    },
+    "TypeDef": {
+      "oneOf": [
+        { "$ref": "#/definitions/SequenceType" },
+        { "$ref": "#/definitions/ChoiceType" },
+        { "$ref": "#/definitions/EnumType" },
+        { "$ref": "#/definitions/WrapperType" }
+      ]
+    },
+    "SequenceType": {
+      "type": "object",
+      "required": ["sequence"],
+      "properties": {
+        "sequence": { "type": "array", "items": { "$ref": "#/definitions/Field" } },
+        "instances": { "type": "array" },
+        "description": { "type": "string" }
+      }
+    },
+    "ChoiceType": {
+      "type": "object",
+      "required": ["choice"],
+      "properties": {
+        "choice": {
+          "type": "object",
+          "required": ["discriminator", "variants"],
+          "properties": {
+            "discriminator": { "type": "string" },
+            "variants": { "type": "object", "additionalProperties": { "type": "string" } },
+            "terminal_variants": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "EnumType": {
+      "type": "object",
+      "required": ["enum"],
+      "properties": {
+        "enum": {
+          "type": "object",
+          "properties": {
+            "underlying_type": { "type": "string", "enum": ["uint8", "uint16", "uint32"] },
+            "values": { "type": "object", "additionalProperties": { "type": "integer" } }
+          }
+        }
+      }
+    },
+    "WrapperType": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "kind": { "type": "string" },
+        "items": { "$ref": "#/definitions/ElementType" },
+        "length": { "type": "integer" },
+        "length_type": { "type": "string" },
+        "count": { "type": "integer" },
+        "count_type": { "type": "string" },
+        "encoding": { "type": "string" },
+        "terminator": { "type": "integer" },
+        "endianness": { "type": "string", "enum": ["big_endian", "little_endian"] },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" }
+      }
+    },
+    "ElementType": {
+      "oneOf": [
+        { "type": "string" },
+        { "$ref": "#/definitions/InlineElementType" }
+      ]
+    },
+    "InlineElementType": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "kind": { "type": "string" },
+        "length": { "type": "integer" },
+        "length_type": { "type": "string" },
+        "encoding": { "type": "string" },
+        "items": { "$ref": "#/definitions/ElementType" }
+      }
+    },
+    "Field": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "oneOf": [
+            { "enum": ["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "bit", "int", "string", "array", "varlength", "optional", "bitfield", "discriminated_union", "back_reference"] },
+            { "type": "string", "pattern": "^[A-Z]" }
+          ],
+          "description": "Field type: either a built-in type or a user-defined type (must start with uppercase)"
+        },
+        "size": { "type": "integer" },
+        "signed": { "type": "boolean" },
+        "const": { "oneOf": [{ "type": "integer" }, { "type": "array", "items": { "type": "integer" } }] },
+        "computed": { "$ref": "#/definitions/ComputedField" },
+        "kind": { "type": "string" },
+        "items": { "$ref": "#/definitions/ElementType" },
+        "length": { "type": "integer" },
+        "length_type": { "type": "string" },
+        "length_field": { "type": "string" },
+        "count": { "type": "integer" },
+        "count_type": { "type": "string" },
+        "count_field": { "type": "string" },
+        "encoding": { "type": "string" },
+        "endianness": { "type": "string", "enum": ["big_endian", "little_endian"] },
+        "terminator": { "type": "integer" },
+        "inner_type": { "type": "string" },
+        "presence_type": { "type": "string" },
+        "fields": { "type": "array" },
+        "discriminator_field": { "type": "string" },
+        "variants": { "oneOf": [{ "type": "object" }, { "type": "array", "items": { "type": "string" } }] },
+        "conditional": { "oneOf": [{ "type": "string" }, { "type": "object" }] },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "description": { "type": "string" }
+      }
+    },
+    "ComputedField": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["length_of", "crc32_of", "position_of", "count_of", "sum_of_sizes", "sum_of_type_sizes"] },
+        "target": { "type": "string" },
+        "targets": { "type": "array", "items": { "type": "string" } },
+        "element_type": { "type": "string" },
+        "from_after_field": { "type": "string" },
+        "encoding": { "type": "string" },
+        "offset": { "type": "integer" }
+      }
+    },
+    "ProtocolDefinition": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "description": { "type": "string" },
+        "header_type": { "type": "string" },
+        "messages": { "type": "array", "items": { "$ref": "#/definitions/ProtocolMessage" } },
+        "constants": { "oneOf": [{ "type": "array", "items": { "$ref": "#/definitions/ProtocolConstant" } }, { "type": "object" }] }
+      }
+    },
+    "ProtocolMessage": {
+      "type": "object",
+      "required": ["name", "code", "payload_type"],
+      "properties": {
+        "name": { "type": "string" },
+        "code": { "oneOf": [{ "type": "integer" }, { "type": "string" }] },
+        "direction": { "type": "string", "enum": ["client_to_server", "server_to_client", "bidirectional"] },
+        "payload_type": { "type": "string" },
+        "description": { "type": "string" },
+        "notes": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+        "example": { "type": "object" }
+      }
+    },
+    "ProtocolConstant": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string" },
+        "value": {},
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

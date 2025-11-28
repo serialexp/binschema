@@ -1941,6 +1941,22 @@ function validateTerminalVariants(schema: any): { valid: boolean; error?: string
 }
 
 /**
+ * Schema metadata - title, description, version for documentation
+ */
+export const MetaSchema = z.object({
+  title: z.string().optional().meta({
+    description: "Human-readable title for the schema (e.g., 'PNG Image Format')"
+  }),
+  description: z.string().optional().meta({
+    description: "Brief description of what this schema defines"
+  }),
+  version: z.string().optional().meta({
+    description: "Version string (e.g., '1.0', 'RFC 2083')"
+  }),
+});
+export type Meta = z.infer<typeof MetaSchema>;
+
+/**
  * Complete binary schema definition
  *
  * A schema can be either:
@@ -1952,6 +1968,7 @@ function validateTerminalVariants(schema: any): { valid: boolean; error?: string
  * - With 'protocol': Allow field references to header fields from payload types
  */
 export const BinarySchemaSchema = z.object({
+  meta: MetaSchema.optional(), // Optional: schema metadata for documentation
   config: ConfigSchema,
   types: z.record(z.string(), TypeDefSchema), // Map of type name → definition
   protocol: ProtocolDefinitionSchema.optional(), // Optional: protocol header and messages

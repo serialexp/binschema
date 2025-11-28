@@ -50,6 +50,9 @@ export {
   type BinarySchema,
   type Schema,
   defineBinarySchema,
+  // Meta types
+  MetaSchema,
+  type Meta,
   // Config types
   type Config,
   type Endianness,

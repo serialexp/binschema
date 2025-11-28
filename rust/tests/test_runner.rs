@@ -38,7 +38,7 @@ fn load_test_suite(path: &PathBuf) -> Result<TestSuite, Box<dyn std::error::Erro
 
 #[test]
 fn test_run_primitive_suites() {
-    let tests_dir = "../tests-json/primitives";
+    let tests_dir = "../.generated/tests-json/primitives";
     let test_files = find_test_files(tests_dir);
 
     println!("Found {} primitive test files", test_files.len());

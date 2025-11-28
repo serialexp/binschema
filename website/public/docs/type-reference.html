@@ -1166,6 +1166,18 @@
                       <td>Field type (always &#039;uint8&#039;)</td>
                     </tr>
                     <tr>
+                      <td><code>const</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 0, max: 255)</span></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Constant value for this field (used as discriminator in choice types). Mutually exclusive with &#039;computed&#039;.</td>
+                    </tr>
+                    <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of). Mutually exclusive with &#039;const&#039;.</td>
+                    </tr>
+                    <tr>
                       <td><code>description</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
@@ -1358,6 +1370,18 @@
                       <td>Field type (always &#039;uint16&#039;)</td>
                     </tr>
                     <tr>
+                      <td><code>const</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 0, max: 65535)</span></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Constant value for this field (used as discriminator in choice types). Mutually exclusive with &#039;computed&#039;.</td>
+                    </tr>
+                    <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of). Mutually exclusive with &#039;const&#039;.</td>
+                    </tr>
+                    <tr>
                       <td><code>endianness</code></td>
                       <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
@@ -1470,6 +1494,18 @@
                       <td><code>literal &quot;uint32&quot;</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td>Field type (always &#039;uint32&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>const</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 0, max: 4294967295)</span></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Constant value for this field (used as discriminator in choice types). Mutually exclusive with &#039;computed&#039;.</td>
+                    </tr>
+                    <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of). Mutually exclusive with &#039;const&#039;.</td>
                     </tr>
                     <tr>
                       <td><code>endianness</code></td>
@@ -1685,6 +1721,12 @@
                       <td>Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified.</td>
                     </tr>
                     <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of)</td>
+                    </tr>
+                    <tr>
                       <td><code>description</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
@@ -1890,6 +1932,12 @@
                       <td>Field type (always &#039;int8&#039;)</td>
                     </tr>
                     <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of)</td>
+                    </tr>
+                    <tr>
                       <td><code>description</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
@@ -1989,6 +2037,12 @@
                       <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td>Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified.</td>
+                    </tr>
+                    <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of)</td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
@@ -2092,6 +2146,12 @@
                       <td>Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified.</td>
                     </tr>
                     <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of)</td>
+                    </tr>
+                    <tr>
                       <td><code>description</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
@@ -2192,6 +2252,12 @@
                       <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td>Byte order for multi-byte values (big_endian or little_endian). Overrides global config if specified.</td>
+                    </tr>
+                    <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of, crc32_of)</td>
                     </tr>
                     <tr>
                       <td><code>description</code></td>
@@ -2482,164 +2548,13 @@
         </div>
         <div class="type-category">
           <h3>Complex Types</h3>
-          <details class="type-details" id="type-string">
-            <summary>
-              <h4><code>string</code></h4>
-              <span class="type-title">String</span>
-            </summary>
-            <div class="type-content">
-              <p class="type-description">Variable or fixed-length text field with UTF-8 or ASCII encoding. Can be length-prefixed, fixed-length, or null-terminated.</p>
-              <div class="use-for">
-                <strong>Use for:</strong> Usernames, messages, labels, text data, identifiers
-              </div>
-              <div class="wire-format">
-                <div class="wire-diagram">
-                  <div class="field" style="flex: 1">
-                    <div class="field-name">length</div>
-                    <div class="field-type">uint8</div>
-                    <div class="field-size">1 byte</div>
-                  </div>
-                  <div class="field" style="flex: 4">
-                    <div class="field-name">data</div>
-                    <div class="field-type">utf8 char[]</div>
-                    <div class="field-size">length × 1 byte</div>
-                  </div>
-                </div>
-              </div>
-              <div class="fields-table">
-                <h5>Properties</h5>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Property</th>
-                      <th>Type</th>
-                      <th>Required</th>
-                      <th>Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td><code>name</code></td>
-                      <td><code>string</code></td>
-                      <td><span class="badge badge-required">required</span></td>
-                      <td>Field name</td>
-                    </tr>
-                    <tr>
-                      <td><code>type</code></td>
-                      <td><code>literal &quot;string&quot;</code></td>
-                      <td><span class="badge badge-required">required</span></td>
-                      <td>Field type (always &#039;string&#039;)</td>
-                    </tr>
-                    <tr>
-                      <td><code>kind</code></td>
-                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;null_terminated&quot; | &quot;field_referenced&quot;)</code></td>
-                      <td><span class="badge badge-required">required</span></td>
-                      <td></td>
-                    </tr>
-                    <tr>
-                      <td><code>encoding</code></td>
-                      <td><code>default</code></td>
-                      <td><span class="badge badge-optional">optional</span></td>
-                      <td></td>
-                    </tr>
-                    <tr>
-                      <td><code>length</code></td>
-                      <td><code>number</code> <span class="constraints">(min: 1)</span></td>
-                      <td><span class="badge badge-optional">optional</span></td>
-                      <td></td>
-                    </tr>
-                    <tr>
-                      <td><code>length_type</code></td>
-                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
-                      <td><span class="badge badge-optional">optional</span></td>
-                      <td></td>
-                    </tr>
-                    <tr>
-                      <td><code>description</code></td>
-                      <td><code>string</code></td>
-                      <td><span class="badge badge-optional">optional</span></td>
-                      <td>Human-readable description of this field</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="tabs-container">
-                <h5>Generated Code</h5>
-                <div class="tabs">
-                  <button class="tab-button active" data-lang="typescript">Typescript</button>
-                  <button class="tab-button" data-lang="go">Go</button>
-                  <button class="tab-button" data-lang="rust">Rust</button>
-                </div>
-                <div class="tab-content active" data-lang="typescript">
-                  <div class="code-type">
-                    <strong>Type:</strong> <code>string</code>
-                  </div>
-                  <ul class="code-notes">
-                    <li>JavaScript string type</li>
-                    <li>Automatically handles UTF-8 encoding</li>
-                  </ul>
-                </div>
-                <div class="tab-content" data-lang="go">
-                  <div class="code-type">
-                    <strong>Type:</strong> <code>string</code>
-                  </div>
-                  <ul class="code-notes">
-                    <li>Native Go string type</li>
-                    <li>UTF-8 by default</li>
-                  </ul>
-                </div>
-                <div class="tab-content" data-lang="rust">
-                  <div class="code-type">
-                    <strong>Type:</strong> <code>String</code>
-                  </div>
-                  <ul class="code-notes">
-                    <li>Rust String type (heap-allocated)</li>
-                    <li>Always UTF-8</li>
-                  </ul>
-                </div>
-              </div>
-              <div class="notes">
-                <h5>Notes</h5>
-                <ul class="notes-list">
-                  <li>Length-prefixed is most common for variable-length strings</li>
-                  <li>Fixed-length strings are padded/truncated to exact size</li>
-                  <li>Null-terminated strings read until 0x00 byte</li>
-                </ul>
-              </div>
-              <div class="examples">
-                <h5>Examples</h5>
-                <pre><code>[
-  {
-    <span class="json-key">"name"</span>: <span class="json-string">&quot;nickname&quot;</span>,
-    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-string" class="type-link">string</a>&quot;</span>,
-    <span class="json-key">"kind"</span>: <span class="json-string">&quot;length_prefixed&quot;</span>,
-    <span class="json-key">"length_type"</span>: <span class="json-string">&quot;uint8&quot;</span>
-  },
-  {
-    <span class="json-key">"name"</span>: <span class="json-string">&quot;username&quot;</span>,
-    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-string" class="type-link">string</a>&quot;</span>,
-    <span class="json-key">"kind"</span>: <span class="json-string">&quot;length_prefixed&quot;</span>,
-    <span class="json-key">"length_type"</span>: <span class="json-string">&quot;uint16&quot;</span>,
-    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;utf8&quot;</span>
-  },
-  {
-    <span class="json-key">"name"</span>: <span class="json-string">&quot;code&quot;</span>,
-    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-string" class="type-link">string</a>&quot;</span>,
-    <span class="json-key">"kind"</span>: <span class="json-string">&quot;fixed&quot;</span>,
-    <span class="json-key">"length"</span>: <span class="json-number">8</span>,
-    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;ascii&quot;</span>
-  }
-]</code></pre>
-              </div>
-            </div>
-          </details>
           <details class="type-details" id="type-array">
             <summary>
               <h4><code>array</code></h4>
               <span class="type-title">Array</span>
             </summary>
             <div class="type-content">
-              <p class="type-description">Collection of elements of the same type. Supports fixed-length, length-prefixed, field-referenced, and null-terminated arrays.</p>
+              <p class="type-description">Collection of elements of the same type. Supports fixed-length, length-prefixed, byte-length-prefixed, field-referenced, and null-terminated arrays.</p>
               <div class="use-for">
                 <strong>Use for:</strong> Lists of items, message batches, repeated structures, variable-length data
               </div>
@@ -2678,7 +2593,7 @@
                     </tr>
                     <tr>
                       <td><code>kind</code></td>
-                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;null_terminated&quot; | &quot;field_referenced&quot;)</code></td>
+                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;byte_length_prefixed&quot; | &quot;null_terminated&quot; | &quot;signature_terminated&quot; | &quot;eof_terminated&quot; | &quot;field_referenced&quot; | &quot;variant_terminated&quot;)</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
@@ -2705,13 +2620,19 @@
                     </tr>
                     <tr>
                       <td><code>length</code></td>
-                      <td><code>number</code> <span class="constraints">(min: 1)</span></td>
+                      <td><code>number</code> <span class="constraints">(min: 0)</span></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>length_type</code></td>
-                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot; | &quot;varlength&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>length_encoding</code></td>
+                      <td><code>enum (&quot;der&quot; | &quot;leb128&quot; | &quot;ebml&quot;)</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2728,20 +2649,38 @@
                       <td></td>
                     </tr>
                     <tr>
+                      <td><code>terminator_value</code></td>
+                      <td><code>number</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminator_type</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminator_endianness</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
                       <td><code>variants</code></td>
-                      <td><code>Array&lt;string&gt;</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>notes</code></td>
-                      <td><code>Array&lt;string&gt;</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
                     <tr>
                       <td><code>terminal_variants</code></td>
-                      <td><code>Array&lt;string&gt;</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
                     </tr>
@@ -2878,7 +2817,7 @@
                     <tr>
                       <td><code>presence_type</code></td>
                       <td><code>default</code></td>
-                      <td><span class="badge badge-optional">optional</span></td>
+                      <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
                     <tr>
@@ -3027,7 +2966,7 @@
                     </tr>
                     <tr>
                       <td><code>variants</code></td>
-                      <td><code>Array&lt;object&gt;</code> <span class="constraints">(min length: 1)</span></td>
+                      <td><code>array</code> <span class="constraints">(min length: 1)</span></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
@@ -3182,7 +3121,7 @@
                     </tr>
                     <tr>
                       <td><code>fields</code></td>
-                      <td><code>Array&lt;object&gt;</code></td>
+                      <td><code>array</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
@@ -3322,6 +3261,12 @@
                       <td>Hex bitmask to extract offset bits from the storage integer (e.g., &#039;0x3FFF&#039; extracts lower 14 bits). Allows packing flags or type tags in unused bits.</td>
                     </tr>
                     <tr>
+                      <td><code>offset_from</code></td>
+                      <td><code>enum (&quot;message_start&quot; | &quot;current_position&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Reference point for offset calculation. &#039;message_start&#039; = offset from beginning of message (byte 0), &#039;current_position&#039; = relative offset from current read position</td>
+                    </tr>
+                    <tr>
                       <td><code>target_type</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-required">required</span></td>
@@ -3408,6 +3353,360 @@
     <span class="json-key">"description"</span>: <span class="json-string">&quot;Compressed domain name (DNS-style)&quot;</span>
   }
 ]</code></pre>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="type-category">
+          <h3>Other Types</h3>
+          <details class="type-details" id="type-conditional_field">
+            <summary>
+              <h4><code>conditional_field</code></h4>
+              <span class="type-title">Conditional Field</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Field that is only present on the wire if a condition evaluates to true. Condition references earlier fields.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Protocol extensions, optional sections, feature-flagged data
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Field is only encoded/decoded if condition is true. No presence indicator on wire.</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>conditional</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Human-readable description of this field</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>T | undefined</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>TypeScript union with undefined</li>
+                    <li>Undefined if condition false</li>
+                    <li>Type T depends on type field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>*T or separate bool</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go pointer (nil if absent) or separate present flag</li>
+                    <li>Type T depends on type field</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>Option&lt;T&gt;</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust Option enum</li>
+                    <li>None if condition false</li>
+                    <li>Type T depends on type field</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Condition is evaluated during encoding/decoding</li>
+                  <li>Supports dot notation for nested field access (e.g., &#039;header.flags.extended&#039;)</li>
+                  <li>Unlike optional type, no presence indicator is stored on wire</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;extended_data&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-uint32" class="type-link">uint32</a>&quot;</span>,
+    <span class="json-key">"conditional"</span>: <span class="json-string">&quot;flags.has_extended == 1&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;metadata&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;Metadata&quot;</span>,
+    <span class="json-key">"conditional"</span>: <span class="json-string">&quot;version &gt;= 2&quot;</span>
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-varlength">
+            <summary>
+              <h4><code>varlength</code></h4>
+              <span class="type-title">Variable-Length Integer</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Variable-length integer encoding that uses 1-N bytes depending on the value magnitude. Supports three encoding schemes: DER (ASN.1), LEB128 (protobuf), and EBML (Matroska/WebM).</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Length fields in TLV protocols, space-efficient integer encoding, protocol buffer varints, EBML element IDs
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>1-N bytes depending on value and encoding scheme</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal &quot;varlength&quot;</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field type (always &#039;varlength&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>encoding</code></td>
+                      <td><code>enum (&quot;der&quot; | &quot;leb128&quot; | &quot;ebml&quot; | &quot;vlq&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Variable-length encoding scheme: &#039;der&#039; (ASN.1 length), &#039;leb128&#039; (protobuf-style), or &#039;ebml&#039; (Matroska-style)</td>
+                    </tr>
+                    <tr>
+                      <td><code>max_bytes</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 1, max: 8)</span></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Maximum number of bytes for the encoded value (default: 4 for der, 5 for leb128, 8 for ebml)</td>
+                    </tr>
+                    <tr>
+                      <td><code>computed</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Marks this field as automatically computed (e.g., length_of)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Human-readable description of this field</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number | bigint</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>number for values up to 2^53-1</li>
+                    <li>bigint for larger values</li>
+                    <li>Encoding/decoding handled by runtime library</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>uint64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go uint64 type</li>
+                    <li>Encoding/decoding methods provided by runtime</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>u64</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust u64 type</li>
+                    <li>Encoding/decoding traits provided by runtime</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>DER encoding: 0x00-0x7F = short form (1 byte), 0x80+N = long form (1+N bytes)</li>
+                  <li>LEB128 encoding: MSB continuation bit, little-endian, 7 bits per byte</li>
+                  <li>EBML encoding: Leading zeros indicate width, self-synchronizing</li>
+                  <li>Choose encoding based on protocol requirements, not personal preference</li>
+                  <li>max_bytes limits maximum encoded size (default depends on encoding)</li>
+                </ul>
+              </div>
+              <div class="examples-table">
+                <h5>Examples</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;content_length&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;der&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;ASN.1 DER length field&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;field_number&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;leb128&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Protocol buffer field number&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;element_size&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;ebml&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;EBML element data size&quot;</span>
+  }
+]</code></pre></td>
+                        <td><pre><code>{
+  content_length: 500,      // DER: 0x81 0xC8 (2 bytes)
+  field_number: 150,        // LEB128: 0x96 0x01 (2 bytes)
+  element_size: 1024        // EBML: varies by width marker
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;content_length&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;der&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;ASN.1 DER length field&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;field_number&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;leb128&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Protocol buffer field number&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;element_size&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;ebml&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;EBML element data size&quot;</span>
+  }
+]</code></pre></td>
+                        <td><pre><code>Message{
+  ContentLength: 500,       // DER encoded
+  FieldNumber:   150,       // LEB128 encoded
+  ElementSize:   1024,      // EBML encoded
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;content_length&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;der&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;ASN.1 DER length field&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;field_number&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;leb128&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Protocol buffer field number&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;element_size&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-varlength" class="type-link">varlength</a>&quot;</span>,
+    <span class="json-key">"encoding"</span>: <span class="json-string">&quot;ebml&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;EBML element data size&quot;</span>
+  }
+]</code></pre></td>
+                        <td><pre><code>Message {
+  content_length: 500,      // DER encoded
+  field_number: 150,        // LEB128 encoded
+  element_size: 1024,       // EBML encoded
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </details>

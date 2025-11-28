@@ -180,18 +180,17 @@ For `byte_length_prefixed` arrays, we decided **not** to implement automatic two
 
 ## Next Steps
 
-### Phase 1: Complete Core Kerberos Types (Estimated: 4-6 hours)
+### Phase 1: Complete Core Kerberos Types ✅ COMPLETED
 
-1. **Fix PrincipalName** (1 hour)
-   - Currently just has tag/length fields
-   - Needs: `name-string` as `byte_length_prefixed` array of `KerberosString`
-   - Test with various principal formats: `user@REALM`, `service/host@REALM`
+1. **✅ Fix PrincipalName** - COMPLETED
+   - Already implemented with `byte_length_prefixed` array of `KerberosString`
+   - Tests passing for user principals and service principals
 
-2. **Fix EncryptedData** (30 minutes)
-   - Add OPTIONAL `kvno` field
-   - Needs conditional/choice handling for optional context tag `[1]`
+2. **✅ Fix EncryptedData** - COMPLETED
+   - Implemented OPTIONAL `kvno` field using `byte_length_prefixed` array with choice
+   - Tests passing for both with and without kvno
 
-3. **Implement PA-DATA** (1 hour)
+3. **✅ Implement PA-DATA** - COMPLETED
    ```asn1
    PA-DATA ::= SEQUENCE {
        padata-type   [1] Int32,
@@ -361,12 +360,384 @@ const message = {
 - ✅ `CLAUDE.md` - Documented pipe filter syntax, ./tmp/ usage
 - ✅ `docs/KERBEROS_IMPLEMENTATION.md` - This file
 
+## Latest Update (2025-11-22) - Session 2
+
+### Completed
+1. **KDC-REQ-BODY** - Core request body structure ✅
+   - Implemented with required fields: kdc-options, realm, till, nonce, etype
+   - Added helper types: KDCOptions (BIT STRING), KerberosTime, SequenceOfInt32
+   - OPTIONAL field support via byte_length_prefixed array + choice
+   - Tests passing: 1/1 ✅
+
+2. **AS-REQ** - Authentication Service Request ✅
+   - Full message structure with APPLICATION tag [10] = 0x6A
+   - Fields: pvno, msg-type, padata (OPTIONAL), req-body
+   - Added SequenceOfPAData for padata field
+   - Tests passing: 1/1 ✅
+
+3. **Helper Types Implemented**:
+   - `KDCOptions` - 32-bit bitfield as ASN.1 BIT STRING
+   - `KerberosTime` - Timestamp (alias to KerberosString for now)
+   - `SequenceOfInt32` - List of encryption types
+   - `SequenceOfPAData` - List of pre-authentication data
+   - `UInt32` - Unsigned 32-bit integer
+
+## Earlier Updates (2025-11-22) - Session 1
+
+### Completed
+1. **EncryptedData with OPTIONAL kvno** - Successfully implemented using byte_length_prefixed array with choice
+   - Fixed choice value structure (fields must be flattened, not nested under `value`)
+   - Fixed test data (ASN.1 DER length fields must match actual content lengths)
+   - Tests passing: 2/2 ✅
+
+2. **PA-DATA** - Fully implemented
+   - Simple SEQUENCE with two required context-tagged fields
+   - Tests passing: 2/2 ✅
+
+### Key Learning: Choice Value Structure
+When using choice types in arrays, the value structure must flatten the choice item fields:
+
+**CORRECT:**
+```javascript
+{
+  type: "EncryptedData_Field_Etype",
+  tag: 0xA0,
+  length: 3,
+  value: { ...Int32... }
+}
+```
+
+**INCORRECT:**
+```javascript
+{
+  type: "EncryptedData_Field_Etype",
+  value: {  // ❌ Don't nest under value
+    tag: 0xA0,
+    length: 3,
+    value: { ...Int32... }
+  }
+}
+```
+
+### Test Results
+All Kerberos tests passing: **15/15** ✅
+- kerberos_int32: 3/3
+- kerberos_octet_string: 3/3
+- kerberos_principal_name: 3/3
+- kerberos_encrypted_data: 2/2
+- kerberos_pa_data: 2/2
+- kerberos_kdc_req_body: 1/1
+- kerberos_as_req: 1/1
+
+## Next Phase: Building a Working Kerberos Client
+
+Now that we can decode real Kerberos messages, let's build a client that can actually authenticate!
+
+### Phase: Implement Kerberos Client Authentication
+
+**Goal**: Use our BinSchema implementation to authenticate with a real KDC and obtain a ticket.
+
+#### Prerequisites (Already Complete! ✅)
+- ✅ AS-REQ encoder/decoder working
+- ✅ AS-REP encoder/decoder working
+- ✅ KDC running on localhost (port 88)
+- ✅ Test principal: `testuser@SERIAL-EXPERIMENTS.COM` with password `testpass`
+- ✅ Real packet captures for reference
+
+#### Step 1: Understand the Authentication Flow
+
+**What happens during Kerberos authentication:**
+
+1. **Client → KDC: AS-REQ (no pre-auth)**
+   - Client announces: "I'm testuser, I want a ticket for krbtgt"
+   - Includes: supported encryption types, requested ticket lifetime
+   - **KDC Response**: KRB-ERROR "you need pre-authentication"
+
+2. **Client generates pre-auth data:**
+   - Take current timestamp (e.g., "20251122073000Z")
+   - Derive encryption key from password using string2key function
+   - Encrypt timestamp with user's key
+   - This proves the client knows the password without sending it
+
+3. **Client → KDC: AS-REQ (with pre-auth)**
+   - Same request as before, BUT:
+   - Includes PA-DATA with encrypted timestamp
+   - **KDC Response**: AS-REP with ticket!
+
+4. **Client processes AS-REP:**
+   - Extract the ticket (encrypted for TGS, can't decrypt)
+   - Decrypt enc-part using user's key
+   - Extract session key from decrypted data
+   - Store ticket + session key for later use
+
+#### Step 2: Implement Cryptographic Primitives (Estimated: 3-4 hours)
+
+We need crypto support to actually authenticate. The captures show encryption type 18 (AES256-CTS-HMAC-SHA1-96).
+
+**Files to create:**
+- `src/kerberos/crypto.ts` - Crypto operations
+- `src/kerberos/string2key.ts` - Password → key derivation
+
+**Required operations:**
+
+1. **String2key (RFC 3962)**
+   ```typescript
+   function string2key(password: string, salt: string, iterCount: number): Uint8Array {
+     // PBKDF2-SHA1 with AES256 key size (32 bytes)
+     // Salt format: realm + principal (e.g., "SERIAL-EXPERIMENTS.COMtestuser")
+     // Iterations: typically 4096
+   }
+   ```
+
+2. **Encrypt/Decrypt with AES256-CTS-HMAC-SHA1-96**
+   ```typescript
+   function encryptTimestamp(timestamp: string, key: Uint8Array): Uint8Array {
+     // Encode timestamp as PA-ENC-TIMESTAMP structure
+     // Encrypt with AES256-CTS
+     // Add HMAC-SHA1 checksum (first 96 bits)
+   }
+
+   function decryptEncPart(ciphertext: Uint8Array, key: Uint8Array): any {
+     // Verify HMAC
+     // Decrypt with AES256-CTS
+     // Decode EncASRepPart structure
+     // Extract session key
+   }
+   ```
+
+3. **Current timestamp**
+   ```typescript
+   function getKerberosTime(): string {
+     // Format: "YYYYMMDDHHmmssZ" (e.g., "20251122073000Z")
+     return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+   }
+   ```
+
+**Notes:**
+- Can use Node.js `crypto` module for PBKDF2, AES, HMAC
+- AES-CTS (Ciphertext Stealing) is tricky - may need library or careful implementation
+- Kerberos uses specific padding/checksum schemes - must follow RFC 3961/3962 exactly
+
+#### Step 3: Build AS-REQ Message (Estimated: 2 hours)
+
+**Files to create:**
+- `src/kerberos/client.ts` - Main client logic
+
+**Function: buildASREQ**
+```typescript
+interface AS_REQOptions {
+  principal: string;       // "testuser"
+  realm: string;           // "SERIAL-EXPERIMENTS.COM"
+  password?: string;       // If provided, include pre-auth
+  service?: string;        // Default: "krbtgt/${realm}"
+  till?: string;           // Default: now + 10 hours
+  encTypes?: number[];     // Default: [18, 17, 20, 19, 16, 23, 25, 26]
+}
+
+function buildASREQ(options: AS_REQOptions): Uint8Array {
+  const nonce = crypto.randomBytes(4); // Random nonce
+  const till = options.till || getKerberosTime(Date.now() + 10 * 3600 * 1000);
+
+  const reqBody = {
+    kdc_options: buildKDCOptions({ forwardable: true, renewable: true }),
+    cname: buildPrincipalName(options.principal),
+    realm: options.realm,
+    sname: buildPrincipalName(options.service || `krbtgt/${options.realm}`),
+    till: till,
+    nonce: nonce,
+    etype: options.encTypes || [18, 17, 20, 19, 16, 23, 25, 26]
+  };
+
+  const padata = [];
+  if (options.password) {
+    // Generate pre-auth data
+    const salt = options.realm + options.principal;
+    const key = string2key(options.password, salt, 4096);
+    const timestamp = getKerberosTime();
+    const encryptedTS = encryptTimestamp(timestamp, key);
+
+    padata.push({
+      type: 2,      // PA-ENC-TIMESTAMP
+      value: encryptedTS
+    });
+  }
+
+  // Also announce supported pre-auth types
+  padata.push({ type: 150, value: [] });  // PA-REQ-ENC-PA-REP
+  padata.push({ type: 149, value: [] });  // PA-PK-AS-REQ
+
+  const asReq = {
+    pvno: 5,
+    msg_type: 10,
+    padata: padata.length > 0 ? padata : undefined,
+    req_body: reqBody
+  };
+
+  // Use our BinSchema encoder!
+  const encoder = new AS_REQEncoder();
+  return encoder.encode(asReq);
+}
+```
+
+#### Step 4: Implement Network Communication (Estimated: 1 hour)
+
+**Function: sendToKDC**
+```typescript
+import { createSocket } from 'dgram';
+
+async function sendToKDC(request: Uint8Array, kdcHost: string, kdcPort: number = 88): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    const socket = createSocket('udp4');
+
+    // Kerberos over UDP: prepend 4-byte length (not needed actually, UDP has implicit length)
+    // Just send the raw request
+
+    socket.on('message', (response) => {
+      socket.close();
+      resolve(new Uint8Array(response));
+    });
+
+    socket.on('error', (err) => {
+      socket.close();
+      reject(err);
+    });
+
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      socket.close();
+      reject(new Error('KDC timeout'));
+    }, 5000);
+
+    socket.send(request, kdcPort, kdcHost);
+  });
+}
+```
+
+**Note**: Kerberos can use UDP (port 88) or TCP (port 88). UDP is simpler for initial implementation. If message > 1400 bytes, KDC may respond with error suggesting TCP - handle that later.
+
+#### Step 5: Put It All Together (Estimated: 2 hours)
+
+**Main authentication function:**
+```typescript
+async function authenticate(principal: string, password: string, realm: string, kdcHost: string = 'localhost'): Promise<Ticket> {
+  console.log(`Authenticating ${principal}@${realm}...`);
+
+  // Step 1: Try without pre-auth (will likely fail, but good for testing)
+  console.log('Sending AS-REQ without pre-auth...');
+  const req1 = buildASREQ({ principal, realm });
+  const resp1 = await sendToKDC(req1, kdcHost);
+
+  // Decode response
+  const tag = resp1[0];
+  if (tag === 0x7E) {
+    // KRB-ERROR
+    console.log('Received KRB-ERROR (expected - need pre-auth)');
+    // Parse error to confirm it's "preauth required"
+  }
+
+  // Step 2: Send with pre-auth
+  console.log('Sending AS-REQ with encrypted timestamp...');
+  const req2 = buildASREQ({ principal, realm, password });
+  const resp2 = await sendToKDC(req2, kdcHost);
+
+  // Decode AS-REP
+  if (resp2[0] !== 0x6B) {
+    throw new Error(`Expected AS-REP (0x6B), got 0x${resp2[0].toString(16)}`);
+  }
+
+  console.log('Received AS-REP! Decoding...');
+  const asRep = new AS_REPDecoder(resp2).decode();
+
+  // Extract ticket
+  const ticket = asRep.fields.find(f => f.type === 'AS_REP_Field_Ticket').value;
+
+  // Decrypt enc-part to get session key
+  const encPart = asRep.fields.find(f => f.type === 'AS_REP_Field_EncPart').value;
+  const salt = realm + principal;
+  const key = string2key(password, salt, 4096);
+  const decrypted = decryptEncPart(encPart.fields.find(f => f.type === 'EncryptedData_Field_Cipher').value, key);
+
+  console.log('✅ Authentication successful!');
+  console.log(`Session key: ${Buffer.from(decrypted.key).toString('hex')}`);
+  console.log(`Ticket valid until: ${decrypted.endtime}`);
+
+  return {
+    ticket: ticket,
+    sessionKey: decrypted.key,
+    endtime: decrypted.endtime
+  };
+}
+```
+
+**Test it:**
+```typescript
+// In tmp/test-auth.ts
+const ticket = await authenticate('testuser', 'testpass', 'SERIAL-EXPERIMENTS.COM');
+console.log('Got ticket:', ticket);
+```
+
+#### Step 6: Compare with Real Traffic (Estimated: 1 hour)
+
+**Validation approach:**
+1. Run our client, capture traffic
+2. Compare our AS-REQ with the real one from `/tmp/kerberos-packet-1-AS-REQ.bin`
+3. Verify byte-for-byte match (except for nonce and timestamp which will differ)
+4. Decode the AS-REP we receive
+5. Confirm we can decrypt the enc-part and extract session key
+
+**Expected output:**
+```
+Authenticating testuser@SERIAL-EXPERIMENTS.COM...
+Sending AS-REQ without pre-auth...
+Received KRB-ERROR (expected - need pre-auth)
+  Error code: 25 (KDC_ERR_PREAUTH_REQUIRED)
+Sending AS-REQ with encrypted timestamp...
+Received AS-REP! Decoding...
+✅ Authentication successful!
+Session key: a1b2c3d4e5f6... (32 bytes)
+Ticket valid until: 20251123073000Z
+Ticket length: 471 bytes
+```
+
+#### Challenges & Solutions
+
+**Challenge 1: AES-CTS Implementation**
+- **Solution**: Use existing library like `@noble/ciphers` or implement CTS mode carefully
+- **Alternative**: Start with a simpler encryption type if available (like DES3, though deprecated)
+
+**Challenge 2: PBKDF2 Iterations**
+- **Solution**: Check KDC configuration (`/etc/krb5kdc/kdc.conf`) for iteration count
+- **Default**: 4096 for MIT Kerberos
+
+**Challenge 3: Exact PA-ENC-TIMESTAMP Format**
+- **Solution**: Capture real traffic with pre-auth, examine the encrypted data structure
+- **Format**: ASN.1 SEQUENCE with patimestamp and pausec (microseconds)
+
+**Challenge 4: Byte Alignment**
+- **Solution**: Our BinSchema implementation handles this - just ensure we build the value structures correctly
+
+#### Success Criteria
+
+✅ Our client sends AS-REQ that KDC accepts
+✅ We receive AS-REP from KDC
+✅ We can decrypt enc-part and extract session key
+✅ Ticket can be stored and used (for future TGS-REQ)
+
+**Bonus**: Store ticket in credential cache format (`/tmp/krb5cc_*`) so system tools like `klist` can read it!
+
+#### Total Estimated Time: 9-11 hours
+
+This is a meaty project but totally achievable! The hard part (protocol implementation) is done. Now it's "just" crypto and network communication.
+
 ## Resources
 
 - **RFC 4120**: Kerberos V5 specification - https://www.rfc-editor.org/rfc/rfc4120
+- **RFC 3961**: Kerberos Encryption and Checksum Specifications - https://www.rfc-editor.org/rfc/rfc3961
+- **RFC 3962**: AES Encryption for Kerberos 5 - https://www.rfc-editor.org/rfc/rfc3962
 - **ASN.1 Tutorial**: ITU-T X.680 (ASN.1 specification)
 - **DER Encoding**: ITU-T X.690 (Distinguished Encoding Rules)
 - **Test KDC Setup**: MIT Kerberos or Heimdal documentation
+- **Captured Packets**: `/tmp/kerberos-packet-*.bin` - Real reference implementations!
 
 ## Lessons Learned
 

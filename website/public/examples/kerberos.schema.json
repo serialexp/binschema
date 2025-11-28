@@ -1,0 +1,563 @@
+{
+  "meta": {
+    "title": "Kerberos V5 Protocol",
+    "version": "RFC 4120",
+    "description": "Kerberos V5 authentication protocol with ASN.1 DER encoding. Includes AS-REQ/AS-REP message structures for initial authentication."
+  },
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "DERLength": {
+      "description": "DER/BER length encoding - used throughout ASN.1 structures",
+      "sequence": [
+        {
+          "name": "value",
+          "type": "varlength",
+          "encoding": "der",
+          "description": "Variable-length integer (0-127: 1 byte, 128+: long form)"
+        }
+      ]
+    },
+    "DERTag": {
+      "description": "DER tag byte - identifies the type that follows",
+      "sequence": [
+        {
+          "name": "value",
+          "type": "uint8",
+          "description": "Tag byte (e.g., 0x30=SEQUENCE, 0x02=INTEGER, 0x04=OCTET STRING)"
+        }
+      ]
+    },
+    "Int32": {
+      "description": "ASN.1 INTEGER (32-bit signed) - Kerberos uses this for version numbers, message types, etc.",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x02, "description": "INTEGER tag" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        {
+          "name": "value",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Big-endian signed integer bytes"
+        }
+      ]
+    },
+    "OctetString": {
+      "description": "ASN.1 OCTET STRING - arbitrary byte sequences",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x04, "description": "OCTET STRING tag" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        {
+          "name": "value",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Raw octets"
+        }
+      ]
+    },
+    "KerberosString": {
+      "description": "ASN.1 GeneralString - UTF-8 encoded strings in Kerberos",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x1B, "description": "GeneralString tag" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        {
+          "name": "value",
+          "type": "string",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "encoding": "utf8",
+          "description": "UTF-8 encoded string"
+        }
+      ]
+    },
+    "ContextTag": {
+      "description": "ASN.1 context-specific tag [N] - used for field numbering in SEQUENCE",
+      "sequence": [
+        {
+          "name": "value",
+          "type": "uint8",
+          "description": "Context tag (0xA0 + field_number)"
+        }
+      ]
+    },
+    "PrincipalName": {
+      "description": "Kerberos principal name (user@REALM or service/host@REALM)",
+      "notes": [
+        "RFC 4120 Section 5.2.2",
+        "PrincipalName ::= SEQUENCE {",
+        "  name-type   [0] Int32,",
+        "  name-string [1] SEQUENCE OF KerberosString",
+        "}"
+      ],
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE tag" },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "sequence_tag" } },
+
+        { "name": "name_type_tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
+        { "name": "name_type_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "name_type" } },
+        { "name": "name_type", "type": "Int32", "description": "0=unknown, 1=principal, 2=service, 3=SRV-INST" },
+
+        { "name": "name_string_tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
+        { "name": "name_string_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "name_string_tag" } },
+        { "name": "name_string_seq_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE OF" },
+        {
+          "name": "name_string",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": { "type": "KerberosString" },
+          "description": "Array of string components (e.g., ['user'] or ['service', 'host'])"
+        }
+      ]
+    },
+    "Realm": {
+      "description": "Kerberos realm name - typically uppercase domain (e.g., EXAMPLE.COM)",
+      "notes": [
+        "RFC 4120: Realm ::= KerberosString"
+      ],
+      "type": "KerberosString"
+    },
+    "EncryptedData_Field_Etype": {
+      "description": "EncryptedData field [0] - encryption type",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Int32", "description": "Encryption algorithm ID" }
+      ]
+    },
+    "UInt32": {
+      "description": "ASN.1 INTEGER (32-bit unsigned)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x02, "description": "INTEGER tag" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        {
+          "name": "value",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Big-endian unsigned integer bytes"
+        }
+      ]
+    },
+    "EncryptedData_Field_Kvno": {
+      "description": "EncryptedData field [1] - key version number (OPTIONAL)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "UInt32", "description": "Key version number" }
+      ]
+    },
+    "EncryptedData_Field_Cipher": {
+      "description": "EncryptedData field [2] - ciphertext",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA2, "description": "Context [2]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "OctetString", "description": "Encrypted bytes" }
+      ]
+    },
+    "KDCOptions": {
+      "description": "KDC options bitfield (32 bits)",
+      "notes": [
+        "RFC 4120 Section 5.4.1",
+        "Bit flags: forwardable, forwarded, proxiable, proxy, allow-postdate, postdated, etc.",
+        "Encoded as ASN.1 BIT STRING: tag + length + unused_bits + data",
+        "Length includes unused_bits byte + data bytes (e.g., 5 for 32-bit options)"
+      ],
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x03, "description": "BIT STRING tag" },
+        { "name": "total_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value", "offset": 1 }, "description": "Total: unused_bits(1) + value bytes" },
+        { "name": "unused_bits", "type": "uint8", "description": "Number of unused bits in last octet (usually 0)" },
+        {
+          "name": "value",
+          "type": "array",
+          "kind": "fixed",
+          "length": 4,
+          "items": { "type": "uint8" },
+          "description": "32 bits = 4 bytes"
+        }
+      ]
+    },
+    "KerberosTime": {
+      "description": "Kerberos timestamp - ASN.1 GeneralizedTime",
+      "notes": [
+        "RFC 4120: GeneralizedTime format YYYYMMDDHHmmssZ",
+        "Uses ASN.1 GeneralizedTime tag (0x18) not GeneralString (0x1B)"
+      ],
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0x18, "description": "GeneralizedTime tag" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        {
+          "name": "value",
+          "type": "string",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "encoding": "utf8",
+          "description": "Timestamp string in YYYYMMDDHHmmssZ format"
+        }
+      ]
+    },
+    "PA_DATA": {
+      "description": "Pre-authentication data - used in AS-REQ/AS-REP",
+      "notes": [
+        "RFC 4120 Section 5.2.7",
+        "PA-DATA ::= SEQUENCE {",
+        "  padata-type   [1] Int32,",
+        "  padata-value  [2] OCTET STRING",
+        "}"
+      ],
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE tag" },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "sequence_tag" } },
+
+        { "name": "padata_type_tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
+        { "name": "padata_type_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "padata_type" } },
+        { "name": "padata_type", "type": "Int32", "description": "Pre-authentication type" },
+
+        { "name": "padata_value_tag", "type": "uint8", "const": 0xA2, "description": "Context [2]" },
+        { "name": "padata_value_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "padata_value" } },
+        { "name": "padata_value", "type": "OctetString", "description": "Pre-authentication data" }
+      ]
+    },
+    "KDC_REQ_BODY_Field_KdcOptions": {
+      "description": "KDC-REQ-BODY field [0] - kdc-options",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "KDCOptions" }
+      ]
+    },
+    "KDC_REQ_BODY_Field_Cname": {
+      "description": "KDC-REQ-BODY field [1] - cname (OPTIONAL)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "PrincipalName" }
+      ]
+    },
+    "KDC_REQ_BODY_Field_Realm": {
+      "description": "KDC-REQ-BODY field [2] - realm",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA2, "description": "Context [2]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Realm" }
+      ]
+    },
+    "KDC_REQ_BODY_Field_Sname": {
+      "description": "KDC-REQ-BODY field [3] - sname (OPTIONAL)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA3, "description": "Context [3]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "PrincipalName" }
+      ]
+    },
+    "KDC_REQ_BODY_Field_Till": {
+      "description": "KDC-REQ-BODY field [5] - till (expiration time)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA5, "description": "Context [5]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "KerberosTime" }
+      ]
+    },
+    "KDC_REQ_BODY_Field_Nonce": {
+      "description": "KDC-REQ-BODY field [7] - nonce",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA7, "description": "Context [7]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "UInt32" }
+      ]
+    },
+    "SequenceOfInt32": {
+      "description": "ASN.1 SEQUENCE OF Int32 - list of encryption types",
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE tag" },
+        {
+          "name": "items",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": { "type": "Int32" },
+          "description": "List of Int32 values"
+        }
+      ]
+    },
+    "KDC_REQ_BODY_Field_Etype": {
+      "description": "KDC-REQ-BODY field [8] - etype (encryption types)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA8, "description": "Context [8]" },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "SequenceOfInt32" }
+      ]
+    },
+    "KDC_REQ_BODY": {
+      "description": "KDC request body - common to AS-REQ and TGS-REQ",
+      "notes": [
+        "RFC 4120 Section 5.4.1",
+        "Simplified version with required fields only for now",
+        "Uses byte_length_prefixed array with choice for OPTIONAL field support"
+      ],
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        {
+          "name": "fields",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": {
+            "type": "choice",
+            "discriminator": { "peek": "uint8" },
+            "choices": [
+              { "type": "KDC_REQ_BODY_Field_KdcOptions" },
+              { "type": "KDC_REQ_BODY_Field_Cname" },
+              { "type": "KDC_REQ_BODY_Field_Realm" },
+              { "type": "KDC_REQ_BODY_Field_Sname" },
+              { "type": "KDC_REQ_BODY_Field_Till" },
+              { "type": "KDC_REQ_BODY_Field_Nonce" },
+              { "type": "KDC_REQ_BODY_Field_Etype" }
+            ]
+          }
+        }
+      ]
+    },
+    "EncryptedData": {
+      "description": "Encrypted data container - holds encrypted content with algorithm ID",
+      "notes": [
+        "RFC 4120 Section 5.2.9",
+        "EncryptedData ::= SEQUENCE {",
+        "  etype   [0] Int32,        -- Encryption algorithm",
+        "  kvno    [1] UInt32 OPTIONAL,  -- Key version number",
+        "  cipher  [2] OCTET STRING  -- Ciphertext",
+        "}",
+        "NOTE: Uses byte_length_prefixed array with choice to handle OPTIONAL kvno field"
+      ],
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        {
+          "name": "fields",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": {
+            "type": "choice",
+            "discriminator": { "peek": "uint8" },
+            "choices": [
+              { "type": "EncryptedData_Field_Etype" },
+              { "type": "EncryptedData_Field_Kvno" },
+              { "type": "EncryptedData_Field_Cipher" }
+            ]
+          },
+          "description": "Fields in ASN.1 SEQUENCE - [0]=etype (required), [1]=kvno (optional), [2]=cipher (required)"
+        }
+      ]
+    },
+    "SequenceOfPAData": {
+      "description": "ASN.1 SEQUENCE OF PA-DATA",
+      "sequence": [
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        {
+          "name": "items",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": { "type": "PA_DATA" }
+        }
+      ]
+    },
+    "AS_REQ_Field_Pvno": {
+      "description": "AS-REQ field [1] - protocol version number",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA1 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Int32" }
+      ]
+    },
+    "AS_REQ_Field_MsgType": {
+      "description": "AS-REQ field [2] - message type",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA2 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Int32" }
+      ]
+    },
+    "AS_REQ_Field_Padata": {
+      "description": "AS-REQ field [3] - pre-authentication data (OPTIONAL)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA3 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "SequenceOfPAData" }
+      ]
+    },
+    "AS_REQ_Field_ReqBody": {
+      "description": "AS-REQ field [4] - request body",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA4 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "KDC_REQ_BODY" }
+      ]
+    },
+    "AS_REQ": {
+      "description": "Authentication Service Request",
+      "notes": [
+        "RFC 4120 Section 5.4.1",
+        "AS-REQ ::= [APPLICATION 10] SEQUENCE {...}",
+        "Application tag 10 = 0x6A"
+      ],
+      "sequence": [
+        { "name": "application_tag", "type": "uint8", "const": 0x6A, "description": "APPLICATION 10" },
+        { "name": "application_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "application_tag" } },
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        {
+          "name": "fields",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": {
+            "type": "choice",
+            "discriminator": { "peek": "uint8" },
+            "choices": [
+              { "type": "AS_REQ_Field_Pvno" },
+              { "type": "AS_REQ_Field_MsgType" },
+              { "type": "AS_REQ_Field_Padata" },
+              { "type": "AS_REQ_Field_ReqBody" }
+            ]
+          }
+        }
+      ]
+    },
+    "AS_REP_Field_Pvno": {
+      "description": "AS-REP field [0] - protocol version number",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA0 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Int32" }
+      ]
+    },
+    "AS_REP_Field_MsgType": {
+      "description": "AS-REP field [1] - message type",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA1 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Int32" }
+      ]
+    },
+    "AS_REP_Field_Padata": {
+      "description": "AS-REP field [2] - pre-authentication data (OPTIONAL)",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA2 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "SequenceOfPAData" }
+      ]
+    },
+    "AS_REP_Field_Crealm": {
+      "description": "AS-REP field [3] - client realm",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA3 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Realm" }
+      ]
+    },
+    "AS_REP_Field_Cname": {
+      "description": "AS-REP field [4] - client name",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA4 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "PrincipalName" }
+      ]
+    },
+    "AS_REP_Field_Ticket": {
+      "description": "AS-REP field [5] - ticket",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA5 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "Ticket" }
+      ]
+    },
+    "AS_REP_Field_EncPart": {
+      "description": "AS-REP field [6] - encrypted part",
+      "sequence": [
+        { "name": "tag", "type": "uint8", "const": 0xA6 },
+        { "name": "length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "EncryptedData" }
+      ]
+    },
+    "AS_REP": {
+      "description": "Authentication Service Reply",
+      "notes": [
+        "RFC 4120 Section 5.4.2",
+        "AS-REP ::= [APPLICATION 11] SEQUENCE {...}",
+        "Application tag 11 = 0x6B"
+      ],
+      "sequence": [
+        { "name": "application_tag", "type": "uint8", "const": 0x6B, "description": "APPLICATION 11" },
+        { "name": "application_length", "type": "varlength", "encoding": "der" },
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        {
+          "name": "fields",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "varlength",
+          "length_encoding": "der",
+          "items": {
+            "type": "choice",
+            "discriminator": { "peek": "uint8" },
+            "choices": [
+              { "type": "AS_REP_Field_Pvno" },
+              { "type": "AS_REP_Field_MsgType" },
+              { "type": "AS_REP_Field_Padata" },
+              { "type": "AS_REP_Field_Crealm" },
+              { "type": "AS_REP_Field_Cname" },
+              { "type": "AS_REP_Field_Ticket" },
+              { "type": "AS_REP_Field_EncPart" }
+            ]
+          }
+        }
+      ]
+    },
+    "Ticket": {
+      "description": "Kerberos ticket - credentials for authenticating to a service",
+      "notes": [
+        "RFC 4120 Section 5.3",
+        "Ticket ::= [APPLICATION 1] SEQUENCE {",
+        "  tkt-vno     [0] INTEGER (5),",
+        "  realm       [1] Realm,",
+        "  sname       [2] PrincipalName,",
+        "  enc-part    [3] EncryptedData",
+        "}"
+      ],
+      "sequence": [
+        { "name": "application_tag", "type": "uint8", "const": 0x61, "description": "APPLICATION 1 tag" },
+        { "name": "application_length", "type": "varlength", "encoding": "der" },
+
+        { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der" },
+
+        { "name": "version_tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
+        { "name": "version_length", "type": "varlength", "encoding": "der" },
+        { "name": "tkt_vno", "type": "Int32", "description": "Ticket version (always 5)" },
+
+        { "name": "realm_tag", "type": "uint8", "const": 0xA1 },
+        { "name": "realm_length", "type": "varlength", "encoding": "der" },
+        { "name": "realm", "type": "Realm" },
+
+        { "name": "sname_tag", "type": "uint8", "const": 0xA2 },
+        { "name": "sname_length", "type": "varlength", "encoding": "der" },
+        { "name": "sname", "type": "PrincipalName", "description": "Service principal name" },
+
+        { "name": "enc_part_tag", "type": "uint8", "const": 0xA3 },
+        { "name": "enc_part_length", "type": "varlength", "encoding": "der" },
+        { "name": "enc_part", "type": "EncryptedData", "description": "Encrypted ticket contents" }
+      ]
+    }
+  }
+}
+

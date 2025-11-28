@@ -1,0 +1,156 @@
+{
+  "meta": {
+    "title": "PNG Image Format",
+    "version": "RFC 2083",
+    "description": "Portable Network Graphics (PNG) file format. Chunk-based structure with signature, header, image data, and end marker."
+  },
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "PNGSignature": {
+      "description": "PNG file signature - 8 bytes that identify a PNG file",
+      "sequence": [
+        {
+          "name": "magic",
+          "type": "array",
+          "kind": "fixed",
+          "length": 8,
+          "items": { "type": "uint8" },
+          "const": [137, 80, 78, 71, 13, 10, 26, 10]
+        }
+      ]
+    },
+    "ChunkType": {
+      "description": "4-character ASCII chunk type code",
+      "type": "string",
+      "kind": "fixed",
+      "length": 4,
+      "encoding": "ascii"
+    },
+    "IHDRData": {
+      "description": "Image Header chunk data - contains image dimensions and format info",
+      "notes": [
+        "IHDR must appear first after the PNG signature",
+        "Color type determines how pixel data is interpreted:",
+        "  0 = Grayscale",
+        "  2 = Truecolor (RGB)",
+        "  3 = Indexed-color (palette)",
+        "  4 = Grayscale with alpha",
+        "  6 = Truecolor with alpha (RGBA)"
+      ],
+      "sequence": [
+        { "name": "width", "type": "uint32", "description": "Image width in pixels" },
+        { "name": "height", "type": "uint32", "description": "Image height in pixels" },
+        { "name": "bit_depth", "type": "uint8", "description": "Bits per sample or palette index (1, 2, 4, 8, or 16)" },
+        { "name": "color_type", "type": "uint8", "description": "Color type (0=gray, 2=RGB, 3=indexed, 4=gray+alpha, 6=RGBA)" },
+        { "name": "compression_method", "type": "uint8", "const": 0, "description": "Compression method (always 0 = deflate)" },
+        { "name": "filter_method", "type": "uint8", "const": 0, "description": "Filter method (always 0 = adaptive filtering)" },
+        { "name": "interlace_method", "type": "uint8", "description": "Interlace method (0=none, 1=Adam7)" }
+      ]
+    },
+    "RGB": {
+      "description": "RGB color triplet for palette entries",
+      "sequence": [
+        { "name": "r", "type": "uint8" },
+        { "name": "g", "type": "uint8" },
+        { "name": "b", "type": "uint8" }
+      ]
+    },
+    "pHYsData": {
+      "description": "Physical pixel dimensions chunk",
+      "sequence": [
+        { "name": "pixels_per_unit_x", "type": "uint32", "description": "Pixels per unit, X axis" },
+        { "name": "pixels_per_unit_y", "type": "uint32", "description": "Pixels per unit, Y axis" },
+        { "name": "unit", "type": "uint8", "description": "Unit specifier (0=unknown, 1=meter)" }
+      ]
+    },
+    "tIMEData": {
+      "description": "Image last-modification time chunk",
+      "sequence": [
+        { "name": "year", "type": "uint16", "description": "Year (e.g., 2024)" },
+        { "name": "month", "type": "uint8", "description": "Month (1-12)" },
+        { "name": "day", "type": "uint8", "description": "Day (1-31)" },
+        { "name": "hour", "type": "uint8", "description": "Hour (0-23)" },
+        { "name": "minute", "type": "uint8", "description": "Minute (0-59)" },
+        { "name": "second", "type": "uint8", "description": "Second (0-60, 60 for leap second)" }
+      ]
+    },
+    "gAMAData": {
+      "description": "Image gamma chunk",
+      "notes": ["Gamma value is stored as gamma * 100000"],
+      "sequence": [
+        {
+          "name": "gamma",
+          "type": "uint32",
+          "description": "Gamma times 100000 (e.g., 45455 = 1/2.2)"
+        }
+      ]
+    },
+    "sRGBData": {
+      "description": "Standard RGB color space chunk",
+      "sequence": [
+        {
+          "name": "rendering_intent",
+          "type": "uint8",
+          "description": "Rendering intent (0=perceptual, 1=relative, 2=saturation, 3=absolute)"
+        }
+      ]
+    },
+    "Chunk": {
+      "description": "PNG chunk structure - the basic building block of PNG files",
+      "notes": [
+        "Every chunk has: length (4) + type (4) + data (length) + CRC (4)",
+        "CRC is calculated over type + data bytes",
+        "Chunk types are case-sensitive 4-character ASCII codes",
+        "First letter: uppercase = critical, lowercase = ancillary",
+        "Second letter: uppercase = public, lowercase = private",
+        "Fourth letter: uppercase = unsafe to copy, lowercase = safe to copy"
+      ],
+      "sequence": [
+        {
+          "name": "length",
+          "type": "uint32",
+          "description": "Length of data field (not including type and CRC)"
+        },
+        {
+          "name": "type",
+          "type": "ChunkType",
+          "description": "4-character chunk type code"
+        },
+        {
+          "name": "data",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Chunk data (interpretation depends on type)"
+        },
+        {
+          "name": "crc",
+          "type": "uint32",
+          "description": "CRC32 of type + data (IEEE polynomial, not computed by schema)"
+        }
+      ]
+    },
+    "PNGFile": {
+      "description": "Complete PNG file structure",
+      "notes": [
+        "PNG files consist of a signature followed by chunks",
+        "IHDR must be first chunk, IEND must be last",
+        "At least one IDAT chunk must be present",
+        "Chunks are read until EOF (IEND is the last chunk before EOF)"
+      ],
+      "sequence": [
+        { "name": "signature", "type": "PNGSignature" },
+        {
+          "name": "chunks",
+          "type": "array",
+          "kind": "eof_terminated",
+          "items": { "type": "Chunk" },
+          "description": "All chunks (IHDR first, IEND last)"
+        }
+      ]
+    }
+  }
+}

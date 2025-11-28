@@ -1,5 +1,5 @@
 // ABOUTME: Loads JSON test suites and handles BigInt parsing for cross-language test compatibility
-// ABOUTME: Provides utilities for finding and parsing test files from the tests-json directory
+// ABOUTME: Provides utilities for finding and parsing test files from the .generated/tests-json directory
 package test
 
 import (

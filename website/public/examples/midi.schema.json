@@ -1,0 +1,319 @@
+{
+  "meta": {
+    "title": "Standard MIDI File Format",
+    "version": "1.0",
+    "description": "Standard MIDI File (SMF) format for storing MIDI sequences. Supports variable-length quantities, meta events, and multiple track chunks."
+  },
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "VLQ": {
+      "description": "Variable Length Quantity - MIDI's variable-length integer encoding",
+      "notes": [
+        "Each byte uses 7 bits for data, MSB is continuation flag",
+        "MSB=1: more bytes follow, MSB=0: this is the last byte",
+        "Maximum 4 bytes (28 bits of data), max value 0x0FFFFFFF",
+        "Example: 0x00 = 0, 0x7F = 127, 0x81 0x00 = 128, 0xFF 0xFF 0xFF 0x7F = 268435455"
+      ],
+      "type": "varlength",
+      "encoding": "vlq"
+    },
+    "HeaderChunk": {
+      "description": "MIDI file header chunk - contains file format and track info",
+      "notes": [
+        "Format 0: Single multi-channel track",
+        "Format 1: Multiple tracks, simultaneous (most common)",
+        "Format 2: Multiple tracks, independent sequences"
+      ],
+      "sequence": [
+        {
+          "name": "magic",
+          "type": "array",
+          "kind": "fixed",
+          "length": 4,
+          "items": { "type": "uint8" },
+          "const": [77, 84, 104, 100],
+          "description": "Chunk type 'MThd' (0x4D546864)"
+        },
+        {
+          "name": "length",
+          "type": "uint32",
+          "const": 6,
+          "description": "Header data length (always 6)"
+        },
+        {
+          "name": "format",
+          "type": "uint16",
+          "description": "MIDI file format (0, 1, or 2)"
+        },
+        {
+          "name": "num_tracks",
+          "type": "uint16",
+          "description": "Number of track chunks"
+        },
+        {
+          "name": "division",
+          "type": "uint16",
+          "description": "Time division (ticks per quarter note, or SMPTE)"
+        }
+      ]
+    },
+    "NoteOffEvent": {
+      "description": "Note Off event - stop playing a note",
+      "sequence": [
+        { "name": "note", "type": "uint8", "description": "Note number (0-127, middle C = 60)" },
+        { "name": "velocity", "type": "uint8", "description": "Release velocity (0-127)" }
+      ]
+    },
+    "NoteOnEvent": {
+      "description": "Note On event - start playing a note",
+      "notes": ["Velocity 0 is equivalent to Note Off"],
+      "sequence": [
+        { "name": "note", "type": "uint8", "description": "Note number (0-127)" },
+        { "name": "velocity", "type": "uint8", "description": "Attack velocity (0-127, 0=note off)" }
+      ]
+    },
+    "PolyphonicPressureEvent": {
+      "description": "Polyphonic Key Pressure (Aftertouch) - pressure on individual note",
+      "sequence": [
+        { "name": "note", "type": "uint8", "description": "Note number (0-127)" },
+        { "name": "pressure", "type": "uint8", "description": "Pressure value (0-127)" }
+      ]
+    },
+    "ControlChangeEvent": {
+      "description": "Control Change - modify a controller value",
+      "notes": [
+        "Common controllers: 1=modulation, 7=volume, 10=pan, 64=sustain pedal",
+        "Controllers 120-127 are Channel Mode messages"
+      ],
+      "sequence": [
+        { "name": "controller", "type": "uint8", "description": "Controller number (0-127)" },
+        { "name": "value", "type": "uint8", "description": "Controller value (0-127)" }
+      ]
+    },
+    "ProgramChangeEvent": {
+      "description": "Program Change - select instrument/patch",
+      "notes": ["General MIDI defines standard program numbers (0=piano, etc.)"],
+      "sequence": [
+        { "name": "program", "type": "uint8", "description": "Program number (0-127)" }
+      ]
+    },
+    "ChannelPressureEvent": {
+      "description": "Channel Pressure (Aftertouch) - pressure on entire channel",
+      "sequence": [
+        { "name": "pressure", "type": "uint8", "description": "Pressure value (0-127)" }
+      ]
+    },
+    "PitchBendEvent": {
+      "description": "Pitch Bend Change - bend pitch of all notes on channel",
+      "notes": [
+        "14-bit value (LSB first, then MSB), center = 0x2000 (8192)",
+        "Combined value = (msb << 7) | lsb, range 0-16383"
+      ],
+      "sequence": [
+        { "name": "lsb", "type": "uint8", "description": "Pitch bend LSB (bits 0-6)" },
+        { "name": "msb", "type": "uint8", "description": "Pitch bend MSB (bits 7-13)" }
+      ]
+    },
+    "MetaEventData": {
+      "description": "Meta Event data - non-MIDI information (tempo, time signature, text, etc.)",
+      "notes": [
+        "Meta event types:",
+        "  0x00 = Sequence Number",
+        "  0x01 = Text Event",
+        "  0x02 = Copyright Notice",
+        "  0x03 = Sequence/Track Name",
+        "  0x04 = Instrument Name",
+        "  0x05 = Lyric",
+        "  0x06 = Marker",
+        "  0x07 = Cue Point",
+        "  0x20 = MIDI Channel Prefix",
+        "  0x2F = End of Track (required, length=0)",
+        "  0x51 = Set Tempo (3 bytes: microseconds per quarter note)",
+        "  0x54 = SMPTE Offset",
+        "  0x58 = Time Signature",
+        "  0x59 = Key Signature",
+        "  0x7F = Sequencer-Specific"
+      ],
+      "sequence": [
+        { "name": "meta_type", "type": "uint8", "description": "Meta event type" },
+        { "name": "length", "type": "VLQ", "description": "Length of data" },
+        {
+          "name": "data",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "Meta event data"
+        }
+      ]
+    },
+    "SysExEventData": {
+      "description": "System Exclusive Event data - manufacturer-specific data",
+      "notes": [
+        "F0 type: complete SysEx message (data ends with F7)",
+        "F7 type: continuation or escape (arbitrary data)"
+      ],
+      "sequence": [
+        { "name": "length", "type": "VLQ", "description": "Length of data" },
+        {
+          "name": "data",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "length",
+          "items": { "type": "uint8" },
+          "description": "SysEx data"
+        }
+      ]
+    },
+    "TrackEventData": {
+      "description": "Track event payload based on status byte",
+      "notes": [
+        "This type uses a discriminated union to parse the correct event type",
+        "based on the status byte passed via context"
+      ],
+      "type": "discriminated_union",
+      "discriminator": { "field": "_context.status" },
+      "variants": [
+        { "when": "value == 0xFF", "type": "MetaEventData" },
+        { "when": "value == 0xF0", "type": "SysExEventData" },
+        { "when": "value == 0xF7", "type": "SysExEventData" },
+        { "when": "value >= 0x80 && value <= 0x8F", "type": "NoteOffEvent" },
+        { "when": "value >= 0x90 && value <= 0x9F", "type": "NoteOnEvent" },
+        { "when": "value >= 0xA0 && value <= 0xAF", "type": "PolyphonicPressureEvent" },
+        { "when": "value >= 0xB0 && value <= 0xBF", "type": "ControlChangeEvent" },
+        { "when": "value >= 0xC0 && value <= 0xCF", "type": "ProgramChangeEvent" },
+        { "when": "value >= 0xD0 && value <= 0xDF", "type": "ChannelPressureEvent" },
+        { "when": "value >= 0xE0 && value <= 0xEF", "type": "PitchBendEvent" }
+      ]
+    },
+    "TrackEvent": {
+      "description": "A single event in a MIDI track",
+      "notes": [
+        "Each event is preceded by a delta time (time since previous event)",
+        "Status byte determines event type:",
+        "  0x80-0x8F = Note Off (channel 0-15)",
+        "  0x90-0x9F = Note On (channel 0-15)",
+        "  0xA0-0xAF = Polyphonic Pressure (channel 0-15)",
+        "  0xB0-0xBF = Control Change (channel 0-15)",
+        "  0xC0-0xCF = Program Change (channel 0-15)",
+        "  0xD0-0xDF = Channel Pressure (channel 0-15)",
+        "  0xE0-0xEF = Pitch Bend (channel 0-15)",
+        "  0xF0 = SysEx Start",
+        "  0xF7 = SysEx Escape/Continuation",
+        "  0xFF = Meta Event"
+      ],
+      "sequence": [
+        { "name": "delta_time", "type": "VLQ", "description": "Ticks since previous event" },
+        { "name": "status", "type": "uint8", "description": "Status byte (event type + channel)" },
+        {
+          "name": "meta_event",
+          "type": "MetaEventData",
+          "conditional": "status == 255",
+          "description": "Meta event (when status == 0xFF)"
+        },
+        {
+          "name": "sysex_event",
+          "type": "SysExEventData",
+          "conditional": "status == 240 || status == 247",
+          "description": "SysEx event (when status == 0xF0 or 0xF7)"
+        },
+        {
+          "name": "note_off",
+          "type": "NoteOffEvent",
+          "conditional": "status >= 128 && status <= 143",
+          "description": "Note Off (when status == 0x80-0x8F)"
+        },
+        {
+          "name": "note_on",
+          "type": "NoteOnEvent",
+          "conditional": "status >= 144 && status <= 159",
+          "description": "Note On (when status == 0x90-0x9F)"
+        },
+        {
+          "name": "polyphonic_pressure",
+          "type": "PolyphonicPressureEvent",
+          "conditional": "status >= 160 && status <= 175",
+          "description": "Polyphonic Pressure (when status == 0xA0-0xAF)"
+        },
+        {
+          "name": "control_change",
+          "type": "ControlChangeEvent",
+          "conditional": "status >= 176 && status <= 191",
+          "description": "Control Change (when status == 0xB0-0xBF)"
+        },
+        {
+          "name": "program_change",
+          "type": "ProgramChangeEvent",
+          "conditional": "status >= 192 && status <= 207",
+          "description": "Program Change (when status == 0xC0-0xCF)"
+        },
+        {
+          "name": "channel_pressure",
+          "type": "ChannelPressureEvent",
+          "conditional": "status >= 208 && status <= 223",
+          "description": "Channel Pressure (when status == 0xD0-0xDF)"
+        },
+        {
+          "name": "pitch_bend",
+          "type": "PitchBendEvent",
+          "conditional": "status >= 224 && status <= 239",
+          "description": "Pitch Bend (when status == 0xE0-0xEF)"
+        }
+      ]
+    },
+    "TrackChunk": {
+      "description": "MIDI track chunk - contains a sequence of events",
+      "notes": [
+        "Each track must end with an End of Track meta event (FF 2F 00)",
+        "In Format 1 files, track 0 typically contains tempo/time signature",
+        "Events within a track are sequential; use delta times for timing"
+      ],
+      "sequence": [
+        {
+          "name": "magic",
+          "type": "array",
+          "kind": "fixed",
+          "length": 4,
+          "items": { "type": "uint8" },
+          "const": [77, 84, 114, 107],
+          "description": "Chunk type 'MTrk' (0x4D54726B)"
+        },
+        {
+          "name": "length",
+          "type": "uint32",
+          "description": "Length of track data in bytes"
+        },
+        {
+          "name": "events",
+          "type": "array",
+          "kind": "byte_length_prefixed",
+          "length_type": "uint32",
+          "length_field": "length",
+          "items": { "type": "TrackEvent" },
+          "description": "Track events"
+        }
+      ]
+    },
+    "MIDIFile": {
+      "description": "Complete Standard MIDI File",
+      "notes": [
+        "Format 0: Single track containing all channels",
+        "Format 1: Multiple synchronized tracks (most common)",
+        "Format 2: Multiple independent sequences",
+        "All multi-byte integers are big-endian"
+      ],
+      "sequence": [
+        { "name": "header", "type": "HeaderChunk" },
+        {
+          "name": "tracks",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "header.num_tracks",
+          "items": { "type": "TrackChunk" }
+        }
+      ]
+    }
+  }
+}

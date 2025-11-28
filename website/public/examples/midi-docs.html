@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SensorNet Protocol</title>
+  <title>Standard MIDI File Format</title>
   <style>
     /* Protocol Documentation Styles */
     * {
@@ -507,8 +507,8 @@
 </head>
 <body>
   <header class="protocol-header">
-    <h1>SensorNet Protocol</h1>
-    <div class="protocol-version">Version 2.0</div>
+    <h1>Standard MIDI File Format</h1>
+    <div class="protocol-version">Version 1.0</div>
   </header>
 
   <nav class="toc">
@@ -517,22 +517,14 @@
       <li><a href="#overview">Overview</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
-      <li><a href="#messages">Messages</a></li>
+      
     </ul>
   </nav>
 
   <main>
     <section id="overview" class="section">
       <h2>Overview</h2>
-      <p>A lightweight binary protocol for IoT sensor devices to report telemetry data to a central hub.</p>
-      <div class="notes">
-    <ul class="notes-list">
-      <li>All multi-byte integers use <strong>little-endian</strong> byte order.</li>
-      <li>Devices must increment sequence_num for each packet sent.</li>
-      <li>Hub responds to SENSOR_READING with ACK if status is abnormal.</li>
-      <li>Maximum packet size is 256 bytes.</li>
-    </ul>
-      </div>
+      <p>Standard MIDI File (SMF) format for storing MIDI sequences. Supports variable-length quantities, meta events, and multiple track chunks.</p>
     </section>
 
     <section id="data-types" class="section">
@@ -558,374 +550,353 @@
             </tbody>
           </table>
         </details>
-        <details class="type-details" id="type-Packet">
-          <summary><h3>Packet</h3></summary>
-          <p class="type-description">All packets use this header format</p>
+        <details class="type-details" id="type-VLQ">
+          <summary><h3>VLQ</h3></summary>
+          <p class="type-description">Variable Length Quantity - MIDI&#039;s variable-length integer encoding</p>
+          <p class="type-alias">
+            Type alias: <code>varlength</code>
+          </p>
+        </details>
+        <details class="type-details" id="type-HeaderChunk">
+          <summary><h3>HeaderChunk</h3></summary>
+          <p class="type-description">MIDI file header chunk - contains file format and track info</p>
           <div class="wire-format">
             <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">size</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">msg_type</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">magic</div>
+                <div class="field-type">uint8[]</div>
+                <div class="field-size">variable</div>
                 
               </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">device_id</div>
+                <div class="field-name">length</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
               </div>
               <div class="field" style="flex: 2">
-                <div class="field-name">sequence_num</div>
+                <div class="field-name">format</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">num_tracks</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">division</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
               </div>
             </div>
-            <div class="field-desc"><strong>size:</strong> Total size of the packet excluding the size field itself (2 bytes)</div>
-            <div class="field-desc"><strong>msg_type:</strong> Message type identifier (1-255)</div>
-            <div class="field-desc"><strong>device_id:</strong> Unique device identifier assigned during provisioning</div>
-            <div class="field-desc"><strong>sequence_num:</strong> Incrementing sequence number for duplicate detection</div>
           </div>
         </details>
-        <details class="type-details" id="type-Optional-T-">
-          <summary><h3>Optional&lt;T&gt; <span class="generic-badge">Generic</span></h3></summary>
-          <p class="type-description">Optional field with presence byte</p>
+        <details class="type-details" id="type-NoteOffEvent">
+          <summary><h3>NoteOffEvent</h3></summary>
+          <p class="type-description">Note Off event - stop playing a note</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 1">
-                <div class="field-name">present</div>
+                <div class="field-name">note</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
               </div>
-              <div class="field conditional" style="flex: 4">
+              <div class="field" style="flex: 1">
+                <div class="field-name">velocity</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-NoteOnEvent">
+          <summary><h3>NoteOnEvent</h3></summary>
+          <p class="type-description">Note On event - start playing a note</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">note</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">velocity</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-PolyphonicPressureEvent">
+          <summary><h3>PolyphonicPressureEvent</h3></summary>
+          <p class="type-description">Polyphonic Key Pressure (Aftertouch) - pressure on individual note</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">note</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">pressure</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-ControlChangeEvent">
+          <summary><h3>ControlChangeEvent</h3></summary>
+          <p class="type-description">Control Change - modify a controller value</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">controller</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+              <div class="field" style="flex: 1">
                 <div class="field-name">value</div>
-                <div class="field-type">T</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-ProgramChangeEvent">
+          <summary><h3>ProgramChangeEvent</h3></summary>
+          <p class="type-description">Program Change - select instrument/patch</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">program</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-ChannelPressureEvent">
+          <summary><h3>ChannelPressureEvent</h3></summary>
+          <p class="type-description">Channel Pressure (Aftertouch) - pressure on entire channel</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">pressure</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-PitchBendEvent">
+          <summary><h3>PitchBendEvent</h3></summary>
+          <p class="type-description">Pitch Bend Change - bend pitch of all notes on channel</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">lsb</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">msb</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-MetaEventData">
+          <summary><h3>MetaEventData</h3></summary>
+          <p class="type-description">Meta Event data - non-MIDI information (tempo, time signature, text, etc.)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">meta_type</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">length</div>
+                <div class="field-type"><a href="#type-VLQ" class="type-link">VLQ</a></div>
                 <div class="field-size">variable</div>
-                <div class="field-condition">if present == 1</div>
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-SensorReading">
-          <summary><h3>SensorReading</h3></summary>
-          <p class="type-description">Sensor data reading</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">sensor_type</div>
-                <div class="field-type">bit&lt;4&gt;</div>
-                <div class="field-size">4 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">battery_low</div>
-                <div class="field-type">bit&lt;1&gt;</div>
-                <div class="field-size">1 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">error</div>
-                <div class="field-type">bit&lt;1&gt;</div>
-                <div class="field-size">1 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">reserved</div>
-                <div class="field-type">bit&lt;2&gt;</div>
-                <div class="field-size">2 bits</div>
                 
               </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">timestamp</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">value</div>
-                <div class="field-type">float32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">location</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint32&gt;</div>
+                <div class="field-name">data</div>
+                <div class="field-type">uint8[]</div>
                 <div class="field-size">variable</div>
                 
               </div>
             </div>
-            <div class="field-desc"><strong>sensor_type:</strong> Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc.</div>
-            <div class="field-desc"><strong>battery_low:</strong> Battery low warning flag (1=low, 0=normal)</div>
-            <div class="field-desc"><strong>error:</strong> Error flag (1=sensor error, 0=normal)</div>
-            <div class="field-desc"><strong>reserved:</strong> Reserved bits for future use</div>
-            <div class="field-desc"><strong>timestamp:</strong> Unix timestamp in seconds (device time)</div>
-            <div class="field-desc"><strong>value:</strong> Sensor reading value (interpretation depends on sensor_type)</div>
-            <div class="field-desc"><strong>location:</strong> Optional GPS location ID (present if device has GPS enabled)</div>
           </div>
         </details>
-        <details class="type-details" id="type-ConfigUpdate">
-          <summary><h3>ConfigUpdate</h3></summary>
-          <p class="type-description">Configuration update command</p>
+        <details class="type-details" id="type-SysExEventData">
+          <summary><h3>SysExEventData</h3></summary>
+          <p class="type-description">System Exclusive Event data - manufacturer-specific data</p>
           <div class="wire-format">
             <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">interval</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">length</div>
+                <div class="field-type"><a href="#type-VLQ" class="type-link">VLQ</a></div>
+                <div class="field-size">variable</div>
                 
               </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">threshold</div>
-                <div class="field-type">float32</div>
-                <div class="field-size">4 bytes</div>
+                <div class="field-name">data</div>
+                <div class="field-type">uint8[]</div>
+                <div class="field-size">variable</div>
                 
               </div>
             </div>
-            <div class="field-desc"><strong>interval:</strong> Reporting interval in seconds</div>
-            <div class="field-desc"><strong>threshold:</strong> Alert threshold value</div>
           </div>
         </details>
-        <details class="type-details" id="type-Acknowledgment">
-          <summary><h3>Acknowledgment</h3></summary>
-          <p class="type-description">Generic acknowledgment</p>
+        <details class="type-details" id="type-TrackEventData">
+          <summary><h3>TrackEventData</h3></summary>
+          <p class="type-description">Track event payload based on status byte</p>
+          <p class="type-alias">
+            Type alias: <code>discriminated_union</code>
+          </p>
+        </details>
+        <details class="type-details" id="type-TrackEvent">
+          <summary><h3>TrackEvent</h3></summary>
+          <p class="type-description">A single event in a MIDI track</p>
           <div class="wire-format">
             <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">delta_time</div>
+                <div class="field-type"><a href="#type-VLQ" class="type-link">VLQ</a></div>
+                <div class="field-size">variable</div>
+                
+              </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">status</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
               </div>
+              <div class="field conditional" style="flex: 9">
+                <div class="field-name">meta_event</div>
+                <div class="field-type"><a href="#type-MetaEventData" class="type-link">MetaEventData</a></div>
+                <div class="field-size">9 bytes</div>
+                <div class="field-condition">if status == 255</div>
+              </div>
+              <div class="field conditional" style="flex: 8">
+                <div class="field-name">sysex_event</div>
+                <div class="field-type"><a href="#type-SysExEventData" class="type-link">SysExEventData</a></div>
+                <div class="field-size">8 bytes</div>
+                <div class="field-condition">if status == 240 || status == 247</div>
+              </div>
+              <div class="field conditional" style="flex: 2">
+                <div class="field-name">note_off</div>
+                <div class="field-type"><a href="#type-NoteOffEvent" class="type-link">NoteOffEvent</a></div>
+                <div class="field-size">2 bytes</div>
+                <div class="field-condition">if status &gt;= 128 &amp;&amp; status &lt;= 143</div>
+              </div>
+              <div class="field conditional" style="flex: 2">
+                <div class="field-name">note_on</div>
+                <div class="field-type"><a href="#type-NoteOnEvent" class="type-link">NoteOnEvent</a></div>
+                <div class="field-size">2 bytes</div>
+                <div class="field-condition">if status &gt;= 144 &amp;&amp; status &lt;= 159</div>
+              </div>
+              <div class="field conditional" style="flex: 2">
+                <div class="field-name">polyphonic_pressure</div>
+                <div class="field-type"><a href="#type-PolyphonicPressureEvent" class="type-link">PolyphonicPressureEvent</a></div>
+                <div class="field-size">2 bytes</div>
+                <div class="field-condition">if status &gt;= 160 &amp;&amp; status &lt;= 175</div>
+              </div>
+              <div class="field conditional" style="flex: 2">
+                <div class="field-name">control_change</div>
+                <div class="field-type"><a href="#type-ControlChangeEvent" class="type-link">ControlChangeEvent</a></div>
+                <div class="field-size">2 bytes</div>
+                <div class="field-condition">if status &gt;= 176 &amp;&amp; status &lt;= 191</div>
+              </div>
+              <div class="field conditional" style="flex: 1">
+                <div class="field-name">program_change</div>
+                <div class="field-type"><a href="#type-ProgramChangeEvent" class="type-link">ProgramChangeEvent</a></div>
+                <div class="field-size">1 bytes</div>
+                <div class="field-condition">if status &gt;= 192 &amp;&amp; status &lt;= 207</div>
+              </div>
+              <div class="field conditional" style="flex: 1">
+                <div class="field-name">channel_pressure</div>
+                <div class="field-type"><a href="#type-ChannelPressureEvent" class="type-link">ChannelPressureEvent</a></div>
+                <div class="field-size">1 bytes</div>
+                <div class="field-condition">if status &gt;= 208 &amp;&amp; status &lt;= 223</div>
+              </div>
+              <div class="field conditional" style="flex: 2">
+                <div class="field-name">pitch_bend</div>
+                <div class="field-type"><a href="#type-PitchBendEvent" class="type-link">PitchBendEvent</a></div>
+                <div class="field-size">2 bytes</div>
+                <div class="field-condition">if status &gt;= 224 &amp;&amp; status &lt;= 239</div>
+              </div>
             </div>
-            <div class="field-desc"><strong>status:</strong> Status code: 0=success, 1=error, 2=retry</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-TrackChunk">
+          <summary><h3>TrackChunk</h3></summary>
+          <p class="type-description">MIDI track chunk - contains a sequence of events</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">magic</div>
+                <div class="field-type">uint8[]</div>
+                <div class="field-size">variable</div>
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">length</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">events</div>
+                <div class="field-type">TrackEvent[]</div>
+                <div class="field-size">variable</div>
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-MIDIFile">
+          <summary><h3>MIDIFile</h3></summary>
+          <p class="type-description">Complete Standard MIDI File</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 14">
+                <div class="field-name">header</div>
+                <div class="field-type"><a href="#type-HeaderChunk" class="type-link">HeaderChunk</a></div>
+                <div class="field-size">14 bytes</div>
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">tracks</div>
+                <div class="field-type">TrackChunk[]</div>
+                <div class="field-size">variable</div>
+                
+              </div>
+            </div>
           </div>
         </details>
       </div>
-    </section>
-
-    <section id="messages" class="section">
-      <h2>Messages</h2>
-      <h3>Client → Server Messages</h3>
-            <table class="messages-table">
-        <thead>
-          <tr><th>Code</th><th>Name</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>0x01</code></td>
-            <td><a href="#msg-0x01">SENSOR_READING</a></td>
-            <td>Periodic sensor data report</td>
-          </tr>
-        </tbody>
-      </table>
-
-            <details class="message-details" id="msg-0x01">
-        <summary>
-          <h4><code>0x01</code> SENSOR_READING</h4>
-        </summary>
-
-        <p class="message-description">Periodic sensor data report</p>
-        <div class="message-notes">
-    <ul class="notes-list">
-      <li>Sent at configured intervals or when threshold is exceeded.</li>
-      <li><strong>Bitfield encoding:</strong> sensor_type occupies bits 0-3, battery_low is bit 4, error is bit 5, reserved bits 6-7.</li>
-      <li>Timestamp should be synchronized via NTP when possible.</li>
-    </ul>
-        </div>
-        <div class="wire-format">
-          <div class="wire-diagram">
-            <div class="field" style="flex: 1">
-              <div class="field-name">sensor_type</div>
-              <div class="field-type">bit&lt;4&gt;</div>
-              <div class="field-size">4 bits</div>
-              
-            </div>
-            <div class="field" style="flex: 1">
-              <div class="field-name">battery_low</div>
-              <div class="field-type">bit&lt;1&gt;</div>
-              <div class="field-size">1 bits</div>
-              
-            </div>
-            <div class="field" style="flex: 1">
-              <div class="field-name">error</div>
-              <div class="field-type">bit&lt;1&gt;</div>
-              <div class="field-size">1 bits</div>
-              
-            </div>
-            <div class="field" style="flex: 1">
-              <div class="field-name">reserved</div>
-              <div class="field-type">bit&lt;2&gt;</div>
-              <div class="field-size">2 bits</div>
-              
-            </div>
-            <div class="field" style="flex: 4">
-              <div class="field-name">timestamp</div>
-              <div class="field-type">uint32</div>
-              <div class="field-size">4 bytes</div>
-              
-            </div>
-            <div class="field" style="flex: 4">
-              <div class="field-name">value</div>
-              <div class="field-type">float32</div>
-              <div class="field-size">4 bytes</div>
-              
-            </div>
-            <div class="field" style="flex: 4">
-              <div class="field-name">location</div>
-              <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint32&gt;</div>
-              <div class="field-size">variable</div>
-              
-            </div>
-          </div>
-          <div class="field-desc"><strong>sensor_type:</strong> Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc.</div>
-          <div class="field-desc"><strong>battery_low:</strong> Battery low warning flag (1=low, 0=normal)</div>
-          <div class="field-desc"><strong>error:</strong> Error flag (1=sensor error, 0=normal)</div>
-          <div class="field-desc"><strong>reserved:</strong> Reserved bits for future use</div>
-          <div class="field-desc"><strong>timestamp:</strong> Unix timestamp in seconds (device time)</div>
-          <div class="field-desc"><strong>value:</strong> Sensor reading value (interpretation depends on sensor_type)</div>
-          <div class="field-desc"><strong>location:</strong> Optional GPS location ID (present if device has GPS enabled)</div>
-        </div>
-        <details class="example">
-          <summary>Wire Format Example</summary>
-          <div class="example-content">
-            <p>Temperature sensor (type=0) reading 23.5°C with GPS location ID 42</p>
-            <div class="example-hex">
-              <h5>Wire Format (Hex Bytes)</h5>
-              <div class="annotated-hex-view">
-                <div class="hex-inline">
-                  <span class="hex-segment" data-segment="SENSOR_READING-0" style="background-color: #dbeafe;"><svg class="binary-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><ellipse cx="94" cy="72" rx="30" ry="40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><ellipse cx="166" cy="184" rx="30" ry="40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="176 112 176 32 152 45.33" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="96 224 96 144 72 157.33" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg> 00000000</span>                  <span class="hex-segment" data-segment="SENSOR_READING-1" style="background-color: #fce7f3;">C0 0B 5C 61</span>                  <span class="hex-segment" data-segment="SENSOR_READING-2" style="background-color: #fef3c7;">00 00 BC 41</span>                  <span class="hex-segment" data-segment="SENSOR_READING-3" style="background-color: #d1fae5;">01</span>                  <span class="hex-segment" data-segment="SENSOR_READING-4" style="background-color: #e9d5ff;">2A 00 00 00</span>
-                </div>
-                <div class="hex-annotations">
-                  <div class="annotation" data-segment="SENSOR_READING-0" style="border-left-color: #dbeafe;">
-                    <strong>Byte 0 (bits):</strong>
-                    <ul class="bitfield-list">
-                      <li><code>sensor_type</code> = 0 (bits 0-3)</li>
-                      <li><code>battery_low</code> = 0 (bit 4)</li>
-                      <li><code>error</code> = 0 (bit 5)</li>
-                      <li><code>reserved</code> = 0 (bits 6-7)</li>
-                    </ul>
-                  </div>
-                  <div class="annotation" data-segment="SENSOR_READING-1" style="border-left-color: #fce7f3;">
-                    <strong>Bytes 1-4:</strong> timestamp (uint32): 1633017600
-                  </div>
-                  <div class="annotation" data-segment="SENSOR_READING-2" style="border-left-color: #fef3c7;">
-                    <strong>Bytes 5-8:</strong> value (float32): 23.5
-                  </div>
-                  <div class="annotation" data-segment="SENSOR_READING-3" style="border-left-color: #d1fae5;">
-                    <strong>Byte 9:</strong> location present (uint8): yes
-                  </div>
-                  <div class="annotation" data-segment="SENSOR_READING-4" style="border-left-color: #e9d5ff;">
-                    <strong>Bytes 10-13:</strong> location (uint32): 42
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="example-decoded">
-              <h5>Decoded Payload</h5>
-              <pre class="decoded">{
-  &quot;sensor_type&quot;: 0,
-  &quot;battery_low&quot;: 0,
-  &quot;error&quot;: 0,
-  &quot;reserved&quot;: 0,
-  &quot;timestamp&quot;: 1633017600,
-  &quot;value&quot;: 23.5,
-  &quot;location&quot;: 42
-}</pre>
-            </div>
-          </div>
-        </details>
-      </details>
-
-
-      <h3>Server → Client Messages</h3>
-            <table class="messages-table">
-        <thead>
-          <tr><th>Code</th><th>Name</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>0x02</code></td>
-            <td><a href="#msg-0x02">CONFIG_UPDATE</a></td>
-            <td>Update device configuration</td>
-          </tr>
-        </tbody>
-      </table>
-
-            <details class="message-details" id="msg-0x02">
-        <summary>
-          <h4><code>0x02</code> CONFIG_UPDATE</h4>
-        </summary>
-
-        <p class="message-description">Update device configuration</p>
-        <div class="message-notes">
-    <p>Device should respond with ACK after applying configuration.</p>
-        </div>
-        <div class="wire-format">
-          <div class="wire-diagram">
-            <div class="field" style="flex: 2">
-              <div class="field-name">interval</div>
-              <div class="field-type">uint16</div>
-              <div class="field-size">2 bytes</div>
-              
-            </div>
-            <div class="field" style="flex: 4">
-              <div class="field-name">threshold</div>
-              <div class="field-type">float32</div>
-              <div class="field-size">4 bytes</div>
-              
-            </div>
-          </div>
-          <div class="field-desc"><strong>interval:</strong> Reporting interval in seconds</div>
-          <div class="field-desc"><strong>threshold:</strong> Alert threshold value</div>
-        </div>
-      </details>
-
-
-      <h3>Bidirectional Messages</h3>
-            <table class="messages-table">
-        <thead>
-          <tr><th>Code</th><th>Name</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>0x03</code></td>
-            <td><a href="#msg-0x03">ACK</a></td>
-            <td>Acknowledgment message</td>
-          </tr>
-        </tbody>
-      </table>
-
-            <details class="message-details" id="msg-0x03">
-        <summary>
-          <h4><code>0x03</code> ACK</h4>
-        </summary>
-
-        <p class="message-description">Acknowledgment message</p>
-        <div class="message-notes">
-    <p>Used to confirm receipt of critical messages.</p>
-        </div>
-        <div class="wire-format">
-          <div class="wire-diagram">
-            <div class="field" style="flex: 1">
-              <div class="field-name">status</div>
-              <div class="field-type">uint8</div>
-              <div class="field-size">1 byte</div>
-              
-            </div>
-          </div>
-          <div class="field-desc"><strong>status:</strong> Status code: 0=success, 1=error, 2=retry</div>
-        </div>
-      </details>
-
-
     </section>
 
   </main>

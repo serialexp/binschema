@@ -476,12 +476,30 @@
         }
       }
 
-      // Handle hash changes (clicking type links)
-      window.addEventListener('hashchange', () => {
-        const target = document.querySelector(window.location.hash);
-        if (target && target.tagName === 'DETAILS') {
-          target.open = true;
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Intercept clicks on type links to open details BEFORE browser scrolls
+      document.addEventListener('click', (e) => {
+        const link = e.target.closest('a[href^="#type-"]');
+        if (link) {
+          const targetId = link.getAttribute('href');
+          const target = document.querySelector(targetId);
+          if (target && target.tagName === 'DETAILS') {
+            e.preventDefault();
+            target.open = true;
+            // Update URL hash and scroll
+            history.pushState(null, '', targetId);
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }
+      });
+
+      // Handle browser back/forward navigation
+      window.addEventListener('popstate', () => {
+        if (window.location.hash) {
+          const target = document.querySelector(window.location.hash);
+          if (target && target.tagName === 'DETAILS') {
+            target.open = true;
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
         }
       });
     });
@@ -497,7 +515,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
-      <li><a href="#frame-format">Frame Format</a></li>
+      
       <li><a href="#data-types">Data Types</a></li>
       <li><a href="#messages">Messages</a></li>
     </ul>
@@ -515,86 +533,6 @@
       <li>Maximum frame size is 1 MB (1,048,576 bytes) to prevent DoS attacks.</li>
       <li>Clients must send PING every 30 seconds to avoid session timeout (60s inactivity).</li>
     </ul>
-      </div>
-    </section>
-
-    <section id="frame-format" class="section">
-      <h2>Frame Format</h2>
-      <p>All messages use the following frame-based format:</p>
-
-      <div class="wire-format">
-        <div class="wire-diagram">
-          <div class="field" style="flex: 4">
-            <div class="field-name">length</div>
-            <div class="field-type">uint32</div>
-            <div class="field-size">4 bytes</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">version</div>
-            <div class="field-type">uint8</div>
-            <div class="field-size">1 byte</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">type</div>
-            <div class="field-type">uint8</div>
-            <div class="field-size">1 byte</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">flags</div>
-            <div class="field-type">uint8</div>
-            <div class="field-size">1 byte</div>
-          </div>
-          <div class="field" style="flex: 8">
-            <div class="field-name">payload</div>
-            <div class="field-type">varies by message type</div>
-            <div class="field-size">N bytes</div>
-          </div>
-        </div>
-        <div class="field-desc"><strong>length:</strong> Total size of Version + Type + Flags + Payload (excludes the length field itself)</div>
-        <div class="field-desc"><strong>version:</strong> Protocol version (current: 1). Both client and server must validate on every message.</div>
-        <div class="field-desc"><strong>type:</strong> Message type identifier (0x01-0xFF)</div>
-        <div class="field-desc"><strong>flags:</strong> Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved</div>
-        <div class="field-desc"><strong>payload:</strong> Message-specific data as defined by the message type. See individual message types below for payload structure.</div>
-
-      <div class="example">
-        <details open>
-          <summary>Example: Complete frame with AUTH_REQUEST payload</summary>
-          <div class="example-content">
-            <p>User &#039;alice&#039; authenticating with password &#039;hunter2&#039;:</p>
-              <div class="annotated-hex-view">
-                <div class="hex-inline">
-                  <span class="hex-segment" data-segment="frame-example-0" style="background-color: #dbeafe;">00 00 00 13</span>                  <span class="hex-segment" data-segment="frame-example-1" style="background-color: #fce7f3;">01</span>                  <span class="hex-segment" data-segment="frame-example-2" style="background-color: #fef3c7;">01</span>                  <span class="hex-segment" data-segment="frame-example-3" style="background-color: #d1fae5;">00</span>                  <span class="hex-segment" data-segment="frame-example-4" style="background-color: #e9d5ff;">00 05</span>                  <span class="hex-segment" data-segment="frame-example-5" style="background-color: #fed7aa;">61 6C 69 63 65</span>                  <span class="hex-segment" data-segment="frame-example-6" style="background-color: #dbeafe;">00 07</span>                  <span class="hex-segment" data-segment="frame-example-7" style="background-color: #fce7f3;">68 75 6E 74 65 72 32</span>
-                </div>
-                <div class="hex-annotations">
-                  <div class="annotation" data-segment="frame-example-0" style="border-left-color: #dbeafe;">
-                    <strong>Bytes 0-3:</strong> length (uint32): 19
-                  </div>
-                  <div class="annotation" data-segment="frame-example-1" style="border-left-color: #fce7f3;">
-                    <strong>Byte 4:</strong> version (uint8): 1
-                  </div>
-                  <div class="annotation" data-segment="frame-example-2" style="border-left-color: #fef3c7;">
-                    <strong>Byte 5:</strong> type (uint8): 1
-                  </div>
-                  <div class="annotation" data-segment="frame-example-3" style="border-left-color: #d1fae5;">
-                    <strong>Byte 6:</strong> flags (uint8): 0
-                  </div>
-                  <div class="annotation" data-segment="frame-example-4" style="border-left-color: #e9d5ff;">
-                    <strong>Bytes 7-8:</strong> nickname length (uint16): 5
-                  </div>
-                  <div class="annotation" data-segment="frame-example-5" style="border-left-color: #fed7aa;">
-                    <strong>Bytes 9-13:</strong> nickname (string): &#039;alice&#039;
-                  </div>
-                  <div class="annotation" data-segment="frame-example-6" style="border-left-color: #dbeafe;">
-                    <strong>Bytes 14-15:</strong> password length (uint16): 7
-                  </div>
-                  <div class="annotation" data-segment="frame-example-7" style="border-left-color: #fce7f3;">
-                    <strong>Bytes 16-22:</strong> password (string): &#039;hunter2&#039;
-                  </div>
-                </div>
-              </div>
-          </div>
-        </details>
-      </div>
       </div>
     </section>
 
@@ -1492,7 +1430,7 @@
           <tr>
             <td><code>0x04</code></td>
             <td><a href="#msg-0x04">LIST_CHANNELS</a></td>
-            <td>Request channel list</td>
+            <td>Request list of available channels</td>
           </tr>
           <tr>
             <td><code>0x05</code></td>
@@ -1589,10 +1527,9 @@
         <p class="message-description">Set or change nickname</p>
         <div class="message-notes">
     <ul class="notes-list">
-      <li><strong>Anonymous users:</strong> Can change nickname freely to any available nickname. Nickname change only affects current session. Previous messages keep old nickname.</li>
-      <li><strong>Registered users:</strong> Can change nickname to any available (unregistered) nickname. Nickname change updates all existing messages to show new nickname automatically (database UPDATE on User.nickname only - messages link via author_user_id FK).</li>
-      <li>Message.author_nickname is only used for anonymous users (where author_user_id is NULL).</li>
-      <li>Cannot change to a nickname already registered by another user.</li>
+      <li>Rejected if nickname is already taken.</li>
+      <li>Rejected if nickname contains invalid characters.</li>
+      <li>If successful, all connected clients receive NEW_MESSAGE notification with system message.</li>
     </ul>
         </div>
         <div class="wire-format">
@@ -1631,7 +1568,7 @@
           <h4><code>0x04</code> LIST_CHANNELS</h4>
         </summary>
 
-        <p class="message-description">Request channel list</p>
+        <p class="message-description">Request list of available channels</p>
         <div class="wire-format">
           <div class="wire-diagram">
             <div class="field" style="flex: 8">
@@ -1907,11 +1844,8 @@
         <p class="message-description">Nickname change result</p>
         <div class="message-notes">
     <ul class="notes-list">
-      <li><strong>Response cases:</strong></li>
-      <li>Nickname is registered and client is not authenticated: success=false, message=&#039;Nickname registered, password required&#039;</li>
-      <li>Nickname is available: success=true, message=&#039;Nickname changed to &lt;nickname&gt;&#039; or &#039;Nickname set to &lt;nickname&gt;&#039;</li>
-      <li>Nickname is invalid (format): success=false, message=&#039;Invalid nickname&#039;</li>
-      <li>Nickname already taken (registered user trying to change): success=false, message=&#039;Nickname already in use&#039;</li>
+      <li>On success, message contains welcome text.</li>
+      <li>On failure, message contains error reason (e.g., &#039;nickname already taken&#039;).</li>
     </ul>
         </div>
         <div class="wire-format">

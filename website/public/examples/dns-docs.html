@@ -476,12 +476,30 @@
         }
       }
 
-      // Handle hash changes (clicking type links)
-      window.addEventListener('hashchange', () => {
-        const target = document.querySelector(window.location.hash);
-        if (target && target.tagName === 'DETAILS') {
-          target.open = true;
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Intercept clicks on type links to open details BEFORE browser scrolls
+      document.addEventListener('click', (e) => {
+        const link = e.target.closest('a[href^="#type-"]');
+        if (link) {
+          const targetId = link.getAttribute('href');
+          const target = document.querySelector(targetId);
+          if (target && target.tagName === 'DETAILS') {
+            e.preventDefault();
+            target.open = true;
+            // Update URL hash and scroll
+            history.pushState(null, '', targetId);
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }
+      });
+
+      // Handle browser back/forward navigation
+      window.addEventListener('popstate', () => {
+        if (window.location.hash) {
+          const target = document.querySelector(window.location.hash);
+          if (target && target.tagName === 'DETAILS') {
+            target.open = true;
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
         }
       });
     });
@@ -497,7 +515,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
-      <li><a href="#frame-format">Frame Format</a></li>
+      
       <li><a href="#data-types">Data Types</a></li>
       <li><a href="#messages">Messages</a></li>
     </ul>
@@ -509,174 +527,11 @@
       <p>Domain Name System (DNS) protocol for resolving domain names to IP addresses and other resource records. DNS uses a distributed database organized in a hierarchical tree structure of domains.</p>
       <div class="notes">
     <ul class="notes-list">
-      <li><strong>Byte order:</strong> All multi-byte integers use big-endian (network byte order) as specified in RFC 1035 section 2.3.2.</li>
-      <li><strong>Domain name encoding:</strong> Labels are prefixed with their length (max 63 bytes per label). Total domain name is max 255 octets. Domain names end with a zero-length label (0x00).</li>
-      <li><strong>Message compression:</strong> DNS uses compression to eliminate repetition of domain names. A pointer is 2 octets starting with bits 11, followed by a 14-bit offset from the start of the message (section 4.1.4).</li>
-      <li><strong>Transport:</strong> DNS uses UDP port 53 for standard queries and TCP port 53 for zone transfers. UDP messages are limited to 512 bytes (EDNS0 can increase this).</li>
-      <li><strong>Case insensitivity:</strong> All DNS comparisons between character strings (labels, domain names) are case-insensitive. However, original case should be preserved when possible.</li>
-      <li><strong>Size limits:</strong> Labels are 63 octets or less. Complete domain names are 255 octets or less. TTL is a positive value of a signed 32-bit number. UDP messages are 512 octets or less without EDNS0.</li>
-      <li><strong>Message format:</strong> All DNS messages have the same 5-section format: Header (always present), Question (query parameters), Answer (RRs answering the question), Authority (RRs pointing toward an authority), Additional (RRs holding additional information).</li>
-      <li><strong>Bitfield packing:</strong> The flags in bytes 2-3 of the header are packed as: QR(1) | Opcode(4) | AA(1) | TC(1) | RD(1) | RA(1) | Z(3) | RCODE(4)</li>
+      <li>All multi-byte integers use big-endian byte order.</li>
+      <li>DNS message compression allows repeated domain names to be represented by pointers to previous occurrences.</li>
+      <li>UDP messages are limited to 512 bytes unless EDNS(0) extensions are used.</li>
+      <li>Recursive resolvers must randomize the ID field and source port to prevent cache poisoning.</li>
     </ul>
-      </div>
-    </section>
-
-    <section id="frame-format" class="section">
-      <h2>Frame Format</h2>
-      <p>All messages use the following frame-based format:</p>
-
-      <div class="wire-format">
-        <div class="wire-diagram">
-          <div class="field" style="flex: 2">
-            <div class="field-name">id</div>
-            <div class="field-type">uint16</div>
-            <div class="field-size">2 bytes</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">qr</div>
-            <div class="field-type">bit&lt;1&gt;</div>
-            <div class="field-size">1 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">opcode</div>
-            <div class="field-type">bit&lt;4&gt;</div>
-            <div class="field-size">4 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">aa</div>
-            <div class="field-type">bit&lt;1&gt;</div>
-            <div class="field-size">1 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">tc</div>
-            <div class="field-type">bit&lt;1&gt;</div>
-            <div class="field-size">1 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">rd</div>
-            <div class="field-type">bit&lt;1&gt;</div>
-            <div class="field-size">1 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">ra</div>
-            <div class="field-type">bit&lt;1&gt;</div>
-            <div class="field-size">1 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">z</div>
-            <div class="field-type">bit&lt;3&gt;</div>
-            <div class="field-size">3 bits</div>
-          </div>
-          <div class="field" style="flex: 1">
-            <div class="field-name">rcode</div>
-            <div class="field-type">bit&lt;4&gt;</div>
-            <div class="field-size">4 bits</div>
-          </div>
-          <div class="field" style="flex: 2">
-            <div class="field-name">qdcount</div>
-            <div class="field-type">uint16</div>
-            <div class="field-size">2 bytes</div>
-          </div>
-          <div class="field" style="flex: 2">
-            <div class="field-name">ancount</div>
-            <div class="field-type">uint16</div>
-            <div class="field-size">2 bytes</div>
-          </div>
-          <div class="field" style="flex: 2">
-            <div class="field-name">nscount</div>
-            <div class="field-type">uint16</div>
-            <div class="field-size">2 bytes</div>
-          </div>
-          <div class="field" style="flex: 2">
-            <div class="field-name">arcount</div>
-            <div class="field-type">uint16</div>
-            <div class="field-size">2 bytes</div>
-          </div>
-          <div class="field" style="flex: 8">
-            <div class="field-name">payload</div>
-            <div class="field-type">varies by message type</div>
-            <div class="field-size">N bytes</div>
-          </div>
-        </div>
-        <div class="field-desc"><strong>id:</strong> A 16-bit identifier assigned by the program that generates any kind of query. This identifier is copied into the corresponding reply and can be used by the requester to match up replies to outstanding queries.</div>
-        <div class="field-desc"><strong>qr:</strong> Query/Response flag - 1 bit that specifies whether this message is a query (0) or a response (1)</div>
-        <div class="field-desc"><strong>opcode:</strong> Operation code - 4 bits specifying the kind of query. Set by originator, copied into response. 0=standard query (QUERY), 1=inverse query (IQUERY), 2=server status request (STATUS), 3-15=reserved for future use</div>
-        <div class="field-desc"><strong>aa:</strong> Authoritative Answer - 1 bit valid in responses. Specifies that the responding name server is an authority for the domain name in the question section. Note: AA corresponds to the name matching the query name, or the first owner name in the answer section</div>
-        <div class="field-desc"><strong>tc:</strong> TrunCation - 1 bit specifying that this message was truncated due to length greater than that permitted on the transmission channel (512 bytes for UDP)</div>
-        <div class="field-desc"><strong>rd:</strong> Recursion Desired - 1 bit that may be set in a query and is copied into the response. If set, it directs the name server to pursue the query recursively. Recursive query support is optional</div>
-        <div class="field-desc"><strong>ra:</strong> Recursion Available - 1 bit set or cleared in a response. Denotes whether recursive query support is available in the name server</div>
-        <div class="field-desc"><strong>z:</strong> Reserved for future use - 3 bits. Must be zero in all queries and responses</div>
-        <div class="field-desc"><strong>rcode:</strong> Response code - 4 bits set as part of responses. 0=No error, 1=Format error (unable to interpret query), 2=Server failure, 3=Name Error (domain does not exist, only from authoritative server), 4=Not Implemented (query type not supported), 5=Refused (policy reasons), 6-15=reserved</div>
-        <div class="field-desc"><strong>qdcount:</strong> An unsigned 16-bit integer specifying the number of entries in the question section</div>
-        <div class="field-desc"><strong>ancount:</strong> An unsigned 16-bit integer specifying the number of resource records in the answer section</div>
-        <div class="field-desc"><strong>nscount:</strong> An unsigned 16-bit integer specifying the number of name server resource records in the authority records section</div>
-        <div class="field-desc"><strong>arcount:</strong> An unsigned 16-bit integer specifying the number of resource records in the additional records section</div>
-        <div class="field-desc"><strong>payload:</strong> Message-specific data as defined by the message type. See individual message types below for payload structure.</div>
-
-      <div class="example">
-        <details open>
-          <summary>Example: Complete frame with DNS_QUERY payload</summary>
-          <div class="example-content">
-            <p>Standard query for A record of example.com:</p>
-              <div class="annotated-hex-view">
-                <div class="hex-inline">
-                  <span class="hex-segment" data-segment="frame-example-0" style="background-color: #dbeafe;">12 34</span>                  <span class="hex-segment" data-segment="frame-example-1" style="background-color: #fce7f3;"><svg class="binary-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><ellipse cx="94" cy="72" rx="30" ry="40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><ellipse cx="166" cy="184" rx="30" ry="40" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="176 112 176 32 152 45.33" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/><polyline points="96 224 96 144 72 157.33" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/></svg> 00000001 00000000</span>                  <span class="hex-segment" data-segment="frame-example-2" style="background-color: #fef3c7;">00 01</span>                  <span class="hex-segment" data-segment="frame-example-3" style="background-color: #d1fae5;">00 00</span>                  <span class="hex-segment" data-segment="frame-example-4" style="background-color: #e9d5ff;">00 00</span>                  <span class="hex-segment" data-segment="frame-example-5" style="background-color: #fed7aa;">00 00</span>                  <span class="hex-segment" data-segment="frame-example-6" style="background-color: #dbeafe;">07</span>                  <span class="hex-segment" data-segment="frame-example-7" style="background-color: #fce7f3;">65 78 61 6D 70 6C 65</span>                  <span class="hex-segment" data-segment="frame-example-8" style="background-color: #fef3c7;">03</span>                  <span class="hex-segment" data-segment="frame-example-9" style="background-color: #d1fae5;">63 6F 6D</span>                  <span class="hex-segment" data-segment="frame-example-10" style="background-color: #e9d5ff;">00</span>                  <span class="hex-segment" data-segment="frame-example-11" style="background-color: #fed7aa;">00 01</span>                  <span class="hex-segment" data-segment="frame-example-12" style="background-color: #dbeafe;">00 01</span>
-                </div>
-                <div class="hex-annotations">
-                  <div class="annotation" data-segment="frame-example-0" style="border-left-color: #dbeafe;">
-                    <strong>Bytes 0-1:</strong> id (uint16): 4660
-                  </div>
-                  <div class="annotation" data-segment="frame-example-1" style="border-left-color: #fce7f3;">
-                    <strong>Bytes 2-3 (bits):</strong>
-                    <ul class="bitfield-list">
-                      <li><code>qr</code> = 0 (bit 0)</li>
-                      <li><code>opcode</code> = 0 (bits 1-4)</li>
-                      <li><code>aa</code> = 0 (bit 5)</li>
-                      <li><code>tc</code> = 0 (bit 6)</li>
-                      <li><code>rd</code> = 1 (bit 7)</li>
-                      <li><code>ra</code> = 0 (bit 8)</li>
-                      <li><code>z</code> = 0 (bits 9-11)</li>
-                      <li><code>rcode</code> = 0 (bits 12-15)</li>
-                    </ul>
-                  </div>
-                  <div class="annotation" data-segment="frame-example-2" style="border-left-color: #fef3c7;">
-                    <strong>Bytes 4-5:</strong> qdcount (uint16): 1
-                  </div>
-                  <div class="annotation" data-segment="frame-example-3" style="border-left-color: #d1fae5;">
-                    <strong>Bytes 6-7:</strong> ancount (uint16): 0
-                  </div>
-                  <div class="annotation" data-segment="frame-example-4" style="border-left-color: #e9d5ff;">
-                    <strong>Bytes 8-9:</strong> nscount (uint16): 0
-                  </div>
-                  <div class="annotation" data-segment="frame-example-5" style="border-left-color: #fed7aa;">
-                    <strong>Bytes 10-11:</strong> arcount (uint16): 0
-                  </div>
-                  <div class="annotation" data-segment="frame-example-6" style="border-left-color: #dbeafe;">
-                    <strong>Byte 12:</strong> qname[0] length (uint8): 7
-                  </div>
-                  <div class="annotation" data-segment="frame-example-7" style="border-left-color: #fce7f3;">
-                    <strong>Bytes 13-19:</strong> qname[0] (string): &#039;example&#039;
-                  </div>
-                  <div class="annotation" data-segment="frame-example-8" style="border-left-color: #fef3c7;">
-                    <strong>Byte 20:</strong> qname[1] length (uint8): 3
-                  </div>
-                  <div class="annotation" data-segment="frame-example-9" style="border-left-color: #d1fae5;">
-                    <strong>Bytes 21-23:</strong> qname[1] (string): &#039;com&#039;
-                  </div>
-                  <div class="annotation" data-segment="frame-example-10" style="border-left-color: #e9d5ff;">
-                    <strong>Byte 24:</strong> qname terminator (uint8): 0
-                  </div>
-                  <div class="annotation" data-segment="frame-example-11" style="border-left-color: #fed7aa;">
-                    <strong>Bytes 25-26:</strong> qtype (uint16): 1
-                  </div>
-                  <div class="annotation" data-segment="frame-example-12" style="border-left-color: #dbeafe;">
-                    <strong>Bytes 27-28:</strong> qclass (uint16): 1
-                  </div>
-                </div>
-              </div>
-          </div>
-        </details>
-      </div>
       </div>
     </section>
 
@@ -1016,13 +871,13 @@
                 
               </div>
             </div>
-            <div class="field-desc"><strong>mname:</strong> The domain name of the name server that was the original or primary source of data for this zone</div>
-            <div class="field-desc"><strong>rname:</strong> A domain name which specifies the mailbox of the person responsible for this zone</div>
-            <div class="field-desc"><strong>serial:</strong> The unsigned 32-bit version number of the original copy of the zone. Zone transfers preserve this value. Wraps and should be compared using sequence space arithmetic</div>
-            <div class="field-desc"><strong>refresh:</strong> A 32-bit time interval (in seconds) before the zone should be refreshed</div>
-            <div class="field-desc"><strong>retry:</strong> A 32-bit time interval (in seconds) that should elapse before a failed refresh should be retried</div>
-            <div class="field-desc"><strong>expire:</strong> A 32-bit time value (in seconds) that specifies the upper limit on the time interval that can elapse before the zone is no longer authoritative</div>
-            <div class="field-desc"><strong>minimum:</strong> The unsigned 32-bit minimum TTL field that should be exported with any RR from this zone</div>
+            <div class="field-desc"><strong>mname:</strong> The name of the primary master name server for the zone</div>
+            <div class="field-desc"><strong>rname:</strong> The mailbox of the person responsible for this zone</div>
+            <div class="field-desc"><strong>serial:</strong> The unsigned 32 bit version number of the original copy of the zone. Zone transfers preserve this value</div>
+            <div class="field-desc"><strong>refresh:</strong> The time interval before the zone should be refreshed</div>
+            <div class="field-desc"><strong>retry:</strong> The time interval that should elapse before a failed refresh should be retried</div>
+            <div class="field-desc"><strong>expire:</strong> The upper limit on the time interval that can elapse before the zone is no longer authoritative</div>
+            <div class="field-desc"><strong>minimum:</strong> The minimum TTL field that should be exported with any RR from this zone</div>
           </div>
         </details>
         <details class="type-details" id="type-PTR_Record">
@@ -1037,7 +892,7 @@
                 
               </div>
             </div>
-            <div class="field-desc"><strong>ptrdname:</strong> A domain name which points to some location in the domain name space. Used in special domains (like IN-ADDR.ARPA) to point to some other location</div>
+            <div class="field-desc"><strong>ptrdname:</strong> A domain-name pointer which points to some other location in the domain name space</div>
           </div>
         </details>
         <details class="type-details" id="type-MX_Record">
@@ -1058,8 +913,8 @@
                 
               </div>
             </div>
-            <div class="field-desc"><strong>preference:</strong> A 16-bit integer which specifies the preference given to this RR among others at the same owner. Lower values are preferred</div>
-            <div class="field-desc"><strong>exchange:</strong> A domain name which specifies a host willing to act as a mail exchange for the owner name</div>
+            <div class="field-desc"><strong>preference:</strong> A 16-bit preference value used when multiple mail exchanges exist</div>
+            <div class="field-desc"><strong>exchange:</strong> A domain name which specifies a mail exchange</div>
           </div>
         </details>
         <details class="type-details" id="type-TXT_Record">
@@ -1098,8 +953,8 @@
                 
               </div>
             </div>
-            <div class="field-desc"><strong>address_high:</strong> Upper 64 bits of the 128-bit IPv6 address</div>
-            <div class="field-desc"><strong>address_low:</strong> Lower 64 bits of the 128-bit IPv6 address</div>
+            <div class="field-desc"><strong>address_high:</strong> High 64 bits of IPv6 address</div>
+            <div class="field-desc"><strong>address_low:</strong> Low 64 bits of IPv6 address</div>
           </div>
         </details>
       </div>
@@ -1114,16 +969,16 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>Query</code></td>
-            <td><a href="#msg-Query">DNS_QUERY</a></td>
+            <td><code>0x00</code></td>
+            <td><a href="#msg-0x00">DNS_QUERY</a></td>
             <td>DNS query message sent from a resolver to a name server requesting resolution of a domain name</td>
           </tr>
         </tbody>
       </table>
 
-            <details class="message-details" id="msg-Query">
+            <details class="message-details" id="msg-0x00">
         <summary>
-          <h4><code>Query</code> DNS_QUERY</h4>
+          <h4><code>0x00</code> DNS_QUERY</h4>
         </summary>
 
         <p class="message-description">DNS query message sent from a resolver to a name server requesting resolution of a domain name</p>
@@ -1219,16 +1074,16 @@
         </thead>
         <tbody>
           <tr>
-            <td><code>Response</code></td>
-            <td><a href="#msg-Response">DNS_RESPONSE</a></td>
+            <td><code>0x01</code></td>
+            <td><a href="#msg-0x01">DNS_RESPONSE</a></td>
             <td>DNS response message sent from a name server to a resolver containing requested resource records or an error code</td>
           </tr>
         </tbody>
       </table>
 
-            <details class="message-details" id="msg-Response">
+            <details class="message-details" id="msg-0x01">
         <summary>
-          <h4><code>Response</code> DNS_RESPONSE</h4>
+          <h4><code>0x01</code> DNS_RESPONSE</h4>
         </summary>
 
         <p class="message-description">DNS response message sent from a name server to a resolver containing requested resource records or an error code</p>
