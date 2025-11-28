@@ -1138,6 +1138,63 @@ const BackReferenceFieldSchema = BackReferenceElementSchema.extend({
 });
 
 /**
+ * Alignment padding field
+ * Inserts zero bytes to align the current position to a byte boundary
+ */
+const PaddingFieldSchema = z.object({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("padding").meta({
+    description: "Field type (always 'padding')"
+  }),
+  align_to: z.number().int().min(1).meta({
+    description: "Byte boundary to align to (must be power of 2: 2, 4, 8, etc.)"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
+}).refine(
+  (data) => {
+    // Verify align_to is a power of 2
+    return (data.align_to & (data.align_to - 1)) === 0;
+  },
+  {
+    message: "align_to must be a power of 2 (1, 2, 4, 8, 16, ...)"
+  }
+).meta({
+  title: "Alignment Padding",
+  description: "Inserts zero bytes to align the current stream position to a byte boundary. Commonly used in binary formats like ELF, PE, PCF fonts, etc.",
+  use_for: "Structure alignment, section padding, word-aligned access",
+  wire_format: "0 to (align_to - 1) zero bytes, depending on current position",
+
+  code_generation: {
+    typescript: {
+      type: "void (not represented in value)",
+      notes: ["Padding is not stored in decoded value", "Automatically calculated during encoding"]
+    },
+    go: {
+      type: "// not represented",
+      notes: ["Padding is handled internally", "Not part of struct definition"]
+    },
+    rust: {
+      type: "// not represented",
+      notes: ["Padding is handled internally", "Not part of struct definition"]
+    }
+  },
+  notes: [
+    "Padding bytes are always zeros (0x00)",
+    "Number of padding bytes = (align_to - (position % align_to)) % align_to",
+    "If already aligned, zero bytes are inserted",
+    "Common values: 2 (word), 4 (dword), 8 (qword), 16 (paragraph)"
+  ],
+  examples: [
+    { name: "padding", type: "padding", align_to: 4, description: "Align to 4-byte boundary" },
+    { name: "section_padding", type: "padding", align_to: 8, description: "Align to 8-byte boundary" }
+  ]
+});
+
+/**
  * Array element schema (array without name - for nested arrays)
  */
 const ArrayElementSchema = z.object({
@@ -1602,6 +1659,7 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     BitfieldFieldSchema,
     DiscriminatedUnionFieldSchema,
     BackReferenceFieldSchema,
+    PaddingFieldSchema,
   ]),
 
   // Third: Fallback to type reference for user-defined types

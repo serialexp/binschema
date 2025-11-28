@@ -374,6 +374,14 @@ export class BitStreamEncoder {
   }
 
   /**
+   * Get current byte position (alias for byteOffset)
+   * Used by alignment padding to calculate padding bytes needed
+   */
+  getBytePosition(): number {
+    return this.bytes.length;
+  }
+
+  /**
    * Get encoded bytes
    * Flushes any partial byte (pads with zeros)
    */

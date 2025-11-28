@@ -578,12 +578,17 @@ function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySch
   let code = generateJSDoc(typeDefAny.description);
   code += `export interface ${typeName} {\n`;
 
-  // Add sequence fields (skip computed fields - they are output-only)
+  // Add sequence fields (skip computed fields and padding - they are output-only)
   for (const field of fields) {
     const fieldAny = field as any;
 
     // Skip computed fields in interface - users cannot provide them as input
     if (fieldAny.computed) {
+      continue;
+    }
+
+    // Skip padding fields - they have no value representation
+    if (fieldAny.type === "padding") {
       continue;
     }
 
@@ -1238,6 +1243,21 @@ function generateEncodeFieldCoreImpl(
     case "optional":
       return generateEncodeOptional(field, schema, globalEndianness, valuePath, indent);
 
+    case "padding": {
+      // Alignment padding: write zero bytes to align to the specified boundary
+      const alignTo = (field as any).align_to;
+      let code = "";
+      code += `${indent}// Alignment padding to ${alignTo}-byte boundary\n`;
+      code += `${indent}{\n`;
+      code += `${indent}  const currentPos = this.getBytePosition();\n`;
+      code += `${indent}  const paddingBytes = (${alignTo} - (currentPos % ${alignTo})) % ${alignTo};\n`;
+      code += `${indent}  for (let i = 0; i < paddingBytes; i++) {\n`;
+      code += `${indent}    this.writeUint8(0);\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
+      return code;
+    }
+
     default:
       // Type reference - need to encode nested struct
       return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent, contextVarName, baseContextVar);
@@ -1839,6 +1859,19 @@ function generateDecodeFieldCoreImpl(
 
     case "optional":
       return generateDecodeOptional(field, schema, globalEndianness, fieldName, indent);
+
+    case "padding": {
+      // Alignment padding: skip bytes to align to the specified boundary
+      const alignTo = (field as any).align_to;
+      let code = "";
+      code += `${indent}// Skip alignment padding to ${alignTo}-byte boundary\n`;
+      code += `${indent}{\n`;
+      code += `${indent}  const currentPos = this.byteOffset;\n`;
+      code += `${indent}  const paddingBytes = (${alignTo} - (currentPos % ${alignTo})) % ${alignTo};\n`;
+      code += `${indent}  this.byteOffset += paddingBytes;\n`;
+      code += `${indent}}\n`;
+      return code;
+    }
 
     default:
       // Type reference
