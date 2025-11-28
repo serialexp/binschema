@@ -60,7 +60,8 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   let code = `import { BitStreamEncoder, Endianness } from "./bit-stream.js";\n`;
   code += `import { SeekableBitStreamDecoder } from "./seekable-bit-stream.js";\n`;
   code += `import { createReader } from "./binary-reader.js";\n`;
-  code += `import { crc32 } from "./crc32.js";\n\n`;
+  code += `import { crc32 } from "./crc32.js";\n`;
+  code += `import { evaluateExpression } from "./expression-evaluator.js";\n\n`;
 
   // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
   code += generateRuntimeHelpers();

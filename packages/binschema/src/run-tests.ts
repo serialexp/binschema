@@ -265,6 +265,11 @@ function setupRuntimeLibrary(): void {
   const crc32Source = join(__dirname, 'runtime/crc32.ts');
   const crc32Dest = join(genDir, 'crc32.ts');
   copyFileSync(crc32Source, crc32Dest);
+
+  // Copy expression-evaluator.ts
+  const exprEvalSource = join(__dirname, 'runtime/expression-evaluator.ts');
+  const exprEvalDest = join(genDir, 'expression-evaluator.ts');
+  copyFileSync(exprEvalSource, exprEvalDest);
 }
 
 async function main() {

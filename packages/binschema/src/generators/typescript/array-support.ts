@@ -601,6 +601,39 @@ export function generateDecodeArray(
       code += `${indent}}\n`;
     }
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
+  } else if (field.kind === "computed_count") {
+    // Length is computed from an expression referencing earlier fields
+    const countExpr = field.count_expr;
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+
+    // Generate code to evaluate the expression using already-decoded fields
+    // We need to call the expression evaluator at runtime
+    code += `${indent}// Evaluate computed count expression: ${countExpr}\n`;
+    code += `${indent}const ${lengthVarName}_context: Record<string, number> = {};\n`;
+
+    // Extract field names from the expression and build the context
+    // Field names are identifiers (including dotted notation)
+    const fieldRefs = countExpr.match(/[a-zA-Z_][a-zA-Z0-9_.]*(?![a-zA-Z0-9_(])/g) || [];
+    const uniqueFieldRefs = [...new Set(fieldRefs)];
+
+    const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
+    const parentPath = fieldName.includes('.') ? fieldName.substring(0, fieldName.lastIndexOf('.')) + '.' : '';
+
+    for (const fieldRef of uniqueFieldRefs) {
+      const fullPath = parentPath + fieldRef;
+      if (isArrayItem) {
+        code += `${indent}${lengthVarName}_context['${fieldRef}'] = ${fullPath};\n`;
+      } else {
+        code += `${indent}${lengthVarName}_context['${fieldRef}'] = value.${fullPath};\n`;
+      }
+    }
+
+    code += `${indent}const ${lengthVarName}_result = evaluateExpression('${countExpr}', ${lengthVarName}_context);\n`;
+    code += `${indent}if (!${lengthVarName}_result.success) {\n`;
+    code += `${indent}  throw new Error(\`Failed to evaluate count expression '${countExpr}': \${${lengthVarName}_result.error}\${${lengthVarName}_result.details ? ' (' + ${lengthVarName}_result.details + ')' : ''}\`);\n`;
+    code += `${indent}}\n`;
+    code += `${indent}const ${lengthVarName} = ${lengthVarName}_result.value;\n`;
+    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "byte_length_prefixed") {
     // Read byte length prefix, then read items until we've consumed N bytes (ASN.1 SEQUENCE pattern)
     const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
