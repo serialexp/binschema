@@ -214,7 +214,7 @@ function generateInstanceClass(
 
   // Add getter definitions to constructor
   for (const instance of instances) {
-    const instanceType = resolveTypeReference(instance.type, schema);
+    const instanceType = resolveInstanceType(instance.type, schema);
 
     code += `\n    // Define enumerable getter for lazy field '${instance.name}'\n`;
     code += `    Object.defineProperty(this, '${instance.name}', {\n`;
@@ -261,9 +261,71 @@ function generateInstanceClass(
 
     // Decode the type at that position
     // Pass root decoder so nested position fields can seek in the full file
-    code += `            const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(position), { _root: this._root, _rootDecoder: this._decoder });\n`;
-    code += `            const value = decoder.decode();\n`;
-    code += `            this._lazyCache.set('${instance.name}', value);\n`;
+    if (isInlineDiscriminatedUnion(instance.type)) {
+      // Inline discriminated union - generate switch logic
+      const union = instance.type;
+
+      // Get discriminator value
+      if (union.discriminator.field) {
+        // Field-based discriminator
+        const fieldAccessPath = generateFieldAccessPath(union.discriminator.field);
+        code += `            const discriminatorValue = ${fieldAccessPath};\n`;
+      } else if (union.discriminator.peek) {
+        // Peek-based discriminator - read value at position without consuming
+        const peekType = union.discriminator.peek;
+        const endianness = union.discriminator.endianness || 'little_endian';
+        const isBigEndian = endianness === 'big_endian';
+
+        if (peekType === 'uint8') {
+          code += `            const discriminatorValue = this._decoder['bytes'][Number(position)];\n`;
+        } else if (peekType === 'uint16') {
+          code += `            const discriminatorValue = ${isBigEndian
+            ? `(this._decoder['bytes'][Number(position)] << 8) | this._decoder['bytes'][Number(position) + 1]`
+            : `this._decoder['bytes'][Number(position)] | (this._decoder['bytes'][Number(position) + 1] << 8)`};\n`;
+        } else if (peekType === 'uint32') {
+          code += `            const discriminatorValue = ${isBigEndian
+            ? `(this._decoder['bytes'][Number(position)] << 24) | (this._decoder['bytes'][Number(position) + 1] << 16) | (this._decoder['bytes'][Number(position) + 2] << 8) | this._decoder['bytes'][Number(position) + 3]`
+            : `this._decoder['bytes'][Number(position)] | (this._decoder['bytes'][Number(position) + 1] << 8) | (this._decoder['bytes'][Number(position) + 2] << 16) | (this._decoder['bytes'][Number(position) + 3] << 24)`} >>> 0;\n`;
+        }
+      }
+
+      code += `            let value: any;\n`;
+
+      // Generate switch cases for variants
+      for (let i = 0; i < union.variants.length; i++) {
+        const variant = union.variants[i];
+        const isLast = i === union.variants.length - 1;
+        const isFallback = !variant.when;
+
+        if (isFallback) {
+          code += `            // Default/fallback variant\n`;
+          code += `            {\n`;
+        } else {
+          // Convert "value == 1" to "discriminatorValue == 1"
+          const condition = variant.when.replace(/\bvalue\b/g, 'discriminatorValue');
+          code += `            ${i === 0 ? 'if' : 'else if'} (${condition}) {\n`;
+        }
+
+        code += `              const decoder = new ${variant.type}Decoder(this._decoder['bytes'].slice(Number(position)), { _root: this._root, _rootDecoder: this._decoder });\n`;
+        code += `              value = { type: '${variant.type}', value: decoder.decode() };\n`;
+        code += `            }`;
+
+        if (!isFallback && isLast) {
+          code += ` else {\n`;
+          code += `              throw new Error(\`Unknown discriminator value for instance '${instance.name}': \${discriminatorValue}\`);\n`;
+          code += `            }`;
+        }
+        code += `\n`;
+      }
+
+      code += `            this._lazyCache.set('${instance.name}', value);\n`;
+    } else {
+      // Simple type reference
+      code += `            const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(Number(position)), { _root: this._root, _rootDecoder: this._decoder });\n`;
+      code += `            const value = decoder.decode();\n`;
+      code += `            this._lazyCache.set('${instance.name}', value);\n`;
+    }
+
     code += `          } finally {\n`;
     code += `            this._evaluating.delete('${instance.name}');\n`;
     code += `          }\n`;
@@ -539,7 +601,7 @@ function generateInterface(typeName: string, typeDef: TypeDef, schema: BinarySch
   // Add instance fields (position-based lazy fields)
   if (typeDefAny.instances && Array.isArray(typeDefAny.instances)) {
     for (const instance of typeDefAny.instances) {
-      const instanceType = resolveTypeReference(instance.type, schema);
+      const instanceType = resolveInstanceType(instance.type, schema);
 
       // Add JSDoc for instance field
       const instanceDoc: any = {
@@ -626,6 +688,25 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
     }
   }
   return "any";
+}
+
+/**
+ * Resolve instance type reference
+ * Handles both string type references and inline discriminated unions
+ */
+function resolveInstanceType(instanceType: string | { discriminator: any; variants: any[] }, schema: BinarySchema): string {
+  if (typeof instanceType === 'string') {
+    return resolveTypeReference(instanceType, schema);
+  }
+  // Inline discriminated union
+  return generateDiscriminatedUnionType(instanceType, schema);
+}
+
+/**
+ * Check if instance type is an inline discriminated union
+ */
+function isInlineDiscriminatedUnion(instanceType: any): instanceType is { discriminator: any; variants: any[] } {
+  return typeof instanceType === 'object' && instanceType !== null && 'discriminator' in instanceType && 'variants' in instanceType;
 }
 
 /**

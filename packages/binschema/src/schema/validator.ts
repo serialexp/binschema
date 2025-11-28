@@ -521,11 +521,60 @@ function validatePositionField(
     return;
   }
 
-  // Validate target type exists
-  if (!schema.types[instance.type]) {
+  // Validate target type exists (or inline discriminated union)
+  if (typeof instance.type === 'string') {
+    // Simple type reference - validate it exists
+    if (!schema.types[instance.type]) {
+      errors.push({
+        path: `${path} (${instance.name})`,
+        message: `Position field type '${instance.type}' not found in schema.types`
+      });
+    }
+  } else if (typeof instance.type === 'object' && instance.type !== null) {
+    // Inline discriminated union - validate discriminator and variants
+    const inlineUnion = instance.type as { discriminator?: any; variants?: any[] };
+
+    if (!inlineUnion.discriminator) {
+      errors.push({
+        path: `${path} (${instance.name})`,
+        message: `Inline discriminated union missing 'discriminator' property`
+      });
+    } else {
+      // Validate discriminator (field or peek)
+      if (inlineUnion.discriminator.field) {
+        // Field-based discriminator - validate field exists in sequence
+        const fieldName = inlineUnion.discriminator.field;
+        const fieldExists = sequenceFields.some((f: any) => f.name === fieldName);
+        if (!fieldExists) {
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Discriminator field '${fieldName}' not found in sequence fields`
+          });
+        }
+      }
+      // peek-based discriminators don't need field validation
+    }
+
+    if (!inlineUnion.variants || !Array.isArray(inlineUnion.variants) || inlineUnion.variants.length === 0) {
+      errors.push({
+        path: `${path} (${instance.name})`,
+        message: `Inline discriminated union must have at least one variant`
+      });
+    } else {
+      // Validate each variant's type exists
+      for (const variant of inlineUnion.variants) {
+        if (variant.type && !schema.types[variant.type]) {
+          errors.push({
+            path: `${path} (${instance.name})`,
+            message: `Variant type '${variant.type}' not found in schema.types`
+          });
+        }
+      }
+    }
+  } else {
     errors.push({
       path: `${path} (${instance.name})`,
-      message: `Position field type '${instance.type}' not found in schema.types`
+      message: `Position field 'type' must be a string or inline discriminated union object`
     });
   }
 

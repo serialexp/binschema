@@ -1619,6 +1619,20 @@ export type Field = z.infer<typeof FieldSchema>;
 // ============================================================================
 
 /**
+ * Inline discriminated union for instance types
+ * Allows instances to have their type determined by a discriminator
+ * (useful when type info is in the header, but data is at an offset)
+ */
+const InlineDiscriminatedUnionSchema = z.object({
+  discriminator: DiscriminatorSchema.meta({
+    description: "How to determine which variant to use (peek at data or reference earlier field)"
+  }),
+  variants: z.array(DiscriminatedUnionVariantSchema).min(1).meta({
+    description: "List of possible types with conditions"
+  }),
+});
+
+/**
  * Position field (lazy-evaluated, accessed via getter)
  * Used for random-access/seekable parsing (ZIP, ELF, databases, etc.)
  */
@@ -1626,7 +1640,12 @@ const PositionFieldSchema = z.object({
   name: z.string().meta({
     description: "Field name"
   }),
-  type: z.string(), // Type to decode at position
+  type: z.union([
+    z.string(), // Simple type reference
+    InlineDiscriminatedUnionSchema // Inline discriminated union (type determined by discriminator)
+  ]).meta({
+    description: "Type to decode at position. Can be a type name (string) or an inline discriminated union with discriminator and variants."
+  }),
   position: z.union([
     z.number(),  // Absolute offset (positive) or offset from EOF (negative)
     z.string()   // Field reference (e.g., "header.offset")
