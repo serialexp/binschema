@@ -15,7 +15,7 @@ import (
 
 // TestLoadTestSuites verifies that test suites can be loaded correctly
 func TestLoadTestSuites(t *testing.T) {
-	testsDir := filepath.Join("..", "..", ".generated", "tests-json")
+	testsDir := filepath.Join("..", "..", "packages", "binschema", ".generated", "tests-json")
 	suites, err := LoadAllTestSuites(testsDir)
 	require.NoError(t, err)
 	require.NotEmpty(t, suites)

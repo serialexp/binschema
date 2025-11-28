@@ -15,7 +15,7 @@ import (
 // TestBinSchema runs all test suites with batched compilation for efficiency
 func TestBinSchema(t *testing.T) {
 	// Load all JSON test suites from all directories
-	testsDir := filepath.Join("..", "..", ".generated", "tests-json")
+	testsDir := filepath.Join("..", "..", "packages", "binschema", ".generated", "tests-json")
 	suites, err := LoadAllTestSuites(testsDir)
 	require.NoError(t, err, "Failed to load test suites")
 	require.NotEmpty(t, suites, "No test suites found in %s", testsDir)
