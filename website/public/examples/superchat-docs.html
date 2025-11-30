@@ -136,6 +136,20 @@
       background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     }
 
+    .field.computed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .field-computed {
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75em;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
     .field-name {
       font-weight: bold;
       color: white;
@@ -150,6 +164,14 @@
       color: rgba(255, 255, 255, 0.9);
       font-size: 0.75em;
       margin-bottom: 2px;
+    }
+
+    .field-type code {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fde047;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
     }
 
     .field-size {
@@ -457,6 +479,70 @@
       border-left: 4px solid #dc2626;
     }
 
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -515,6 +601,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#usage">Usage</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
       <li><a href="#messages">Messages</a></li>
@@ -533,6 +620,89 @@
       <li>Maximum frame size is 1 MB (1,048,576 bytes) to prevent DoS attacks.</li>
       <li>Clients must send PING every 30 seconds to avoid session timeout (60s inactivity).</li>
     </ul>
+      </div>
+    </section>
+
+    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema superchat-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { AuthRequestEncoder, AuthRequestDecoder } from './generated/superchat-protocol.js';
+
+// Encoding (object → bytes)
+const encoder = new AuthRequestEncoder();
+const bytes = encoder.encode({
+  "nickname": "alice",
+  "password": "hunter2"
+});
+
+// Decoding (bytes → object)
+const decoder = new AuthRequestDecoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema superchat-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "superchat-protocol/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.AuthRequest{
+        // Fill in your data here
+    }
+    bytes := generated.EncodeAuthRequest(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.DecodeAuthRequest(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema superchat-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::AuthRequest;
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = AuthRequest {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = AuthRequest::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
       </div>
     </section>
 
@@ -559,80 +729,6 @@
             </tbody>
           </table>
         </details>
-        <details class="type-details" id="type-String">
-          <summary><h3>String</h3></summary>
-          <p class="type-description">Length-prefixed UTF-8 string</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">length</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">data</div>
-                <div class="field-type">utf8 char[]</div>
-                <div class="field-size">length × 1 byte</div>
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-Optional-T-">
-          <summary><h3>Optional&lt;T&gt; <span class="generic-badge">Generic</span></h3></summary>
-          <p class="type-description">Optional field with presence byte</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">present</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 4">
-                <div class="field-name">value</div>
-                <div class="field-type">T</div>
-                <div class="field-size">variable</div>
-                <div class="field-condition">if present == 1</div>
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-FrameHeader">
-          <summary><h3>FrameHeader</h3></summary>
-          <p class="type-description">All messages use this frame format</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">length</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">version</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">type</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">flags</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>length:</strong> Total size of Version + Type + Flags + Payload (excludes the length field itself)</div>
-            <div class="field-desc"><strong>version:</strong> Protocol version (current: 1). Both client and server must validate on every message.</div>
-            <div class="field-desc"><strong>type:</strong> Message type identifier (0x01-0xFF)</div>
-            <div class="field-desc"><strong>flags:</strong> Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved</div>
-          </div>
-        </details>
         <details class="type-details" id="type-AuthRequest">
           <summary><h3>AuthRequest</h3></summary>
           <p class="type-description">Authentication request with password</p>
@@ -643,11 +739,13 @@
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">password</div>
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -665,11 +763,13 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">user_id</div>
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -677,11 +777,13 @@
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;<a href="#type-String" class="type-link">String</a>&gt;</div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">message</div>
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -691,46 +793,9 @@
             <div class="field-desc"><strong>message:</strong> Welcome message on success, error description on failure</div>
           </div>
         </details>
-        <details class="type-details" id="type-SetNickname">
-          <summary><h3>SetNickname</h3></summary>
-          <p class="type-description">Set or change nickname</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">nickname</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>nickname:</strong> Desired nickname (3-32 characters, alphanumeric + underscore)</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-NicknameResponse">
-          <summary><h3>NicknameResponse</h3></summary>
-          <p class="type-description">Nickname change result</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">success</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">message</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>success:</strong> 1 if nickname was set successfully, 0 if rejected</div>
-            <div class="field-desc"><strong>message:</strong> Confirmation message or error description (see notes for specific cases)</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-PostMessage">
-          <summary><h3>PostMessage</h3></summary>
-          <p class="type-description">Post a new message</p>
+        <details class="type-details" id="type-Channel">
+          <summary><h3>Channel</h3></summary>
+          <p class="type-description">Channel information in list</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 8">
@@ -738,11 +803,248 @@
                 <div class="field-type">uint64</div>
                 <div class="field-size">8 bytes</div>
                 
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">name</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">description</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">user_count</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">is_operator</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">type</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">retention_hours</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-ChannelList">
+          <summary><h3>ChannelList</h3></summary>
+          <p class="type-description">List of channels</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 2">
+                <div class="field-name">channel_count</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">channels</div>
+                <div class="field-type">Channel[]</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-Error">
+          <summary><h3>Error</h3></summary>
+          <p class="type-description">Generic error response</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 2">
+                <div class="field-name">error_code</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">message</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-FrameHeader">
+          <summary><h3>FrameHeader</h3></summary>
+          <p class="type-description">All messages use this frame format</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">length</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">version</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">type</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">flags</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>length:</strong> Total size of Version + Type + Flags + Payload (excludes the length field itself)</div>
+            <div class="field-desc"><strong>version:</strong> Protocol version (current: 1). Both client and server must validate on every message.</div>
+            <div class="field-desc"><strong>type:</strong> Message type identifier (0x01-0xFF)</div>
+            <div class="field-desc"><strong>flags:</strong> Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-JoinChannel">
+          <summary><h3>JoinChannel</h3></summary>
+          <p class="type-description">Join a channel</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">subchannel_id</div>
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-JoinResponse">
+          <summary><h3>JoinResponse</h3></summary>
+          <p class="type-description">Join result</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">success</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">message</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-ListChannels">
+          <summary><h3>ListChannels</h3></summary>
+          <p class="type-description">Request channel list</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">from_channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">limit</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-ListMessages">
+          <summary><h3>ListMessages</h3></summary>
+          <p class="type-description">Request messages from channel</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">limit</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">before_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -750,18 +1052,137 @@
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
                 
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">after_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-Message">
+          <summary><h3>Message</h3></summary>
+          <p class="type-description">Message in list</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">message_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">parent_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">author_user_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">author_nickname</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">content</div>
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
                 
+                
+              </div>
+              <div class="field" style="flex: 8">
+                <div class="field-name">created_at</div>
+                <div class="field-type">int64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">edited_at</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;int64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">reply_count</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
               </div>
             </div>
-            <div class="field-desc"><strong>channel_id:</strong> Target channel ID</div>
-            <div class="field-desc"><strong>subchannel_id:</strong> Target subchannel ID (optional, for channels with subchannels)</div>
-            <div class="field-desc"><strong>parent_id:</strong> Parent message ID for threaded replies (null for top-level posts)</div>
-            <div class="field-desc"><strong>content:</strong> Message content (max 4000 characters)</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-MessageList">
+          <summary><h3>MessageList</h3></summary>
+          <p class="type-description">List of messages</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">parent_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">message_count</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">messages</div>
+                <div class="field-type">Message[]</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
           </div>
         </details>
         <details class="type-details" id="type-MessagePosted">
@@ -774,17 +1195,20 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
               </div>
               <div class="field" style="flex: 8">
                 <div class="field-name">message_id</div>
                 <div class="field-type">uint64</div>
                 <div class="field-size">8 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">message</div>
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -803,11 +1227,13 @@
                 <div class="field-type">uint64</div>
                 <div class="field-size">8 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 8">
                 <div class="field-name">channel_id</div>
                 <div class="field-type">uint64</div>
                 <div class="field-size">8 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -815,11 +1241,13 @@
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">parent_id</div>
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -827,11 +1255,13 @@
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">author_nickname</div>
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -839,11 +1269,13 @@
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 8">
                 <div class="field-name">created_at</div>
                 <div class="field-type">int64</div>
                 <div class="field-size">8 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -851,11 +1283,13 @@
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;int64&gt;</div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">reply_count</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
             </div>
@@ -871,23 +1305,9 @@
             <div class="field-desc"><strong>reply_count:</strong> Total number of replies to this message (all descendants)</div>
           </div>
         </details>
-        <details class="type-details" id="type-RegisterUser">
-          <summary><h3>RegisterUser</h3></summary>
-          <p class="type-description">Register current nickname with password</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">password_hash</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-RegisterResponse">
-          <summary><h3>RegisterResponse</h3></summary>
-          <p class="type-description">Registration result</p>
+        <details class="type-details" id="type-NicknameResponse">
+          <summary><h3>NicknameResponse</h3></summary>
+          <p class="type-description">Nickname change result</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 1">
@@ -895,147 +1315,6 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">user_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-ListChannels">
-          <summary><h3>ListChannels</h3></summary>
-          <p class="type-description">Request channel list</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">from_channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">limit</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-Channel">
-          <summary><h3>Channel</h3></summary>
-          <p class="type-description">Channel information in list</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">name</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">description</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">user_count</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">is_operator</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">type</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">retention_hours</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-ChannelList">
-          <summary><h3>ChannelList</h3></summary>
-          <p class="type-description">List of channels</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">channel_count</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">channels</div>
-                <div class="field-type">Channel[]</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-JoinChannel">
-          <summary><h3>JoinChannel</h3></summary>
-          <p class="type-description">Join a channel</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-JoinResponse">
-          <summary><h3>JoinResponse</h3></summary>
-          <p class="type-description">Join result</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">success</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
                 
               </div>
               <div class="field" style="flex: 4">
@@ -1043,155 +1322,30 @@
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
                 
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-ListMessages">
-          <summary><h3>ListMessages</h3></summary>
-          <p class="type-description">Request messages from channel</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">limit</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">before_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">parent_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">after_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
                 
               </div>
             </div>
+            <div class="field-desc"><strong>success:</strong> 1 if nickname was set successfully, 0 if rejected</div>
+            <div class="field-desc"><strong>message:</strong> Confirmation message or error description (see notes for specific cases)</div>
           </div>
         </details>
-        <details class="type-details" id="type-Message">
-          <summary><h3>Message</h3></summary>
-          <p class="type-description">Message in list</p>
+        <details class="type-details" id="type-Optional-T-">
+          <summary><h3>Optional&lt;T&gt; <span class="generic-badge">Generic</span></h3></summary>
+          <p class="type-description">Optional field with presence byte</p>
           <div class="wire-format">
             <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">message_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">present</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
                 
               </div>
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+              <div class="field conditional" style="flex: 4">
+                <div class="field-name">value</div>
+                <div class="field-type">T</div>
                 <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">parent_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">author_user_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">author_nickname</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">content</div>
-                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 8">
-                <div class="field-name">created_at</div>
-                <div class="field-type">int64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">edited_at</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;int64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">reply_count</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-MessageList">
-          <summary><h3>MessageList</h3></summary>
-          <p class="type-description">List of messages</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">parent_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">message_count</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">messages</div>
-                <div class="field-type">Message[]</div>
-                <div class="field-size">variable</div>
+                <div class="field-condition">if present == 1</div>
                 
               </div>
             </div>
@@ -1207,6 +1361,7 @@
                 <div class="field-type">int64</div>
                 <div class="field-size">8 bytes</div>
                 
+                
               </div>
             </div>
           </div>
@@ -1221,41 +1376,14 @@
                 <div class="field-type">int64</div>
                 <div class="field-size">8 bytes</div>
                 
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-SubscribeThread">
-          <summary><h3>SubscribeThread</h3></summary>
-          <p class="type-description">Subscribe to thread updates</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">thread_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
                 
               </div>
             </div>
           </div>
         </details>
-        <details class="type-details" id="type-UnsubscribeThread">
-          <summary><h3>UnsubscribeThread</h3></summary>
-          <p class="type-description">Unsubscribe from thread updates</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">thread_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-SubscribeChannel">
-          <summary><h3>SubscribeChannel</h3></summary>
-          <p class="type-description">Subscribe to new threads in channel</p>
+        <details class="type-details" id="type-PostMessage">
+          <summary><h3>PostMessage</h3></summary>
+          <p class="type-description">Post a new message</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 8">
@@ -1263,25 +1391,6 @@
                 <div class="field-type">uint64</div>
                 <div class="field-size">8 bytes</div>
                 
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-UnsubscribeChannel">
-          <summary><h3>UnsubscribeChannel</h3></summary>
-          <p class="type-description">Unsubscribe from channel updates</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">channel_id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
                 
               </div>
               <div class="field" style="flex: 4">
@@ -1289,51 +1398,61 @@
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
                 
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">parent_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">content</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
               </div>
             </div>
+            <div class="field-desc"><strong>channel_id:</strong> Target channel ID</div>
+            <div class="field-desc"><strong>subchannel_id:</strong> Target subchannel ID (optional, for channels with subchannels)</div>
+            <div class="field-desc"><strong>parent_id:</strong> Parent message ID for threaded replies (null for top-level posts)</div>
+            <div class="field-desc"><strong>content:</strong> Message content (max 4000 characters)</div>
           </div>
         </details>
-        <details class="type-details" id="type-SubscribeOk">
-          <summary><h3>SubscribeOk</h3></summary>
-          <p class="type-description">Subscription confirmation</p>
+        <details class="type-details" id="type-RegisterResponse">
+          <summary><h3>RegisterResponse</h3></summary>
+          <p class="type-description">Registration result</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 1">
-                <div class="field-name">type</div>
+                <div class="field-name">success</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
-              </div>
-              <div class="field" style="flex: 8">
-                <div class="field-name">id</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
                 
               </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">subchannel_id</div>
+                <div class="field-name">user_id</div>
                 <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
           </div>
         </details>
-        <details class="type-details" id="type-Error">
-          <summary><h3>Error</h3></summary>
-          <p class="type-description">Generic error response</p>
+        <details class="type-details" id="type-RegisterUser">
+          <summary><h3>RegisterUser</h3></summary>
+          <p class="type-description">Register current nickname with password</p>
           <div class="wire-format">
             <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">error_code</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">message</div>
+                <div class="field-name">password_hash</div>
                 <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -1349,11 +1468,13 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">max_message_rate</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -1361,11 +1482,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">inactive_cleanup_days</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -1373,11 +1496,13 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">max_message_length</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -1385,17 +1510,157 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">max_channel_subs</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">directory_enabled</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-SetNickname">
+          <summary><h3>SetNickname</h3></summary>
+          <p class="type-description">Set or change nickname</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">nickname</div>
+                <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>nickname:</strong> Desired nickname (3-32 characters, alphanumeric + underscore)</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-String">
+          <summary><h3>String</h3></summary>
+          <p class="type-description">Length-prefixed UTF-8 string</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 2">
+                <div class="field-name">length</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">data</div>
+                <div class="field-type">utf8 char[]</div>
+                <div class="field-size">length × 1 byte</div>
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-SubscribeChannel">
+          <summary><h3>SubscribeChannel</h3></summary>
+          <p class="type-description">Subscribe to new threads in channel</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-SubscribeOk">
+          <summary><h3>SubscribeOk</h3></summary>
+          <p class="type-description">Subscription confirmation</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">type</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 8">
+                <div class="field-name">id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-SubscribeThread">
+          <summary><h3>SubscribeThread</h3></summary>
+          <p class="type-description">Subscribe to thread updates</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">thread_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-UnsubscribeChannel">
+          <summary><h3>UnsubscribeChannel</h3></summary>
+          <p class="type-description">Unsubscribe from channel updates</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">channel_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">subchannel_id</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-UnsubscribeThread">
+          <summary><h3>UnsubscribeThread</h3></summary>
+          <p class="type-description">Unsubscribe from thread updates</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">thread_id</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
                 
               </div>
             </div>
@@ -1471,11 +1736,13 @@
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">password</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1539,6 +1806,7 @@
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
               
+              
             </div>
           </div>
           <div class="field-desc"><strong>nickname:</strong> Desired nickname (3-32 characters, alphanumeric + underscore)</div>
@@ -1558,6 +1826,7 @@
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
               
+              
             </div>
           </div>
         </div>
@@ -1576,11 +1845,13 @@
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">limit</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
+              
               
             </div>
           </div>
@@ -1600,11 +1871,13 @@
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">subchannel_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1624,11 +1897,13 @@
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">subchannel_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 2">
@@ -1636,11 +1911,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">before_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -1648,11 +1925,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">after_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1679,11 +1958,13 @@
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">subchannel_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -1691,11 +1972,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">content</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1718,6 +2001,7 @@
               <div class="field-name">timestamp</div>
               <div class="field-type">int64</div>
               <div class="field-size">8 bytes</div>
+              
               
             </div>
           </div>
@@ -1809,11 +2093,13 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">user_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -1821,11 +2107,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;<a href="#type-String" class="type-link">String</a>&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">message</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1855,11 +2143,13 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">message</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1881,11 +2171,13 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">user_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1905,11 +2197,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">channels</div>
               <div class="field-type">Channel[]</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1929,11 +2223,13 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 8">
               <div class="field-name">channel_id</div>
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -1941,11 +2237,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">message</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -1965,11 +2263,13 @@
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">subchannel_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -1977,17 +2277,20 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">message_count</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">messages</div>
               <div class="field-type">Message[]</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -2014,17 +2317,20 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 8">
               <div class="field-name">message_id</div>
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">message</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -2056,11 +2362,13 @@
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 8">
               <div class="field-name">channel_id</div>
               <div class="field-type">uint64</div>
               <div class="field-size">8 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -2068,11 +2376,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">parent_id</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -2080,11 +2390,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">author_nickname</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -2092,11 +2404,13 @@
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 8">
               <div class="field-name">created_at</div>
               <div class="field-type">int64</div>
               <div class="field-size">8 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -2104,11 +2418,13 @@
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;int64&gt;</div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">reply_count</div>
               <div class="field-type">uint32</div>
               <div class="field-size">4 bytes</div>
+              
               
             </div>
           </div>
@@ -2138,6 +2454,7 @@
               <div class="field-type">int64</div>
               <div class="field-size">8 bytes</div>
               
+              
             </div>
           </div>
         </div>
@@ -2156,11 +2473,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">message</div>
               <div class="field-type"><a href="#type-String" class="type-link">String</a></div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -2180,11 +2499,13 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">max_message_rate</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 2">
@@ -2192,11 +2513,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">inactive_cleanup_days</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 1">
@@ -2204,11 +2527,13 @@
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">max_message_length</div>
               <div class="field-type">uint32</div>
               <div class="field-size">4 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 2">
@@ -2216,17 +2541,20 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">max_channel_subs</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 1">
               <div class="field-name">directory_enabled</div>
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
+              
               
             </div>
           </div>

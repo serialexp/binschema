@@ -95,14 +95,14 @@
       ],
       "sequence": [
         { "name": "sequence_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE tag" },
-        { "name": "sequence_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "sequence_tag" } },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "sequence_length" } },
 
         { "name": "name_type_tag", "type": "uint8", "const": 0xA0, "description": "Context [0]" },
         { "name": "name_type_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "name_type" } },
         { "name": "name_type", "type": "Int32", "description": "0=unknown, 1=principal, 2=service, 3=SRV-INST" },
 
         { "name": "name_string_tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
-        { "name": "name_string_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "name_string_tag" } },
+        { "name": "name_string_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "name_string_length" } },
         { "name": "name_string_seq_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE OF" },
         {
           "name": "name_string",
@@ -213,7 +213,7 @@
       ],
       "sequence": [
         { "name": "sequence_tag", "type": "uint8", "const": 0x30, "description": "SEQUENCE tag" },
-        { "name": "sequence_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "sequence_tag" } },
+        { "name": "sequence_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "sequence_length" } },
 
         { "name": "padata_type_tag", "type": "uint8", "const": 0xA1, "description": "Context [1]" },
         { "name": "padata_type_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "target": "padata_type" } },
@@ -413,7 +413,7 @@
       ],
       "sequence": [
         { "name": "application_tag", "type": "uint8", "const": 0x6A, "description": "APPLICATION 10" },
-        { "name": "application_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "application_tag" } },
+        { "name": "application_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "application_length" } },
         { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
         {
           "name": "fields",
@@ -499,7 +499,7 @@
       ],
       "sequence": [
         { "name": "application_tag", "type": "uint8", "const": 0x6B, "description": "APPLICATION 11" },
-        { "name": "application_length", "type": "varlength", "encoding": "der" },
+        { "name": "application_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "application_length" } },
         { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
         {
           "name": "fields",
@@ -536,7 +536,7 @@
       ],
       "sequence": [
         { "name": "application_tag", "type": "uint8", "const": 0x61, "description": "APPLICATION 1 tag" },
-        { "name": "application_length", "type": "varlength", "encoding": "der" },
+        { "name": "application_length", "type": "varlength", "encoding": "der", "computed": { "type": "length_of", "from_after_field": "application_length" } },
 
         { "name": "sequence_tag", "type": "uint8", "const": 0x30 },
         { "name": "sequence_length", "type": "varlength", "encoding": "der" },

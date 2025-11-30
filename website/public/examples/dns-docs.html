@@ -136,6 +136,20 @@
       background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     }
 
+    .field.computed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .field-computed {
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75em;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
     .field-name {
       font-weight: bold;
       color: white;
@@ -150,6 +164,14 @@
       color: rgba(255, 255, 255, 0.9);
       font-size: 0.75em;
       margin-bottom: 2px;
+    }
+
+    .field-type code {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fde047;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
     }
 
     .field-size {
@@ -457,6 +479,70 @@
       border-left: 4px solid #dc2626;
     }
 
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -515,6 +601,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#usage">Usage</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
       <li><a href="#messages">Messages</a></li>
@@ -532,6 +619,93 @@
       <li>UDP messages are limited to 512 bytes unless EDNS(0) extensions are used.</li>
       <li>Recursive resolvers must randomize the ID field and source port to prevent cache poisoning.</li>
     </ul>
+      </div>
+    </section>
+
+    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema dns-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { QuestionEncoder, QuestionDecoder } from './generated/dns-protocol.js';
+
+// Encoding (object → bytes)
+const encoder = new QuestionEncoder();
+const bytes = encoder.encode({
+  "qname": [
+    "example",
+    "com"
+  ],
+  "qtype": 1,
+  "qclass": 1
+});
+
+// Decoding (bytes → object)
+const decoder = new QuestionDecoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema dns-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "dns-protocol/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.Question{
+        // Fill in your data here
+    }
+    bytes := generated.EncodeQuestion(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.DecodeQuestion(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema dns-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::Question;
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = Question {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = Question::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
       </div>
     </section>
 
@@ -558,6 +732,62 @@
             </tbody>
           </table>
         </details>
+        <details class="type-details" id="type-A_Record">
+          <summary><h3>A_Record</h3></summary>
+          <p class="type-description">A record RDATA - IPv4 address (TYPE=1, CLASS=IN)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">address</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>address:</strong> A 32-bit Internet address (IPv4). Hosts with multiple Internet addresses will have multiple A records</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-AAAA_Record">
+          <summary><h3>AAAA_Record</h3></summary>
+          <p class="type-description">AAAA record RDATA - IPv6 address (TYPE=28, CLASS=IN)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 8">
+                <div class="field-name">address_high</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 8">
+                <div class="field-name">address_low</div>
+                <div class="field-type">uint64</div>
+                <div class="field-size">8 bytes</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>address_high:</strong> High 64 bits of IPv6 address</div>
+            <div class="field-desc"><strong>address_low:</strong> Low 64 bits of IPv6 address</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-CNAME_Record">
+          <summary><h3>CNAME_Record</h3></summary>
+          <p class="type-description">CNAME record RDATA - canonical name for an alias (TYPE=5)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">cname</div>
+                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>cname:</strong> A domain name which specifies the canonical or primary name for the owner. The owner name is an alias</div>
+          </div>
+        </details>
         <details class="type-details" id="type-DNSHeader">
           <summary><h3>DNSHeader</h3></summary>
           <p class="type-description">DNS message header - fixed 12 bytes at start of all DNS messages</p>
@@ -568,11 +798,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">qr</div>
                 <div class="field-type">bit&lt;1&gt;</div>
                 <div class="field-size">1 bits</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -580,11 +812,13 @@
                 <div class="field-type">bit&lt;4&gt;</div>
                 <div class="field-size">4 bits</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">aa</div>
                 <div class="field-type">bit&lt;1&gt;</div>
                 <div class="field-size">1 bits</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -592,11 +826,13 @@
                 <div class="field-type">bit&lt;1&gt;</div>
                 <div class="field-size">1 bits</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">rd</div>
                 <div class="field-type">bit&lt;1&gt;</div>
                 <div class="field-size">1 bits</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -604,11 +840,13 @@
                 <div class="field-type">bit&lt;1&gt;</div>
                 <div class="field-size">1 bits</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">z</div>
                 <div class="field-type">bit&lt;3&gt;</div>
                 <div class="field-size">3 bits</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -616,11 +854,13 @@
                 <div class="field-type">bit&lt;4&gt;</div>
                 <div class="field-size">4 bits</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">qdcount</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -628,17 +868,20 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">nscount</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">arcount</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
             </div>
@@ -655,24 +898,6 @@
             <div class="field-desc"><strong>ancount:</strong> An unsigned 16-bit integer specifying the number of resource records in the answer section</div>
             <div class="field-desc"><strong>nscount:</strong> An unsigned 16-bit integer specifying the number of name server resource records in the authority records section</div>
             <div class="field-desc"><strong>arcount:</strong> An unsigned 16-bit integer specifying the number of resource records in the additional records section</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-Label">
-          <summary><h3>Label</h3></summary>
-          <p class="type-description">Single DNS label - length byte (0-63) followed by that many ASCII characters</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">length</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">data</div>
-                <div class="field-type">ascii char[]</div>
-                <div class="field-size">length × 1 byte</div>
-              </div>
-            </div>
           </div>
         </details>
         <details class="type-details" id="type-DomainName">
@@ -693,12 +918,86 @@
             </div>
           </div>
         </details>
+        <details class="type-details" id="type-Label">
+          <summary><h3>Label</h3></summary>
+          <p class="type-description">Single DNS label - length byte (0-63) followed by that many ASCII characters</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">length</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">data</div>
+                <div class="field-type">ascii char[]</div>
+                <div class="field-size">length × 1 byte</div>
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-MX_Record">
+          <summary><h3>MX_Record</h3></summary>
+          <p class="type-description">MX record RDATA - mail exchange (TYPE=15)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 2">
+                <div class="field-name">preference</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">exchange</div>
+                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>preference:</strong> A 16-bit preference value used when multiple mail exchanges exist</div>
+            <div class="field-desc"><strong>exchange:</strong> A domain name which specifies a mail exchange</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-NS_Record">
+          <summary><h3>NS_Record</h3></summary>
+          <p class="type-description">NS record RDATA - authoritative name server (TYPE=2)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">nsdname</div>
+                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>nsdname:</strong> A domain name which specifies a host which should be authoritative for the specified class and domain</div>
+          </div>
+        </details>
         <details class="type-details" id="type-Pointer">
           <summary><h3>Pointer</h3></summary>
           <p class="type-description">DNS compression pointer - 2 bytes where top 2 bits are 11, followed by 14-bit offset from start of DNS message</p>
           <p class="type-alias">
             Type alias: <code>uint16</code>
           </p>
+        </details>
+        <details class="type-details" id="type-PTR_Record">
+          <summary><h3>PTR_Record</h3></summary>
+          <p class="type-description">PTR record RDATA - pointer to domain name (TYPE=12)</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">ptrdname</div>
+                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>ptrdname:</strong> A domain-name pointer which points to some other location in the domain name space</div>
+          </div>
         </details>
         <details class="type-details" id="type-Question">
           <summary><h3>Question</h3></summary>
@@ -710,17 +1009,20 @@
                 <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">qtype</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">qclass</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
             </div>
@@ -739,11 +1041,13 @@
                 <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">rtype</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -751,11 +1055,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">ttl</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -763,11 +1069,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">rdata</div>
                 <div class="field-type">uint8[] (<a href="#type-A_Record" class="type-link">A_Record</a> | <a href="#type-NS_Record" class="type-link">NS_Record</a> | <a href="#type-CNAME_Record" class="type-link">CNAME_Record</a> | <a href="#type-SOA_Record" class="type-link">SOA_Record</a> | <a href="#type-PTR_Record" class="type-link">PTR_Record</a> | <a href="#type-MX_Record" class="type-link">MX_Record</a> | <a href="#type-TXT_Record" class="type-link">TXT_Record</a> | <a href="#type-AAAA_Record" class="type-link">AAAA_Record</a>)</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -776,51 +1084,6 @@
             <div class="field-desc"><strong>rclass:</strong> Two octets which specify the class of the data in the RDATA field. 1=IN (Internet), 3=CH (CHAOS), 4=HS (Hesiod)</div>
             <div class="field-desc"><strong>ttl:</strong> A 32-bit unsigned integer that specifies the time interval (in seconds) that the resource record may be cached before it should be discarded. Zero values mean the RR can only be used for the transaction in progress and should not be cached</div>
             <div class="field-desc"><strong>rdlength:</strong> An unsigned 16-bit integer that specifies the length in octets of the RDATA field</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-A_Record">
-          <summary><h3>A_Record</h3></summary>
-          <p class="type-description">A record RDATA - IPv4 address (TYPE=1, CLASS=IN)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">address</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>address:</strong> A 32-bit Internet address (IPv4). Hosts with multiple Internet addresses will have multiple A records</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-NS_Record">
-          <summary><h3>NS_Record</h3></summary>
-          <p class="type-description">NS record RDATA - authoritative name server (TYPE=2)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">nsdname</div>
-                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>nsdname:</strong> A domain name which specifies a host which should be authoritative for the specified class and domain</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-CNAME_Record">
-          <summary><h3>CNAME_Record</h3></summary>
-          <p class="type-description">CNAME record RDATA - canonical name for an alias (TYPE=5)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">cname</div>
-                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>cname:</strong> A domain name which specifies the canonical or primary name for the owner. The owner name is an alias</div>
           </div>
         </details>
         <details class="type-details" id="type-SOA_Record">
@@ -833,11 +1096,13 @@
                 <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
                 <div class="field-size">variable</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">rname</div>
                 <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -845,11 +1110,13 @@
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">refresh</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 4">
@@ -857,17 +1124,20 @@
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">expire</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">minimum</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
             </div>
@@ -878,43 +1148,6 @@
             <div class="field-desc"><strong>retry:</strong> The time interval that should elapse before a failed refresh should be retried</div>
             <div class="field-desc"><strong>expire:</strong> The upper limit on the time interval that can elapse before the zone is no longer authoritative</div>
             <div class="field-desc"><strong>minimum:</strong> The minimum TTL field that should be exported with any RR from this zone</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-PTR_Record">
-          <summary><h3>PTR_Record</h3></summary>
-          <p class="type-description">PTR record RDATA - pointer to domain name (TYPE=12)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">ptrdname</div>
-                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>ptrdname:</strong> A domain-name pointer which points to some other location in the domain name space</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-MX_Record">
-          <summary><h3>MX_Record</h3></summary>
-          <p class="type-description">MX record RDATA - mail exchange (TYPE=15)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">preference</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">exchange</div>
-                <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>preference:</strong> A 16-bit preference value used when multiple mail exchanges exist</div>
-            <div class="field-desc"><strong>exchange:</strong> A domain name which specifies a mail exchange</div>
           </div>
         </details>
         <details class="type-details" id="type-TXT_Record">
@@ -933,28 +1166,6 @@
                 <div class="field-size">length × 1 byte</div>
               </div>
             </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-AAAA_Record">
-          <summary><h3>AAAA_Record</h3></summary>
-          <p class="type-description">AAAA record RDATA - IPv6 address (TYPE=28, CLASS=IN)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 8">
-                <div class="field-name">address_high</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 8">
-                <div class="field-name">address_low</div>
-                <div class="field-type">uint64</div>
-                <div class="field-size">8 bytes</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>address_high:</strong> High 64 bits of IPv6 address</div>
-            <div class="field-desc"><strong>address_low:</strong> Low 64 bits of IPv6 address</div>
           </div>
         </details>
       </div>
@@ -998,17 +1209,20 @@
               <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">qtype</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">qclass</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
+              
               
             </div>
           </div>
@@ -1108,11 +1322,13 @@
               <div class="field-type"><a href="#type-DomainName" class="type-link">DomainName</a> | <a href="#type-Pointer" class="type-link">Pointer</a></div>
               <div class="field-size">variable</div>
               
+              
             </div>
             <div class="field" style="flex: 2">
               <div class="field-name">rtype</div>
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 2">
@@ -1120,11 +1336,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">ttl</div>
               <div class="field-type">uint32</div>
               <div class="field-size">4 bytes</div>
+              
               
             </div>
             <div class="field" style="flex: 2">
@@ -1132,11 +1350,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">rdata</div>
               <div class="field-type">uint8[] (<a href="#type-A_Record" class="type-link">A_Record</a> | <a href="#type-NS_Record" class="type-link">NS_Record</a> | <a href="#type-CNAME_Record" class="type-link">CNAME_Record</a> | <a href="#type-SOA_Record" class="type-link">SOA_Record</a> | <a href="#type-PTR_Record" class="type-link">PTR_Record</a> | <a href="#type-MX_Record" class="type-link">MX_Record</a> | <a href="#type-TXT_Record" class="type-link">TXT_Record</a> | <a href="#type-AAAA_Record" class="type-link">AAAA_Record</a>)</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>

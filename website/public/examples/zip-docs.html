@@ -136,6 +136,20 @@
       background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     }
 
+    .field.computed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .field-computed {
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75em;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
     .field-name {
       font-weight: bold;
       color: white;
@@ -150,6 +164,14 @@
       color: rgba(255, 255, 255, 0.9);
       font-size: 0.75em;
       margin-bottom: 2px;
+    }
+
+    .field-type code {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fde047;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
     }
 
     .field-size {
@@ -457,6 +479,70 @@
       border-left: 4px solid #dc2626;
     }
 
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -515,6 +601,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#usage">Usage</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
       
@@ -525,6 +612,99 @@
     <section id="overview" class="section">
       <h2>Overview</h2>
       <p>ZIP archive file format with local file headers, central directory, and end-of-central-directory record. Supports computed CRCs and file offsets.</p>
+    </section>
+
+    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema zip-archive-format.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { CentralDirEntryEncoder, CentralDirEntryDecoder } from './generated/zip-archive-format.js';
+
+// Encoding (object → bytes)
+const encoder = new CentralDirEntryEncoder();
+const bytes = encoder.encode({
+  "version_made_by": 0,
+  "version_needed": 0,
+  "flags": 0,
+  "compression_method": 0,
+  "file_mod_time": 0,
+  "file_mod_date": 0,
+  "len_extra": 0,
+  "len_comment": 0,
+  "disk_number_start": 0,
+  "int_file_attr": 0,
+  "ext_file_attr": 0,
+  "file_name": "example"
+});
+
+// Decoding (bytes → object)
+const decoder = new CentralDirEntryDecoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema zip-archive-format.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "zip-archive-format/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.CentralDirEntry{
+        // Fill in your data here
+    }
+    bytes := generated.EncodeCentralDirEntry(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.DecodeCentralDirEntry(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema zip-archive-format.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::CentralDirEntry;
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = CentralDirEntry {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = CentralDirEntry::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
+      </div>
     </section>
 
     <section id="data-types" class="section">
@@ -556,8 +736,9 @@
             <div class="wire-diagram">
               <div class="field" style="flex: 4">
                 <div class="field-name">signature</div>
-                <div class="field-type">uint32</div>
+                <div class="field-type"><code>0x2014B50</code></div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -565,11 +746,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">version_needed</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -577,11 +760,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">compression_method</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -589,41 +774,48 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">file_mod_date</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">crc32</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">crc32 of ../sections[corresponding&lt;LocalFile&gt;].body</div>
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">len_body_compressed</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">length of ../sections[corresponding&lt;LocalFile&gt;].body</div>
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">len_body_uncompressed</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">length of ../sections[corresponding&lt;LocalFile&gt;].body</div>
               </div>
-              <div class="field" style="flex: 2">
+              <div class="field computed" style="flex: 2">
                 <div class="field-name">len_file_name</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                <div class="field-computed">length of file_name</div>
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">len_extra</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -631,11 +823,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">disk_number_start</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -643,23 +837,27 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">ext_file_attr</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">ofs_local_header</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">position of ../sections[corresponding&lt;LocalFile&gt;]</div>
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">file_name</div>
                 <div class="field-type">string (utf8)</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -671,8 +869,9 @@
             <div class="wire-diagram">
               <div class="field" style="flex: 4">
                 <div class="field-name">signature</div>
-                <div class="field-type">uint32</div>
+                <div class="field-type"><code>0x6054B50</code></div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -680,11 +879,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">disk_with_central_dir</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -692,29 +893,34 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">num_entries_total</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">len_central_dir</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">sum of type sizes ../sections</div>
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">ofs_central_dir</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">position of ../sections[first&lt;CentralDirEntry&gt;]</div>
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">len_comment</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
             </div>
@@ -726,8 +932,9 @@
             <div class="wire-diagram">
               <div class="field" style="flex: 4">
                 <div class="field-name">signature</div>
-                <div class="field-type">uint32</div>
+                <div class="field-type"><code>0x4034B50</code></div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 30">
@@ -735,11 +942,13 @@
                 <div class="field-type"><a href="#type-LocalFileHeader" class="type-link">LocalFileHeader</a></div>
                 <div class="field-size">30 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">body</div>
                 <div class="field-type">uint8[]</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -754,11 +963,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">flags</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -766,11 +977,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">file_mod_time</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 2">
@@ -778,41 +991,48 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">crc32</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">crc32 of ../body</div>
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">len_body_compressed</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">length of ../body</div>
               </div>
-              <div class="field" style="flex: 4">
+              <div class="field computed" style="flex: 4">
                 <div class="field-name">len_body_uncompressed</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                <div class="field-computed">length of ../body</div>
               </div>
-              <div class="field" style="flex: 2">
+              <div class="field computed" style="flex: 2">
                 <div class="field-name">len_file_name</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                <div class="field-computed">length of file_name</div>
               </div>
               <div class="field" style="flex: 2">
                 <div class="field-name">len_extra</div>
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">file_name</div>
                 <div class="field-type">string (utf8)</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>
@@ -826,6 +1046,7 @@
                 <div class="field-name">sections</div>
                 <div class="field-type">(<a href="#type-LocalFile" class="type-link">LocalFile</a> | <a href="#type-CentralDirEntry" class="type-link">CentralDirEntry</a> | <a href="#type-EndOfCentralDir" class="type-link">EndOfCentralDir</a>)[]</div>
                 <div class="field-size">variable</div>
+                
                 
               </div>
             </div>

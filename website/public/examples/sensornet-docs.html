@@ -136,6 +136,20 @@
       background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     }
 
+    .field.computed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .field-computed {
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75em;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
     .field-name {
       font-weight: bold;
       color: white;
@@ -150,6 +164,14 @@
       color: rgba(255, 255, 255, 0.9);
       font-size: 0.75em;
       margin-bottom: 2px;
+    }
+
+    .field-type code {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fde047;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
     }
 
     .field-size {
@@ -457,6 +479,70 @@
       border-left: 4px solid #dc2626;
     }
 
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -515,6 +601,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#usage">Usage</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
       <li><a href="#messages">Messages</a></li>
@@ -532,6 +619,94 @@
       <li>Hub responds to SENSOR_READING with ACK if status is abnormal.</li>
       <li>Maximum packet size is 256 bytes.</li>
     </ul>
+      </div>
+    </section>
+
+    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema sensornet-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { SensorReadingEncoder, SensorReadingDecoder } from './generated/sensornet-protocol.js';
+
+// Encoding (object → bytes)
+const encoder = new SensorReadingEncoder();
+const bytes = encoder.encode({
+  "sensor_type": 0,
+  "battery_low": 0,
+  "error": 0,
+  "reserved": 0,
+  "timestamp": 1633017600,
+  "value": 23.5,
+  "location": 42
+});
+
+// Decoding (bytes → object)
+const decoder = new SensorReadingDecoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema sensornet-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "sensornet-protocol/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.SensorReading{
+        // Fill in your data here
+    }
+    bytes := generated.EncodeSensorReading(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.DecodeSensorReading(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema sensornet-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::SensorReading;
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = SensorReading {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = SensorReading::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
       </div>
     </section>
 
@@ -558,117 +733,20 @@
             </tbody>
           </table>
         </details>
-        <details class="type-details" id="type-Packet">
-          <summary><h3>Packet</h3></summary>
-          <p class="type-description">All packets use this header format</p>
+        <details class="type-details" id="type-Acknowledgment">
+          <summary><h3>Acknowledgment</h3></summary>
+          <p class="type-description">Generic acknowledgment</p>
           <div class="wire-format">
             <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">size</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
               <div class="field" style="flex: 1">
-                <div class="field-name">msg_type</div>
+                <div class="field-name">status</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">device_id</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">sequence_num</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
                 
               </div>
             </div>
-            <div class="field-desc"><strong>size:</strong> Total size of the packet excluding the size field itself (2 bytes)</div>
-            <div class="field-desc"><strong>msg_type:</strong> Message type identifier (1-255)</div>
-            <div class="field-desc"><strong>device_id:</strong> Unique device identifier assigned during provisioning</div>
-            <div class="field-desc"><strong>sequence_num:</strong> Incrementing sequence number for duplicate detection</div>
-          </div>
-        </details>
-        <details class="type-details" id="type-Optional-T-">
-          <summary><h3>Optional&lt;T&gt; <span class="generic-badge">Generic</span></h3></summary>
-          <p class="type-description">Optional field with presence byte</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">present</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 4">
-                <div class="field-name">value</div>
-                <div class="field-type">T</div>
-                <div class="field-size">variable</div>
-                <div class="field-condition">if present == 1</div>
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-SensorReading">
-          <summary><h3>SensorReading</h3></summary>
-          <p class="type-description">Sensor data reading</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">sensor_type</div>
-                <div class="field-type">bit&lt;4&gt;</div>
-                <div class="field-size">4 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">battery_low</div>
-                <div class="field-type">bit&lt;1&gt;</div>
-                <div class="field-size">1 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">error</div>
-                <div class="field-type">bit&lt;1&gt;</div>
-                <div class="field-size">1 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">reserved</div>
-                <div class="field-type">bit&lt;2&gt;</div>
-                <div class="field-size">2 bits</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">timestamp</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">value</div>
-                <div class="field-type">float32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">location</div>
-                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint32&gt;</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-            </div>
-            <div class="field-desc"><strong>sensor_type:</strong> Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc.</div>
-            <div class="field-desc"><strong>battery_low:</strong> Battery low warning flag (1=low, 0=normal)</div>
-            <div class="field-desc"><strong>error:</strong> Error flag (1=sensor error, 0=normal)</div>
-            <div class="field-desc"><strong>reserved:</strong> Reserved bits for future use</div>
-            <div class="field-desc"><strong>timestamp:</strong> Unix timestamp in seconds (device time)</div>
-            <div class="field-desc"><strong>value:</strong> Sensor reading value (interpretation depends on sensor_type)</div>
-            <div class="field-desc"><strong>location:</strong> Optional GPS location ID (present if device has GPS enabled)</div>
+            <div class="field-desc"><strong>status:</strong> Status code: 0=success, 1=error, 2=retry</div>
           </div>
         </details>
         <details class="type-details" id="type-ConfigUpdate">
@@ -681,11 +759,13 @@
                 <div class="field-type">uint16</div>
                 <div class="field-size">2 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">threshold</div>
                 <div class="field-type">float32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
             </div>
@@ -693,19 +773,130 @@
             <div class="field-desc"><strong>threshold:</strong> Alert threshold value</div>
           </div>
         </details>
-        <details class="type-details" id="type-Acknowledgment">
-          <summary><h3>Acknowledgment</h3></summary>
-          <p class="type-description">Generic acknowledgment</p>
+        <details class="type-details" id="type-Optional-T-">
+          <summary><h3>Optional&lt;T&gt; <span class="generic-badge">Generic</span></h3></summary>
+          <p class="type-description">Optional field with presence byte</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 1">
-                <div class="field-name">status</div>
+                <div class="field-name">present</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
+              </div>
+              <div class="field conditional" style="flex: 4">
+                <div class="field-name">value</div>
+                <div class="field-type">T</div>
+                <div class="field-size">variable</div>
+                <div class="field-condition">if present == 1</div>
+                
               </div>
             </div>
-            <div class="field-desc"><strong>status:</strong> Status code: 0=success, 1=error, 2=retry</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-Packet">
+          <summary><h3>Packet</h3></summary>
+          <p class="type-description">All packets use this header format</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 2">
+                <div class="field-name">size</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">msg_type</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">device_id</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">sequence_num</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>size:</strong> Total size of the packet excluding the size field itself (2 bytes)</div>
+            <div class="field-desc"><strong>msg_type:</strong> Message type identifier (1-255)</div>
+            <div class="field-desc"><strong>device_id:</strong> Unique device identifier assigned during provisioning</div>
+            <div class="field-desc"><strong>sequence_num:</strong> Incrementing sequence number for duplicate detection</div>
+          </div>
+        </details>
+        <details class="type-details" id="type-SensorReading">
+          <summary><h3>SensorReading</h3></summary>
+          <p class="type-description">Sensor data reading</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">sensor_type</div>
+                <div class="field-type">bit&lt;4&gt;</div>
+                <div class="field-size">4 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">battery_low</div>
+                <div class="field-type">bit&lt;1&gt;</div>
+                <div class="field-size">1 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">error</div>
+                <div class="field-type">bit&lt;1&gt;</div>
+                <div class="field-size">1 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">reserved</div>
+                <div class="field-type">bit&lt;2&gt;</div>
+                <div class="field-size">2 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">timestamp</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">value</div>
+                <div class="field-type">float32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">location</div>
+                <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint32&gt;</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+            <div class="field-desc"><strong>sensor_type:</strong> Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc.</div>
+            <div class="field-desc"><strong>battery_low:</strong> Battery low warning flag (1=low, 0=normal)</div>
+            <div class="field-desc"><strong>error:</strong> Error flag (1=sensor error, 0=normal)</div>
+            <div class="field-desc"><strong>reserved:</strong> Reserved bits for future use</div>
+            <div class="field-desc"><strong>timestamp:</strong> Unix timestamp in seconds (device time)</div>
+            <div class="field-desc"><strong>value:</strong> Sensor reading value (interpretation depends on sensor_type)</div>
+            <div class="field-desc"><strong>location:</strong> Optional GPS location ID (present if device has GPS enabled)</div>
           </div>
         </details>
       </div>
@@ -747,11 +938,13 @@
               <div class="field-type">bit&lt;4&gt;</div>
               <div class="field-size">4 bits</div>
               
+              
             </div>
             <div class="field" style="flex: 1">
               <div class="field-name">battery_low</div>
               <div class="field-type">bit&lt;1&gt;</div>
               <div class="field-size">1 bits</div>
+              
               
             </div>
             <div class="field" style="flex: 1">
@@ -759,11 +952,13 @@
               <div class="field-type">bit&lt;1&gt;</div>
               <div class="field-size">1 bits</div>
               
+              
             </div>
             <div class="field" style="flex: 1">
               <div class="field-name">reserved</div>
               <div class="field-type">bit&lt;2&gt;</div>
               <div class="field-size">2 bits</div>
+              
               
             </div>
             <div class="field" style="flex: 4">
@@ -771,17 +966,20 @@
               <div class="field-type">uint32</div>
               <div class="field-size">4 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">value</div>
               <div class="field-type">float32</div>
               <div class="field-size">4 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">location</div>
               <div class="field-type"><a href="#type-Optional-T-" class="type-link">Optional</a>&lt;uint32&gt;</div>
               <div class="field-size">variable</div>
+              
               
             </div>
           </div>
@@ -875,11 +1073,13 @@
               <div class="field-type">uint16</div>
               <div class="field-size">2 bytes</div>
               
+              
             </div>
             <div class="field" style="flex: 4">
               <div class="field-name">threshold</div>
               <div class="field-type">float32</div>
               <div class="field-size">4 bytes</div>
+              
               
             </div>
           </div>
@@ -918,6 +1118,7 @@
               <div class="field-name">status</div>
               <div class="field-type">uint8</div>
               <div class="field-size">1 byte</div>
+              
               
             </div>
           </div>

@@ -357,6 +357,7 @@ export function generateHTML(
     <h2>Table of Contents</h2>
     <ul>
       ${description ? `<li><a href="#overview">Overview</a></li>` : ""}
+      <li><a href="#usage">Usage</a></li>
       ${protocolSchema?.protocol.header_format ? `<li><a href="#frame-format">Frame Format</a></li>` : ""}
       <li><a href="#data-types">Data Types</a></li>
       ${protocolSchema?.protocol.messages?.length ? `<li><a href="#messages">Messages</a></li>` : ""}
@@ -381,6 +382,9 @@ export function generateHTML(
 
     html += `    </section>\n\n`;
   }
+
+  // Usage section
+  html += generateUsageSection(binarySchema, protocolSchema);
 
   // Frame format section (only if protocol has header_format)
   if (protocolSchema?.protocol.header_format) {
@@ -448,6 +452,294 @@ export function generateHTML(
   </script>
 </body>
 </html>`;
+
+  return html;
+}
+
+/**
+ * Calculate complexity score for a type (higher = more complex)
+ */
+function calculateTypeComplexity(typeName: string, typeDef: TypeDef, schema: BinarySchema, visited = new Set<string>()): number {
+  if (visited.has(typeName)) return 0; // Avoid infinite recursion
+  visited.add(typeName);
+
+  // Type aliases are simple
+  if (isTypeAlias(typeDef)) return 1;
+
+  const fields = getTypeFields(typeDef);
+  let complexity = fields.length; // Base complexity = number of fields
+
+  for (const field of fields) {
+    if (!('type' in field)) continue;
+
+    const fieldType = field.type;
+
+    // Arrays add complexity
+    if (fieldType === 'array') {
+      complexity += 3;
+      // Check item complexity
+      if (field.items && 'type' in field.items) {
+        const itemType = field.items.type;
+        if (schema.types[itemType]) {
+          complexity += calculateTypeComplexity(itemType, schema.types[itemType] as TypeDef, schema, visited);
+        }
+      }
+    }
+    // Nested types add their complexity
+    else if (schema.types[fieldType] && !isBuiltInType(fieldType)) {
+      complexity += calculateTypeComplexity(fieldType, schema.types[fieldType] as TypeDef, schema, visited);
+    }
+    // Optional fields add a bit
+    else if ('optional' in field && field.optional) {
+      complexity += 1;
+    }
+    // Conditional fields add complexity
+    else if ('conditional' in field && field.conditional) {
+      complexity += 2;
+    }
+  }
+
+  return complexity;
+}
+
+/**
+ * Generate realistic example data for a type
+ */
+function generateExampleData(typeName: string, typeDef: TypeDef, schema: BinarySchema, depth = 0): any {
+  // Prevent infinite recursion
+  if (depth > 3) return undefined;
+
+  // Handle type aliases
+  if (isTypeAlias(typeDef)) {
+    const aliasedType = typeDef as any;
+    if ('type' in aliasedType) {
+      switch (aliasedType.type) {
+        case 'string':
+          return "example";
+        case 'uint8':
+        case 'uint16':
+        case 'uint32':
+        case 'uint64':
+          return 0;
+        case 'array':
+          return [];
+        default:
+          if (schema.types[aliasedType.type]) {
+            return generateExampleData(aliasedType.type, schema.types[aliasedType.type] as TypeDef, schema, depth + 1);
+          }
+          return undefined;
+      }
+    }
+    return undefined;
+  }
+
+  const fields = getTypeFields(typeDef);
+  const data: any = {};
+
+  for (const field of fields) {
+    if (!('type' in field)) continue;
+
+    const fieldType = field.type;
+    const isOptional = 'optional' in field && field.optional;
+    const isConditional = 'conditional' in field && field.conditional;
+    const isComputed = 'computed' in field && field.computed;
+    const hasConstValue = 'const' in field && field.const !== undefined;
+
+    // Skip computed fields (they're auto-calculated) and const fields (they're auto-filled)
+    if (isComputed || hasConstValue) continue;
+
+    // Skip some optional/conditional fields to keep examples concise
+    if ((isOptional || isConditional) && Math.random() > 0.5) {
+      continue;
+    }
+
+    switch (fieldType) {
+      case 'uint8':
+      case 'int8':
+        data[field.name] = field.name.toLowerCase().includes('flag') ? 1 : 0;
+        break;
+      case 'uint16':
+      case 'int16':
+        data[field.name] = field.name.toLowerCase().includes('port') ? 8080 : 0;
+        break;
+      case 'uint32':
+      case 'int32':
+        data[field.name] = 0;
+        break;
+      case 'uint64':
+      case 'int64':
+        data[field.name] = field.name.toLowerCase().includes('id') ? 123456 : 0;
+        break;
+      case 'float32':
+      case 'float64':
+        data[field.name] = 0.0;
+        break;
+      case 'string':
+        data[field.name] = field.name.toLowerCase().includes('name') ? "example" : "value";
+        break;
+      case 'array': {
+        // Create array with 1-2 items
+        const itemCount = depth > 1 ? 1 : 2;
+        const items = [];
+        if (field.items && 'type' in field.items) {
+          const itemType = field.items.type;
+          if (schema.types[itemType]) {
+            for (let i = 0; i < itemCount; i++) {
+              const itemData = generateExampleData(itemType, schema.types[itemType] as TypeDef, schema, depth + 1);
+              if (itemData !== undefined) items.push(itemData);
+            }
+          } else if (itemType === 'string') {
+            items.push("item1", "item2");
+          } else if (itemType.startsWith('uint') || itemType.startsWith('int')) {
+            items.push(0, 1);
+          }
+        }
+        data[field.name] = items;
+        break;
+      }
+      default:
+        // Custom type reference
+        if (schema.types[fieldType] && !isBuiltInType(fieldType)) {
+          const nestedData = generateExampleData(fieldType, schema.types[fieldType] as TypeDef, schema, depth + 1);
+          if (nestedData !== undefined) {
+            data[field.name] = nestedData;
+          }
+        }
+        break;
+    }
+  }
+
+  return data;
+}
+
+/**
+ * Generate usage examples section
+ */
+function generateUsageSection(
+  binarySchema: BinarySchema,
+  protocolSchema?: ProtocolSchema,
+): string {
+  // Get a good example type to demonstrate - prefer a message type if available
+  let exampleTypeName: string | undefined;
+  let exampleData: any;
+
+  // Try to use a message example from the protocol schema
+  if (protocolSchema?.protocol.messages?.length) {
+    const msgWithExample = protocolSchema.protocol.messages.find(m => m.example);
+    if (msgWithExample?.example) {
+      exampleTypeName = msgWithExample.payload_type;
+      exampleData = msgWithExample.example.decoded;
+    }
+  }
+
+  // Fallback: find the most complex non-generic type
+  if (!exampleTypeName) {
+    let maxComplexity = 0;
+    for (const [typeName, typeDef] of Object.entries(binarySchema.types)) {
+      // Skip generic templates
+      if (typeName.includes('<')) continue;
+
+      const complexity = calculateTypeComplexity(typeName, typeDef as TypeDef, binarySchema);
+      if (complexity > maxComplexity) {
+        maxComplexity = complexity;
+        exampleTypeName = typeName;
+      }
+    }
+
+    // Generate realistic example data for the most complex type
+    if (exampleTypeName) {
+      const typeDef = binarySchema.types[exampleTypeName] as TypeDef;
+      exampleData = generateExampleData(exampleTypeName, typeDef, binarySchema);
+    }
+  }
+
+  const schemaName = protocolSchema?.protocol.name || binarySchema.meta?.title || "Schema";
+  const sanitizedSchemaName = schemaName.toLowerCase().replace(/\s+/g, '-');
+
+  // Format example data for TypeScript/JavaScript
+  const tsExample = exampleData ? JSON.stringify(exampleData, null, 2) : '{\n  // your data here\n}';
+
+  let html = `    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema ${sanitizedSchemaName}.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { ${exampleTypeName}Encoder, ${exampleTypeName}Decoder } from './generated/${sanitizedSchemaName}.js';
+
+// Encoding (object → bytes)
+const encoder = new ${exampleTypeName}Encoder();
+const bytes = encoder.encode(${tsExample});
+
+// Decoding (bytes → object)
+const decoder = new ${exampleTypeName}Decoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema ${sanitizedSchemaName}.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "${sanitizedSchemaName}/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.${exampleTypeName}{
+        // Fill in your data here
+    }
+    bytes := generated.Encode${exampleTypeName}(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.Decode${exampleTypeName}(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema ${sanitizedSchemaName}.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::${exampleTypeName};
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = ${exampleTypeName} {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = ${exampleTypeName}::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
+      </div>
+    </section>
+
+`;
 
   return html;
 }
@@ -1692,6 +1984,70 @@ function generateCSS(): string {
       padding: 10px;
       border-radius: 4px;
       border-left: 4px solid #dc2626;
+    }
+
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
     }
 
     footer {

@@ -479,6 +479,70 @@
       border-left: 4px solid #dc2626;
     }
 
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -537,6 +601,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#usage">Usage</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
       
@@ -547,6 +612,114 @@
     <section id="overview" class="section">
       <h2>Overview</h2>
       <p>Kerberos V5 authentication protocol with ASN.1 DER encoding. Includes AS-REQ/AS-REP message structures for initial authentication.</p>
+    </section>
+
+    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema kerberos-v5-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { AS_REP_Field_TicketEncoder, AS_REP_Field_TicketDecoder } from './generated/kerberos-v5-protocol.js';
+
+// Encoding (object → bytes)
+const encoder = new AS_REP_Field_TicketEncoder();
+const bytes = encoder.encode({
+  "value": {
+    "tkt_vno": {
+      "value": [
+        0,
+        1
+      ]
+    },
+    "realm": {
+      "value": "value"
+    },
+    "sname": {
+      "name_type": {
+        "value": [
+          0,
+          1
+        ]
+      },
+      "name_string": [
+        {
+          "value": "value"
+        }
+      ]
+    },
+    "enc_part": {
+      "fields": []
+    }
+  }
+});
+
+// Decoding (bytes → object)
+const decoder = new AS_REP_Field_TicketDecoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema kerberos-v5-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "kerberos-v5-protocol/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.AS_REP_Field_Ticket{
+        // Fill in your data here
+    }
+    bytes := generated.EncodeAS_REP_Field_Ticket(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.DecodeAS_REP_Field_Ticket(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema kerberos-v5-protocol.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::AS_REP_Field_Ticket;
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = AS_REP_Field_Ticket {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = AS_REP_Field_Ticket::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
+      </div>
     </section>
 
     <section id="data-types" class="section">

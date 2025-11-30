@@ -136,6 +136,20 @@
       background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     }
 
+    .field.computed {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .field-computed {
+      margin-top: 6px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.75em;
+      color: rgba(255, 255, 255, 0.95);
+    }
+
     .field-name {
       font-weight: bold;
       color: white;
@@ -150,6 +164,14 @@
       color: rgba(255, 255, 255, 0.9);
       font-size: 0.75em;
       margin-bottom: 2px;
+    }
+
+    .field-type code {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fde047;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-weight: 600;
     }
 
     .field-size {
@@ -457,6 +479,70 @@
       border-left: 4px solid #dc2626;
     }
 
+    /* Usage section styles */
+    .usage-lang {
+      margin: 20px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0;
+    }
+
+    .usage-lang summary {
+      background: #f5f5f5;
+      padding: 12px 15px;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .usage-lang[open] summary {
+      border-bottom: 1px solid #ddd;
+      border-radius: 6px 6px 0 0;
+    }
+
+    .usage-lang summary h3 {
+      display: inline;
+      margin: 0;
+      color: #667eea;
+    }
+
+    .usage-lang h4 {
+      margin: 20px 15px 10px 15px;
+      color: #555;
+      font-size: 1em;
+    }
+
+    .code-example {
+      margin: 10px 15px 20px 15px;
+      background: #1e1e1e;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .code-example code {
+      display: block;
+      padding: 15px;
+      color: #d4d4d4;
+      background: #1e1e1e;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: 0.9em;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .usage-note {
+      background: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 12px 15px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 0.95em;
+    }
+
+    .usage-note strong {
+      color: #1e40af;
+    }
+
     footer {
       text-align: center;
       padding: 20px;
@@ -515,6 +601,7 @@
     <h2>Table of Contents</h2>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#usage">Usage</a></li>
       
       <li><a href="#data-types">Data Types</a></li>
       
@@ -525,6 +612,108 @@
     <section id="overview" class="section">
       <h2>Overview</h2>
       <p>Portable Network Graphics (PNG) file format. Chunk-based structure with signature, header, image data, and end marker.</p>
+    </section>
+
+    <section id="usage" class="section">
+      <h2>Usage</h2>
+      <p>To use the generated code, first generate encoders/decoders for your target language:</p>
+
+      <details class="usage-lang" open>
+        <summary><h3>TypeScript</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema png-image-format.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-typescript">import { PNGFileEncoder, PNGFileDecoder } from './generated/png-image-format.js';
+
+// Encoding (object → bytes)
+const encoder = new PNGFileEncoder();
+const bytes = encoder.encode({
+  "signature": {},
+  "chunks": [
+    {
+      "length": 0,
+      "type": "example",
+      "data": [
+        0,
+        1
+      ],
+      "crc": 0
+    },
+    {
+      "length": 0,
+      "type": "example",
+      "data": [
+        0,
+        1
+      ],
+      "crc": 0
+    }
+  ]
+});
+
+// Decoding (bytes → object)
+const decoder = new PNGFileDecoder(bytes);
+const decoded = decoder.decode();
+console.log(decoded);</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Go</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema png-image-format.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-go">package main
+
+import (
+    "fmt"
+    "png-image-format/generated"
+)
+
+func main() {
+    // Encoding (struct → bytes)
+    data := generated.PNGFile{
+        // Fill in your data here
+    }
+    bytes := generated.EncodePNGFile(data)
+
+    // Decoding (bytes → struct)
+    decoded, err := generated.DecodePNGFile(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("%+v\n", decoded)
+}</code></pre>
+      </details>
+
+      <details class="usage-lang">
+        <summary><h3>Rust</h3></summary>
+
+        <h4>Generate Code</h4>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema png-image-format.schema.json --out ./generated</code></pre>
+
+        <h4>Import and Use</h4>
+        <pre class="code-example"><code class="language-rust">use generated::PNGFile;
+
+fn main() {
+    // Encoding (struct → bytes)
+    let data = PNGFile {
+        // Fill in your data here
+    };
+    let bytes = data.encode();
+
+    // Decoding (bytes → struct)
+    let decoded = PNGFile::decode(&bytes).unwrap();
+    println!("{:?}", decoded);
+}</code></pre>
+      </details>
+
+      <div class="usage-note">
+        <strong>Note:</strong> Adjust import paths based on your project structure. The generated code includes encoder and decoder classes/functions for all types defined in the schema.
+      </div>
     </section>
 
     <section id="data-types" class="section">
@@ -550,15 +739,37 @@
             </tbody>
           </table>
         </details>
-        <details class="type-details" id="type-PNGSignature">
-          <summary><h3>PNGSignature</h3></summary>
-          <p class="type-description">PNG file signature - 8 bytes that identify a PNG file</p>
+        <details class="type-details" id="type-Chunk">
+          <summary><h3>Chunk</h3></summary>
+          <p class="type-description">PNG chunk structure - the basic building block of PNG files</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 4">
-                <div class="field-name">magic</div>
+                <div class="field-name">length</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">type</div>
+                <div class="field-type"><a href="#type-ChunkType" class="type-link">ChunkType</a></div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">data</div>
                 <div class="field-type">uint8[]</div>
                 <div class="field-size">variable</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">crc</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
                 
               </div>
             </div>
@@ -577,6 +788,21 @@
             </div>
           </div>
         </details>
+        <details class="type-details" id="type-gAMAData">
+          <summary><h3>gAMAData</h3></summary>
+          <p class="type-description">Image gamma chunk</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">gamma</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
         <details class="type-details" id="type-IHDRData">
           <summary><h3>IHDRData</h3></summary>
           <p class="type-description">Image Header chunk data - contains image dimensions and format info</p>
@@ -587,11 +813,13 @@
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">height</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -599,23 +827,27 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">color_type</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
+                
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">compression_method</div>
-                <div class="field-type">uint8</div>
+                <div class="field-type"><code>0x00</code></div>
                 <div class="field-size">1 byte</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
                 <div class="field-name">filter_method</div>
-                <div class="field-type">uint8</div>
+                <div class="field-type"><code>0x00</code></div>
                 <div class="field-size">1 byte</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -623,31 +855,6 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-RGB">
-          <summary><h3>RGB</h3></summary>
-          <p class="type-description">RGB color triplet for palette entries</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">r</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">g</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">b</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
                 
               </div>
             </div>
@@ -663,11 +870,13 @@
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">pixels_per_unit_y</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
+                
                 
               </div>
               <div class="field" style="flex: 1">
@@ -675,109 +884,6 @@
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
                 
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-tIMEData">
-          <summary><h3>tIMEData</h3></summary>
-          <p class="type-description">Image last-modification time chunk</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 2">
-                <div class="field-name">year</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">month</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">day</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">hour</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">minute</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">second</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-gAMAData">
-          <summary><h3>gAMAData</h3></summary>
-          <p class="type-description">Image gamma chunk</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">gamma</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-sRGBData">
-          <summary><h3>sRGBData</h3></summary>
-          <p class="type-description">Standard RGB color space chunk</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">rendering_intent</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-Chunk">
-          <summary><h3>Chunk</h3></summary>
-          <p class="type-description">PNG chunk structure - the basic building block of PNG files</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">length</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">type</div>
-                <div class="field-type"><a href="#type-ChunkType" class="type-link">ChunkType</a></div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">data</div>
-                <div class="field-type">uint8[]</div>
-                <div class="field-size">variable</div>
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">crc</div>
-                <div class="field-type">uint32</div>
-                <div class="field-size">4 bytes</div>
                 
               </div>
             </div>
@@ -793,11 +899,122 @@
                 <div class="field-type"><a href="#type-PNGSignature" class="type-link">PNGSignature</a></div>
                 <div class="field-size">4 bytes</div>
                 
+                
               </div>
               <div class="field" style="flex: 4">
                 <div class="field-name">chunks</div>
                 <div class="field-type">Chunk[]</div>
                 <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-PNGSignature">
+          <summary><h3>PNGSignature</h3></summary>
+          <p class="type-description">PNG file signature - 8 bytes that identify a PNG file</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 4">
+                <div class="field-name">magic</div>
+                <div class="field-type">uint8[]</div>
+                <div class="field-size">variable</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-RGB">
+          <summary><h3>RGB</h3></summary>
+          <p class="type-description">RGB color triplet for palette entries</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">r</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">g</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">b</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-sRGBData">
+          <summary><h3>sRGBData</h3></summary>
+          <p class="type-description">Standard RGB color space chunk</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 1">
+                <div class="field-name">rendering_intent</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+            </div>
+          </div>
+        </details>
+        <details class="type-details" id="type-tIMEData">
+          <summary><h3>tIMEData</h3></summary>
+          <p class="type-description">Image last-modification time chunk</p>
+          <div class="wire-format">
+            <div class="wire-diagram">
+              <div class="field" style="flex: 2">
+                <div class="field-name">year</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">month</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">day</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">hour</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">minute</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">second</div>
+                <div class="field-type">uint8</div>
+                <div class="field-size">1 byte</div>
+                
                 
               </div>
             </div>
