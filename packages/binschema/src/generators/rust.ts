@@ -53,6 +53,12 @@ export function generateRust(
   lines.push(`use ${crateName}::{BitStreamEncoder, BitStreamDecoder, Endianness, BitOrder, Result};`);
   lines.push(``);
 
+  // Collect inline union types (choice and discriminated_union) and generate enums for them
+  const unionEnums = collectInlineUnionTypes(schema);
+  for (const [enumName, variantTypes] of Object.entries(unionEnums)) {
+    lines.push(...generateUnionEnum(enumName, variantTypes, defaultEndianness, defaultBitOrder));
+  }
+
   // Generate all types in the schema
   for (const [name, typeDef] of Object.entries(schema.types)) {
     // Check if this is a composite type (has sequence) or type alias
@@ -64,9 +70,8 @@ export function generateRust(
       // Type alias - generate wrapper struct
       lines.push(...generateTypeAlias(name, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ("variants" in typeDef) {
-      // Discriminated union - not yet implemented
-      lines.push(`// TODO: Discriminated union type ${name} not yet implemented`);
-      lines.push(``);
+      // Discriminated union type alias
+      lines.push(...generateDiscriminatedUnion(name, typeDef as any, defaultEndianness, defaultBitOrder));
     } else {
       // Unknown type definition
       throw new Error(`Unknown type definition for ${name}: ${JSON.stringify(typeDef)}`);
@@ -94,6 +99,241 @@ function generateTypeAlias(name: string, typeDef: any, defaultEndianness: string
 
   lines.push(...generateStruct(name, [field]));
   lines.push(...generateImpl(name, [field], defaultEndianness, defaultBitOrder));
+
+  return lines;
+}
+
+/**
+ * Generates a discriminated union as a Rust enum
+ */
+function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianness: string, defaultBitOrder: string): string[] {
+  const lines: string[] = [];
+  const discriminator = unionDef.discriminator;
+  const variants = unionDef.variants || [];
+  const bitOrder = mapBitOrder(defaultBitOrder);
+
+  // Generate enum definition
+  lines.push(`#[derive(Debug, Clone, PartialEq)]`);
+  lines.push(`pub enum ${name} {`);
+  for (const variant of variants) {
+    const variantTypeName = toRustTypeName(variant.type);
+    lines.push(`    ${variantTypeName}(${variantTypeName}),`);
+  }
+  lines.push(`}`);
+  lines.push(``);
+
+  // Generate impl block
+  lines.push(`impl ${name} {`);
+
+  // Generate encode method
+  lines.push(`    pub fn encode(&self) -> Vec<u8> {`);
+  lines.push(`        match self {`);
+  for (const variant of variants) {
+    const variantTypeName = toRustTypeName(variant.type);
+    lines.push(`            ${name}::${variantTypeName}(v) => v.encode(),`);
+  }
+  lines.push(`        }`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // Generate decode method
+  lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
+  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+  lines.push(`        Self::decode_with_decoder(&mut decoder)`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // Generate decode_with_decoder method
+  lines.push(`    pub fn decode_with_decoder(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
+
+  // Handle peek-based discriminator
+  if (discriminator.peek) {
+    const peekType = discriminator.peek;
+    const peekEndianness = discriminator.endianness || defaultEndianness;
+    const rustEndianness = mapEndianness(peekEndianness);
+
+    // Generate peek call
+    switch (peekType) {
+      case "uint8":
+        lines.push(`        let value = decoder.peek_uint8()?;`);
+        break;
+      case "uint16":
+        lines.push(`        let value = decoder.peek_uint16(Endianness::${rustEndianness})?;`);
+        break;
+      case "uint32":
+        lines.push(`        let value = decoder.peek_uint32(Endianness::${rustEndianness})?;`);
+        break;
+    }
+
+    // Generate match arms based on variant conditions
+    lines.push(`        // Match on discriminator value`);
+
+    // Find fallback variant (no 'when' condition)
+    const fallbackVariant = variants.find((v: any) => !v.when);
+    const conditionalVariants = variants.filter((v: any) => v.when);
+
+    // Generate if/else chain for conditions
+    for (let i = 0; i < conditionalVariants.length; i++) {
+      const variant = conditionalVariants[i];
+      const variantTypeName = toRustTypeName(variant.type);
+      const condition = translateConditionToRust(variant.when);
+
+      if (i === 0) {
+        lines.push(`        if ${condition} {`);
+      } else {
+        lines.push(`        } else if ${condition} {`);
+      }
+      lines.push(`            Ok(${name}::${variantTypeName}(${variantTypeName}::decode_with_decoder(decoder)?))`);
+    }
+
+    // Handle fallback or error
+    if (fallbackVariant) {
+      const variantTypeName = toRustTypeName(fallbackVariant.type);
+      if (conditionalVariants.length > 0) {
+        lines.push(`        } else {`);
+        lines.push(`            Ok(${name}::${variantTypeName}(${variantTypeName}::decode_with_decoder(decoder)?))`);
+        lines.push(`        }`);
+      } else {
+        lines.push(`        Ok(${name}::${variantTypeName}(${variantTypeName}::decode_with_decoder(decoder)?))`);
+      }
+    } else {
+      if (conditionalVariants.length > 0) {
+        lines.push(`        } else {`);
+        lines.push(`            Err(binschema_runtime::BinSchemaError::InvalidVariant(value as u64))`);
+        lines.push(`        }`);
+      } else {
+        lines.push(`        Err(binschema_runtime::BinSchemaError::InvalidVariant(value as u64))`);
+      }
+    }
+  } else if (discriminator.field) {
+    // Field-based discriminator - would need context from parent
+    lines.push(`        // Field-based discriminator not yet fully supported`);
+    lines.push(`        Err(binschema_runtime::BinSchemaError::NotImplemented("field-based discriminator".to_string()))`);
+  }
+
+  lines.push(`    }`);
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
+}
+
+/**
+ * Translates a condition expression from schema format to Rust
+ * e.g., "value == 0x01" -> "value == 0x01"
+ * e.g., "value >= 0xC0" -> "value >= 0xC0"
+ * e.g., "value !== 0xFF" -> "value != 0xFF"
+ */
+function translateConditionToRust(condition: string): string {
+  // Replace JavaScript !== with Rust !=
+  let rustCondition = condition.replace(/!==/g, '!=');
+  // Replace JavaScript === with Rust ==
+  rustCondition = rustCondition.replace(/===/g, '==');
+  return rustCondition;
+}
+
+/**
+ * Collects all inline choice and discriminated_union types from the schema
+ * Returns a map of enum name -> array of variant type names
+ */
+function collectInlineUnionTypes(schema: BinarySchema): Record<string, string[]> {
+  const unionEnums: Record<string, string[]> = {};
+
+  function visitField(field: any): void {
+    if (!field) return;
+
+    // Handle choice types (used in array items)
+    if (field.type === "choice" && field.choices) {
+      const choiceTypes = field.choices.map((c: any) => c.type);
+      const enumName = `Choice${choiceTypes.map(toRustTypeName).join('')}`;
+      unionEnums[enumName] = choiceTypes;
+    }
+
+    // Handle inline discriminated_union fields
+    if (field.type === "discriminated_union" && field.variants) {
+      const variantTypes = field.variants.map((v: any) => v.type);
+      const enumName = `Union${variantTypes.map(toRustTypeName).join('')}`;
+      unionEnums[enumName] = variantTypes;
+    }
+
+    // Recurse into array items
+    if (field.type === "array" && field.items) {
+      visitField(field.items);
+    }
+  }
+
+  for (const typeDef of Object.values(schema.types)) {
+    if ("sequence" in (typeDef as any)) {
+      for (const field of (typeDef as any).sequence) {
+        visitField(field);
+      }
+    }
+  }
+
+  return unionEnums;
+}
+
+/**
+ * Generates an enum for inline union types (choice or discriminated_union)
+ */
+function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndianness: string, defaultBitOrder: string): string[] {
+  const lines: string[] = [];
+  const bitOrder = mapBitOrder(defaultBitOrder);
+
+  // Generate enum definition
+  lines.push(`#[derive(Debug, Clone, PartialEq)]`);
+  lines.push(`pub enum ${enumName} {`);
+  for (const typeName of variantTypes) {
+    const rustTypeName = toRustTypeName(typeName);
+    lines.push(`    ${rustTypeName}(${rustTypeName}),`);
+  }
+  lines.push(`}`);
+  lines.push(``);
+
+  // Generate impl block
+  lines.push(`impl ${enumName} {`);
+
+  // Generate encode method
+  lines.push(`    pub fn encode(&self) -> Vec<u8> {`);
+  lines.push(`        match self {`);
+  for (const typeName of variantTypes) {
+    const rustTypeName = toRustTypeName(typeName);
+    lines.push(`            ${enumName}::${rustTypeName}(v) => v.encode(),`);
+  }
+  lines.push(`        }`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // Generate decode method
+  lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
+  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+  lines.push(`        Self::decode_with_decoder(&mut decoder)`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // Generate decode_with_decoder method
+  // Try each variant in order until one succeeds
+  lines.push(`    pub fn decode_with_decoder(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
+  lines.push(`        // Union type - try each variant in order until one succeeds`);
+
+  // Generate try-each-variant pattern
+  for (let i = 0; i < variantTypes.length; i++) {
+    const typeName = variantTypes[i];
+    const rustTypeName = toRustTypeName(typeName);
+    if (i === 0) {
+      lines.push(`        let start_pos = decoder.position();`);
+    }
+    lines.push(`        if let Ok(v) = ${rustTypeName}::decode_with_decoder(decoder) {`);
+    lines.push(`            return Ok(${enumName}::${rustTypeName}(v));`);
+    lines.push(`        }`);
+    if (i < variantTypes.length - 1) {
+      lines.push(`        decoder.seek(start_pos)?;`);
+    }
+  }
+  lines.push(`        Err(binschema_runtime::BinSchemaError::InvalidVariant(0))`);
+  lines.push(`    }`);
+  lines.push(`}`);
+  lines.push(``);
 
   return lines;
 }
@@ -369,6 +609,13 @@ function generateEncodeString(field: any, fieldName: string, endianness: string,
       lines.push(`${indent}}`);
       break;
     }
+
+    case "field_referenced":
+      // Length is determined by another field, just write the bytes
+      lines.push(`${indent}for b in ${fieldName}.as_bytes() {`);
+      lines.push(`${indent}    encoder.write_uint8(*b);`);
+      lines.push(`${indent}}`);
+      break;
 
     default:
       throw new Error(`Unknown string kind: ${kind}`);
@@ -800,6 +1047,18 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       break;
     }
 
+    case "field_referenced": {
+      // Length is determined by another field that was already decoded
+      const lengthField = field.length_field;
+      const lengthFieldRust = toRustFieldName(lengthField);
+      lines.push(`${indent}let mut bytes = Vec::with_capacity(${lengthFieldRust} as usize);`);
+      lines.push(`${indent}for _ in 0..${lengthFieldRust} {`);
+      lines.push(`${indent}    bytes.push(decoder.read_uint8()?);`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}let ${varName} = String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+      break;
+    }
+
     default:
       throw new Error(`Unknown string kind: ${kind}`);
   }
@@ -852,6 +1111,60 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     lines.push(`${indent}let mut ${varName}: Vec<${itemType}> = Vec::new();`);
     lines.push(`${indent}loop {`);
     // TODO: Need to check for terminator BEFORE decoding item
+  } else if (kind === "byte_length_prefixed") {
+    // Read length in bytes, then decode items until we've consumed that many bytes
+    const lengthType = field.length_type || "uint8";
+    switch (lengthType) {
+      case "uint8":
+        lines.push(`${indent}let byte_length = decoder.read_uint8()? as usize;`);
+        break;
+      case "uint16":
+        lines.push(`${indent}let byte_length = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
+        break;
+      case "uint32":
+        lines.push(`${indent}let byte_length = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
+        break;
+      case "uint64":
+        lines.push(`${indent}let byte_length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
+        break;
+      case "varlength":
+        lines.push(`${indent}let byte_length = decoder.read_varlength()? as usize;`);
+        break;
+    }
+    lines.push(`${indent}let start_pos = decoder.position();`);
+    lines.push(`${indent}let mut ${varName}: Vec<${itemType}> = Vec::new();`);
+    lines.push(`${indent}while decoder.position() < start_pos + byte_length {`);
+  } else if (kind === "length_prefixed_items") {
+    // Each item has a length prefix
+    const lengthType = field.length_type || "uint8";
+    switch (lengthType) {
+      case "uint8":
+        lines.push(`${indent}let count = decoder.read_uint8()? as usize;`);
+        break;
+      case "uint16":
+        lines.push(`${indent}let count = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
+        break;
+      case "uint32":
+        lines.push(`${indent}let count = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
+        break;
+      case "uint64":
+        lines.push(`${indent}let count = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
+        break;
+    }
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
+    lines.push(`${indent}for _ in 0..count {`);
+  } else if (kind === "computed_count") {
+    // Count is computed from another expression
+    const countExpr = field.count_expr || "0";
+    // For now, just use a simple approach
+    lines.push(`${indent}let count = ${countExpr} as usize;`);
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
+    lines.push(`${indent}for _ in 0..count {`);
+  } else if (kind === "variant_terminated" || kind === "signature_terminated") {
+    // Read until a specific variant/signature is encountered
+    lines.push(`${indent}let mut ${varName}: Vec<${itemType}> = Vec::new();`);
+    lines.push(`${indent}loop {`);
+    // The termination check will happen after decoding the item
   } else {
     throw new Error(`Unknown array kind: ${kind}`);
   }
@@ -913,6 +1226,22 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
       const bitSize = items.size || 1;
       const rustType = mapFieldToRustType(items);
       lines.push(`${indent}let item = decoder.read_bits(${bitSize})? as ${rustType};`);
+      break;
+    }
+    case "choice": {
+      // Choice type - use generated enum name
+      const choices = items.choices || [];
+      const choiceTypes = choices.map((c: any) => toRustTypeName(c.type));
+      const enumName = `Choice${choiceTypes.join('')}`;
+      lines.push(`${indent}let item = ${enumName}::decode_with_decoder(decoder)?;`);
+      break;
+    }
+    case "discriminated_union": {
+      // Discriminated union - use generated enum name
+      const variants = items.variants || [];
+      const variantTypes = variants.map((v: any) => toRustTypeName(v.type));
+      const enumName = `Union${variantTypes.join('')}`;
+      lines.push(`${indent}let item = ${enumName}::decode_with_decoder(decoder)?;`);
       break;
     }
     default:
@@ -989,8 +1318,33 @@ function mapFieldToRustType(field: Field): string {
       return "i64";
     }
     case "array": {
-      const itemsType = mapFieldToRustType((field as any).items);
+      const items = (field as any).items;
+      const itemsType = mapFieldToRustType(items);
       return `Vec<${itemsType}>`;
+    }
+    case "choice": {
+      // Choice type - generate enum name from choices
+      // This creates a union of the choice types
+      const choices = (field as any).choices || [];
+      if (choices.length === 0) {
+        throw new Error(`Choice field has no choices`);
+      }
+      // Use a generated name based on the choices
+      const choiceTypes = choices.map((c: any) => toRustTypeName(c.type));
+      // For now, return the first choice's wrapper enum
+      // The actual enum generation happens in generateChoiceEnum
+      return `Choice${choiceTypes.join('')}`;
+    }
+    case "discriminated_union": {
+      // Discriminated union used as a field type
+      // The union type should already be defined at the top level
+      // This handles inline discriminated unions
+      const variants = (field as any).variants || [];
+      if (variants.length === 0) {
+        throw new Error(`Discriminated union field has no variants`);
+      }
+      const variantTypes = variants.map((v: any) => toRustTypeName(v.type));
+      return `Union${variantTypes.join('')}`;
     }
     case "optional": {
       const valueTypeName = (field as any).value_type;

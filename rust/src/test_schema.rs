@@ -32,6 +32,14 @@ pub struct SchemaConfig {
 #[serde(untagged)]
 pub enum TypeDef {
     Sequence { sequence: Vec<Field> },
+    DiscriminatedUnion {
+        #[serde(rename = "type")]
+        type_name: String,  // Should be "discriminated_union"
+        discriminator: serde_json::Value,
+        variants: Vec<UnionVariant>,
+        #[serde(default)]
+        description: Option<String>,
+    },
     Direct {
         #[serde(rename = "type")]
         type_name: String,
@@ -78,6 +86,16 @@ pub struct Field {
     pub size: Option<u32>,  // For bit/bitfield fields
     #[serde(default)]
     pub fields: Option<Vec<BitfieldSubfield>>,  // For bitfield sub-fields
+    #[serde(default)]
+    pub choices: Option<Vec<ChoiceVariant>>,  // For choice types
+    #[serde(default)]
+    pub variants: Option<Vec<UnionVariant>>,  // For discriminated_union types
+    #[serde(default)]
+    pub discriminator: Option<serde_json::Value>,  // For discriminated unions
+    #[serde(default)]
+    pub computed: Option<serde_json::Value>,  // For computed fields
+    #[serde(default)]
+    pub length_encoding: Option<String>,  // For byte_length_prefixed arrays
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -85,6 +103,20 @@ pub struct BitfieldSubfield {
     pub name: String,
     pub offset: u32,
     pub size: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ChoiceVariant {
+    #[serde(rename = "type")]
+    pub type_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct UnionVariant {
+    #[serde(rename = "type")]
+    pub type_name: String,
+    #[serde(default)]
+    pub when: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

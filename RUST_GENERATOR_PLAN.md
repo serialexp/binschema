@@ -1,37 +1,54 @@
 # Rust Generator Implementation Plan
 
-## Current State (2025-12-01)
+## Current State (2025-12-01 - Updated)
 
-### Architecture Change
-**The Rust generator is now implemented in TypeScript** at `packages/binschema/src/generators/rust.ts` (~1000 lines), following the same pattern as the Go generator. The old `rust/src/codegen.rs` was removed.
+### Architecture
+**The Rust generator is implemented in TypeScript** at `packages/binschema/src/generators/rust.ts` (~1300 lines), following the same pattern as the Go generator.
 
 ### Test Infrastructure
 - **Test harness**: `rust/tests/compile_batch.rs` (~600 lines)
-- **Runtime library**: `rust/src/bitstream.rs` (working)
-- **Test schema types**: `rust/src/test_schema.rs`
+- **Runtime library**: `rust/src/bitstream.rs` (working, with peek/seek support)
+- **Test schema types**: `rust/src/test_schema.rs` (updated with union types)
 
 ### Latest Test Results
 ```
 Test files found:    290
-Code gen succeeded:  220 (76%)
-Code gen failed:     58
-Compilation:         FAILED (blocked by discriminated unions, varlength runtime)
+Code gen succeeded:  261 (90%)  ← Up from 220 (76%)
+Code gen failed:     17         ← Down from 58
+Compilation:         BLOCKED (root context issues in computed fields)
 ```
 
-### Recent Progress (2025-12-01)
-**Improvements from 192 → 220 code gen (66% → 76%)**
+### Session Progress (2025-12-01 Session 2)
+**Improvements from 220 → 261 code gen (76% → 90%)**
 
-1. **Fixed optional type handling** - Added proper encode/decode for `Option<T>` fields
-2. **Fixed conditional field handling** - Added null checks for unnamed fields
-3. **Fixed test_schema.rs** - Added missing fields: `length_field`, `value_type`, `align_to`, `const`, `size`, `fields`
-4. **Added varlength type support** - Maps to u64, generates encode/decode (runtime methods pending)
-5. **Added bitfield type support** - Maps to sized integer, generates encode/decode
-6. **Added padding type handling** - Skips padding fields in struct generation
+1. **Implemented discriminated unions (Choice types)**
+   - Added `generateDiscriminatedUnion()` for top-level union types
+   - Added `generateUnionEnum()` for inline choice/union types in arrays
+   - Added `collectInlineUnionTypes()` to find and generate enums for inline unions
+   - Fixed `generateDecodeArrayItem()` to use correct enum names for choice types
 
-### Commits Made
-1. `1d25a69` - feat(rust): add Rust code generator (initial implementation)
-2. `a7ac1a3` - feat(rust): add test harness and CLI integration
-3. `0fdd39d` - feat(rust): run all tests, handle failures gracefully
+2. **Added `field_referenced` string support**
+   - Encoding: Write bytes directly (length is in another field)
+   - Decoding: Read length from previously decoded field
+
+3. **Added multiple array kinds**
+   - `byte_length_prefixed`: Read byte length, decode until position reached
+   - `length_prefixed_items`: Read count, decode that many items
+   - `computed_count`: Use expression for count (basic support)
+   - `variant_terminated`: Loop until terminator variant
+   - `signature_terminated`: Loop until signature match
+
+4. **Fixed Rust test_schema.rs**
+   - Added `choices`, `variants`, `discriminator`, `computed`, `length_encoding` to Field struct
+   - Added `ChoiceVariant` and `UnionVariant` structs
+   - Added `DiscriminatedUnion` variant to `TypeDef` enum
+   - This was critical - serde was dropping unknown fields before re-serializing!
+
+5. **Enhanced runtime library**
+   - Added `peek_uint8()`, `peek_uint16()`, `peek_uint32()` for discriminator peeking
+   - Added `position()` and `seek()` for backtracking in try-each-variant pattern
+   - Added `read_varlength()` for DER-style variable length encoding
+   - Added `InvalidVariant` and `NotImplemented` error types
 
 ## What's Working
 
@@ -40,129 +57,79 @@ Compilation:         FAILED (blocked by discriminated unions, varlength runtime)
 | Primitives (u8-64, i8-64) | ✅ Working | All endianness variants tested |
 | Float32/64 | ✅ Generator works | Test harness needs float literal fixes |
 | Bit fields | ✅ Working | MSB/LSB bit order support |
-| Bitfields | ✅ Generator works | Generates as packed integers (sub-fields not yet supported) |
+| Bitfields | ✅ Generator works | Generates as packed integers |
 | Fixed arrays | ✅ Working | `kind: "fixed"` |
 | Field-referenced arrays | ✅ Working | `kind: "field_referenced"` |
 | Length-prefixed arrays | ✅ Working | `kind: "length_prefixed"` |
+| Byte-length-prefixed arrays | ✅ Working | `kind: "byte_length_prefixed"` |
+| Length-prefixed-items arrays | ✅ Working | `kind: "length_prefixed_items"` |
 | Nested structs | ✅ Working | Type references resolved |
 | Strings (basic) | ✅ Working | null_terminated, length_prefixed, fixed |
+| Strings (field_referenced) | ✅ Working | Length from another field |
 | Optional types | ✅ Working | Proper `Option<T>` encode/decode |
+| Discriminated unions (top-level) | ✅ Working | Generates Rust enum with match-based decode |
+| Choice types (inline) | ✅ Working | For array items with multiple variant types |
 | Reserved keyword escaping | ✅ Working | `type` → `r#type` |
 | CLI integration | ✅ Working | `bun run src/cli/index.ts generate --language rust` |
-| Varlength types | ✅ Generator works | Maps to u64 (runtime methods pending) |
+| Varlength types | ✅ Working | DER-style encode/decode in runtime |
 | Padding fields | ✅ Handled | Skipped in struct generation |
 
-## Blocking Issues (Priority Order)
+## Remaining Issues (17 failures)
 
-### 1. Discriminated Unions (HIGH PRIORITY)
-Discriminated unions (`Choice` types) are not yet implemented. Currently generates a TODO comment.
-
-### 2. Varlength Runtime Methods
-Generated code calls `encoder.write_varlength()` and `decoder.read_varlength()` but these methods don't exist in the Rust runtime yet.
-
-### 3. ~~Optional Type Generation~~ (FIXED)
-~~The struct field type is correct (`Option<T>`), but encode/decode methods are wrong:~~
-
-```typescript
-// Current broken code in generateEncodeField():
-case "optional":
-  // Falls through to default case which calls .encode() on Option
-
-// Current broken code in generateDecodeField():
-default:
-  // Treats it as nested struct, calls Optional::decode_with_decoder()
+### 1. DNS Tests - field.type Undefined (17 failures)
+All remaining failures are DNS protocol tests with error:
+```
+TypeError: undefined is not an object (evaluating 'field.type')
 ```
 
-**Fix needed** - Add explicit handling in `generateEncodeField()` and `generateDecodeField()`:
+These tests use complex schema features that need investigation:
+- dns_domain_special, dns_compression_*, dns_multi_answer, etc.
+- Likely issue: recursive type references or complex conditional structures
 
-```rust
-// Encode (needs to be generated):
-if let Some(v) = self.field_name {
-    encoder.write_uint8(1); // present marker
-    // encode v based on value_type
-} else {
-    encoder.write_uint8(0); // absent marker
-}
+**Root cause analysis needed** - The DNS schema has:
+- Recursive label types (CompressedLabel)
+- Field-based discriminators (referencing earlier fields)
+- Complex nested structures
 
-// Decode (needs to be generated):
-let has_value = decoder.read_uint8()? != 0;
-let field_name = if has_value {
-    Some(/* decode based on value_type */)
-} else {
-    None
-};
-```
+### 2. Compilation Issues (0 code gen, but blocking runtime)
+When tests compile, they fail due to:
+- `root` not found in scope - computed fields reference parent context
+- This requires context-aware code generation for computed fields
 
-### 2. Conditional Field Handling (HIGH PRIORITY)
-**Error**: `undefined is not an object (evaluating 'name.replace')` (~40 failures)
+## Implementation Checklist
 
-Fields with `if` conditions may have undefined names. Check `generateEncodeField()` and `generateDecodeField()` - they call `toRustFieldName(field.name)` but `field.name` can be undefined for conditional fields.
+### ✅ Completed
+- [x] Discriminated unions (Choice types)
+- [x] `field_referenced` string kind
+- [x] `byte_length_prefixed` array kind
+- [x] `length_prefixed_items` array kind
+- [x] `computed_count` array kind (basic)
+- [x] `variant_terminated` array kind (basic)
+- [x] `signature_terminated` array kind (basic)
+- [x] Peek/seek methods in runtime
+- [x] Varlength read method in runtime
+- [x] Fix test_schema.rs to preserve union types
 
-**Fix**: Add null check before calling `toRustFieldName()`.
-
-### 3. Missing Array Kinds
-
-| Kind | Error | Fix Location |
-|------|-------|--------------|
-| `length_prefixed_items` | Unknown array kind | `generateDecodeArray()` |
-| `computed_count` | Unknown array kind | `generateDecodeArray()` |
-| `byte_length_prefixed` | Unknown array kind | `generateDecodeArray()` |
-| `variant_terminated` | Unknown array kind | `generateDecodeArray()` |
-| `signature_terminated` | Unknown array kind | `generateDecodeArray()` |
-
-### 4. Missing String Kinds
-
-| Kind | Error | Fix Location |
-|------|-------|--------------|
-| `field_referenced` | Unknown string kind | `generateEncodeString()`, `generateDecodeString()` |
-
-### 5. Type Prefixing in Batched Compilation
-**File**: `rust/tests/compile_batch.rs`
-
-The `prefix_type_names()` function doesn't catch all type reference patterns. Some nested types like `Padding`, `Varlength` aren't being prefixed.
-
-**Current patterns handled**:
-- `: TypeName,` (field with comma)
-- `: TypeName ` (field with space)
-- `<TypeName>` (generic)
-- `TypeName::` (method call)
-- `-> TypeName` (return type)
-
-**Missing patterns**:
-- Inline type annotations in complex expressions
-- Type references in match arms
-
-## Test Harness Notes
-
-### Running Tests
-```bash
-# Run all Rust tests (requires env var to avoid slow CI)
-cd rust && env RUST_TESTS=1 cargo test test_compile_and_run_all -- --nocapture
-
-# Save generated code for debugging
-cd rust && env RUST_TESTS=1 DEBUG_GENERATED=./debug-output cargo test test_compile_and_run_all -- --nocapture
-```
-
-### Test Harness Limitations
-
-1. **Float literals**: Integer values aren't converted to float literals (1 vs 1.0)
-2. **Infinity/NaN**: Need proper f64::INFINITY, f64::NAN handling
-3. **Nested objects**: `format_value()` doesn't handle nested struct construction
+### 🔲 Remaining
+- [ ] Fix field.type undefined in DNS tests (17 failures)
+- [ ] Computed field context (`root`, `parent` references)
+- [ ] Float literal formatting in test harness
+- [ ] Infinity/NaN handling in test harness
+- [ ] Nested object construction in test harness
 
 ## File Locations
 
 ### Generator (TypeScript)
 ```
-packages/binschema/src/generators/rust.ts    # Main generator (~860 lines)
+packages/binschema/src/generators/rust.ts    # Main generator (~1300 lines)
 packages/binschema/src/cli/index.ts          # CLI integration (case "rust")
-packages/binschema/src/tests/generators/rust-codegen.test.ts  # Generator tests
 ```
 
 ### Runtime (Rust)
 ```
-rust/src/lib.rs              # Crate entry point
-rust/src/bitstream.rs        # BitStreamEncoder/Decoder (~300 lines)
-rust/src/test_schema.rs      # Test suite types
+rust/src/lib.rs              # Crate entry point, error types
+rust/src/bitstream.rs        # BitStreamEncoder/Decoder (~400 lines)
+rust/src/test_schema.rs      # Test suite types (with union support)
 rust/Cargo.toml              # Dependencies: serde, json5, regex
 ```
 
@@ -170,50 +137,7 @@ rust/Cargo.toml              # Dependencies: serde, json5, regex
 ```
 rust/tests/compile_batch.rs  # Batched test runner (~600 lines)
 rust/tests/test_loader.rs    # Suite loading tests
-rust/tests/test_runner.rs    # Legacy runner (unused)
 ```
-
-## Implementation Checklist
-
-### Phase 1: Get Compilation Working
-- [ ] Fix optional type encode/decode generation
-- [ ] Add null check for conditional field names
-- [ ] Fix type prefixing edge cases
-
-### Phase 2: Add Missing Array Kinds
-- [ ] `length_prefixed_items`
-- [ ] `computed_count`
-- [ ] `byte_length_prefixed`
-- [ ] `variant_terminated`
-- [ ] `signature_terminated`
-
-### Phase 3: Add Missing String Kinds
-- [ ] `field_referenced`
-
-### Phase 4: Fix Test Harness
-- [ ] Float literal formatting
-- [ ] Infinity/NaN handling
-- [ ] Nested object construction
-
-### Phase 5: Advanced Features
-- [ ] Conditional fields with expressions
-- [ ] Discriminated unions
-- [ ] Computed fields (length_of, count_of, position_of)
-- [ ] Varlength encoding
-
-## TypeScript Generator Reference
-
-The Go generator at `packages/binschema/src/generators/go.ts` (~1100 lines) is the closest reference for the Rust generator. Key functions to compare:
-
-| Function | Purpose |
-|----------|---------|
-| `generateGo()` / `generateRust()` | Entry point |
-| `generateStruct()` | Struct definition |
-| `generateEncodeMethod()` | Encode impl |
-| `generateDecodeMethod()` | Decode impl |
-| `generateEncodeField()` | Per-field encode |
-| `generateDecodeField()` | Per-field decode |
-| `mapFieldToGoType()` / `mapFieldToRustType()` | Type mapping |
 
 ## Commands Quick Reference
 
@@ -222,16 +146,16 @@ The Go generator at `packages/binschema/src/generators/go.ts` (~1100 lines) is t
 cd packages/binschema
 bun run src/cli/index.ts generate --language rust --schema path/to/schema.json --out ./output
 
-# Run TypeScript tests (includes generator tests)
-npm test
-
 # Run Rust tests
 cd rust && env RUST_TESTS=1 cargo test test_compile_and_run_all -- --nocapture
-
-# Filter TypeScript tests
-npm test -- --filter=rust
 
 # Debug specific Rust compilation
 cd rust && env RUST_TESTS=1 DEBUG_GENERATED=./debug cargo test test_compile_and_run_all -- --nocapture
 # Then examine ./debug/src/*.rs files
 ```
+
+## Next Steps
+
+1. **Investigate DNS test failures** - The 17 remaining failures all share a common pattern
+2. **Fix computed field context** - The `root` reference issue in compiled code
+3. **Run full test suite** - Once code gen and compilation succeed, validate actual encode/decode behavior

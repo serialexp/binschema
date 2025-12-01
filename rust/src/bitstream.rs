@@ -289,6 +289,102 @@ impl BitStreamDecoder {
     pub fn read_float64(&mut self, endianness: Endianness) -> Result<f64> {
         Ok(f64::from_bits(self.read_uint64(endianness)?))
     }
+
+    /// Reads a DER-encoded variable length value
+    /// Short form: if first byte < 128, that's the value
+    /// Long form: first byte & 0x7F gives number of following bytes containing the value
+    pub fn read_varlength(&mut self) -> Result<u64> {
+        let first = self.read_uint8()?;
+        if first < 128 {
+            Ok(first as u64)
+        } else {
+            let num_bytes = (first & 0x7F) as usize;
+            if num_bytes > 8 {
+                return Err(BinSchemaError::InvalidValue("Variable length too large".to_string()));
+            }
+            let mut value = 0u64;
+            for _ in 0..num_bytes {
+                value = (value << 8) | self.read_uint8()? as u64;
+            }
+            Ok(value)
+        }
+    }
+
+    /// Returns the current byte position in the stream
+    pub fn position(&self) -> usize {
+        self.byte_offset
+    }
+
+    /// Seeks to a specific byte position in the stream
+    /// Note: This resets the bit offset to 0
+    pub fn seek(&mut self, pos: usize) -> Result<()> {
+        if pos > self.bytes.len() {
+            return Err(BinSchemaError::InvalidValue(format!("Seek position {} is past end of data", pos)));
+        }
+        self.byte_offset = pos;
+        self.bit_offset = 0;
+        Ok(())
+    }
+
+    /// Peeks at the next byte without consuming it
+    pub fn peek_uint8(&self) -> Result<u8> {
+        if self.byte_offset >= self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        // If we're in the middle of a byte, we can't peek properly
+        if self.bit_offset != 0 {
+            return Err(BinSchemaError::InvalidValue("Cannot peek when not byte-aligned".to_string()));
+        }
+        Ok(self.bytes[self.byte_offset])
+    }
+
+    /// Peeks at the next 2 bytes as uint16 without consuming them
+    pub fn peek_uint16(&self, endianness: Endianness) -> Result<u16> {
+        if self.byte_offset + 2 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        if self.bit_offset != 0 {
+            return Err(BinSchemaError::InvalidValue("Cannot peek when not byte-aligned".to_string()));
+        }
+        match endianness {
+            Endianness::BigEndian => {
+                let high = self.bytes[self.byte_offset] as u16;
+                let low = self.bytes[self.byte_offset + 1] as u16;
+                Ok((high << 8) | low)
+            }
+            Endianness::LittleEndian => {
+                let low = self.bytes[self.byte_offset] as u16;
+                let high = self.bytes[self.byte_offset + 1] as u16;
+                Ok((high << 8) | low)
+            }
+        }
+    }
+
+    /// Peeks at the next 4 bytes as uint32 without consuming them
+    pub fn peek_uint32(&self, endianness: Endianness) -> Result<u32> {
+        if self.byte_offset + 4 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        if self.bit_offset != 0 {
+            return Err(BinSchemaError::InvalidValue("Cannot peek when not byte-aligned".to_string()));
+        }
+        match endianness {
+            Endianness::BigEndian => {
+                let b0 = self.bytes[self.byte_offset] as u32;
+                let b1 = self.bytes[self.byte_offset + 1] as u32;
+                let b2 = self.bytes[self.byte_offset + 2] as u32;
+                let b3 = self.bytes[self.byte_offset + 3] as u32;
+                Ok((b0 << 24) | (b1 << 16) | (b2 << 8) | b3)
+            }
+            Endianness::LittleEndian => {
+                let b0 = self.bytes[self.byte_offset] as u32;
+                let b1 = self.bytes[self.byte_offset + 1] as u32;
+                let b2 = self.bytes[self.byte_offset + 2] as u32;
+                let b3 = self.bytes[self.byte_offset + 3] as u32;
+                Ok((b3 << 24) | (b2 << 16) | (b1 << 8) | b0)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

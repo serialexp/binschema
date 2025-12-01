@@ -11,6 +11,8 @@ pub enum BinSchemaError {
     UnexpectedEof,
     InvalidUtf8,
     InvalidValue(String),
+    InvalidVariant(u64),
+    NotImplemented(String),
 }
 
 impl std::fmt::Display for BinSchemaError {
@@ -19,6 +21,8 @@ impl std::fmt::Display for BinSchemaError {
             BinSchemaError::UnexpectedEof => write!(f, "Unexpected end of input"),
             BinSchemaError::InvalidUtf8 => write!(f, "Invalid UTF-8 data"),
             BinSchemaError::InvalidValue(msg) => write!(f, "Invalid value: {}", msg),
+            BinSchemaError::InvalidVariant(v) => write!(f, "Invalid variant discriminator: {}", v),
+            BinSchemaError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
         }
     }
 }
