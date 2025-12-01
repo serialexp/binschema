@@ -71,13 +71,13 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
-            type_tag: 0x01,
+
             id: 1,
             data: [0xAA, 0xBB, 0xCC, 0xDD]
           },
           {
             type: "IndexEntry",
-            type_tag: 0x02,
+
             id: 1
             // data_offset is computed from sections[corresponding<DataBlock>]
           }
@@ -117,25 +117,25 @@ export const sameIndexCorrelationTestSuite = defineTestSuite({
         sections: [
           {
             type: "DataBlock",
-            type_tag: 0x01,
+
             id: 1,
             data: [0x01, 0x02, 0x03, 0x04]
           },
           {
             type: "DataBlock",
-            type_tag: 0x01,
+
             id: 2,
             data: [0x05, 0x06, 0x07, 0x08]
           },
           {
             type: "IndexEntry",
-            type_tag: 0x02,
+
             id: 1
             // References sections[0] (first DataBlock)
           },
           {
             type: "IndexEntry",
-            type_tag: 0x02,
+
             id: 2
             // References sections[1] (second DataBlock)
           }
@@ -255,19 +255,19 @@ export const firstElementPositionTestSuite = defineTestSuite({
         sections: [
           {
             type: "Directory",
-            type_tag: 0x01,
+
             dir_id: 1
             // first_file_offset computed to point to first FileData
           },
           {
             type: "FileData",
-            type_tag: 0x02,
+
             file_id: 10,
             content: [0xAA, 0xBB, 0xCC]
           },
           {
             type: "FileData",
-            type_tag: 0x02,
+
             file_id: 20,
             content: [0xDD, 0xEE, 0xFF]
           }

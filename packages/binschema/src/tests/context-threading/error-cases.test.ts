@@ -58,7 +58,6 @@ export const missingArrayContextErrorTestSuite = defineTestSuite({
     {
       description: "Encoding RefBlock standalone should error (needs array context)",
       value: {
-        type_tag: 0x02
         // data_position would need blocks array context
       },
       should_error_on_encode: true,

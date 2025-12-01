@@ -48,7 +48,7 @@ export const nestedCalculateSizeTestSuite: TestSuite = {
       value: {
         header: 0xFF,
         inner: {
-          tag: 0x30,
+
           value: 0x1234
         },
         footer: 0xEE
