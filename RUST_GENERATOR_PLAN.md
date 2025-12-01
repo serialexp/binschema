@@ -1,9 +1,9 @@
 # Rust Generator Implementation Plan
 
-## Current State (2024-11-28)
+## Current State (2025-12-01)
 
 ### Architecture Change
-**The Rust generator is now implemented in TypeScript** at `packages/binschema/src/generators/rust.ts` (~860 lines), following the same pattern as the Go generator. The old `rust/src/codegen.rs` was removed.
+**The Rust generator is now implemented in TypeScript** at `packages/binschema/src/generators/rust.ts` (~1000 lines), following the same pattern as the Go generator. The old `rust/src/codegen.rs` was removed.
 
 ### Test Infrastructure
 - **Test harness**: `rust/tests/compile_batch.rs` (~600 lines)
@@ -13,10 +13,20 @@
 ### Latest Test Results
 ```
 Test files found:    290
-Code gen succeeded:  192 (66%)
-Code gen failed:     86
-Compilation:         FAILED (blocked by incomplete features)
+Code gen succeeded:  220 (76%)
+Code gen failed:     58
+Compilation:         FAILED (blocked by discriminated unions, varlength runtime)
 ```
+
+### Recent Progress (2025-12-01)
+**Improvements from 192 → 220 code gen (66% → 76%)**
+
+1. **Fixed optional type handling** - Added proper encode/decode for `Option<T>` fields
+2. **Fixed conditional field handling** - Added null checks for unnamed fields
+3. **Fixed test_schema.rs** - Added missing fields: `length_field`, `value_type`, `align_to`, `const`, `size`, `fields`
+4. **Added varlength type support** - Maps to u64, generates encode/decode (runtime methods pending)
+5. **Added bitfield type support** - Maps to sized integer, generates encode/decode
+6. **Added padding type handling** - Skips padding fields in struct generation
 
 ### Commits Made
 1. `1d25a69` - feat(rust): add Rust code generator (initial implementation)
@@ -30,20 +40,28 @@ Compilation:         FAILED (blocked by incomplete features)
 | Primitives (u8-64, i8-64) | ✅ Working | All endianness variants tested |
 | Float32/64 | ✅ Generator works | Test harness needs float literal fixes |
 | Bit fields | ✅ Working | MSB/LSB bit order support |
+| Bitfields | ✅ Generator works | Generates as packed integers (sub-fields not yet supported) |
 | Fixed arrays | ✅ Working | `kind: "fixed"` |
 | Field-referenced arrays | ✅ Working | `kind: "field_referenced"` |
 | Length-prefixed arrays | ✅ Working | `kind: "length_prefixed"` |
 | Nested structs | ✅ Working | Type references resolved |
 | Strings (basic) | ✅ Working | null_terminated, length_prefixed, fixed |
+| Optional types | ✅ Working | Proper `Option<T>` encode/decode |
 | Reserved keyword escaping | ✅ Working | `type` → `r#type` |
 | CLI integration | ✅ Working | `bun run src/cli/index.ts generate --language rust` |
+| Varlength types | ✅ Generator works | Maps to u64 (runtime methods pending) |
+| Padding fields | ✅ Handled | Skipped in struct generation |
 
 ## Blocking Issues (Priority Order)
 
-### 1. Optional Type Generation (HIGH PRIORITY)
-**File**: `packages/binschema/src/generators/rust.ts`
+### 1. Discriminated Unions (HIGH PRIORITY)
+Discriminated unions (`Choice` types) are not yet implemented. Currently generates a TODO comment.
 
-The struct field type is correct (`Option<T>`), but encode/decode methods are wrong:
+### 2. Varlength Runtime Methods
+Generated code calls `encoder.write_varlength()` and `decoder.read_varlength()` but these methods don't exist in the Rust runtime yet.
+
+### 3. ~~Optional Type Generation~~ (FIXED)
+~~The struct field type is correct (`Option<T>`), but encode/decode methods are wrong:~~
 
 ```typescript
 // Current broken code in generateEncodeField():

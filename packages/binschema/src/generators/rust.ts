@@ -108,6 +108,12 @@ function generateStruct(name: string, fields: Field[]): string[] {
   lines.push(`pub struct ${name} {`);
 
   for (const field of fields) {
+    // Skip fields without names (e.g., conditional fields)
+    // Skip fields without types (e.g., conditional markers)
+    // Skip padding fields (computed at encode/decode time)
+    if (!field.name || !field.type || field.type === "padding") {
+      continue;
+    }
     const rustType = mapFieldToRustType(field);
     const fieldName = toRustFieldName(field.name);
     lines.push(`    pub ${fieldName}: ${rustType},`);
@@ -150,7 +156,12 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
 
   // Generate encoding logic for each field
+  // Note: We only encode NAMED fields - unnamed fields (const, padding) aren't in the struct
   for (const field of fields) {
+    // Skip fields without names - they're not in the struct
+    if (!field.name) {
+      continue;
+    }
     lines.push(...generateEncodeField(field, defaultEndianness, "        "));
   }
 
@@ -179,13 +190,20 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
   lines.push(`    pub fn decode_with_decoder(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
 
   // Generate decoding logic for each field
+  // Note: We decode ALL fields (including unnamed) because they may be referenced
+  // by other fields (e.g., as length_field for arrays)
   for (const field of fields) {
     lines.push(...generateDecodeField(field, defaultEndianness, "        "));
   }
 
-  // Construct the result
+  // Construct the result - only include named, non-padding fields in the struct
   lines.push(`        Ok(Self {`);
   for (const field of fields) {
+    // Skip fields without names or without types
+    // Skip padding fields
+    if (!field.name || !field.type || field.type === "padding") {
+      continue;
+    }
     const fieldName = toRustFieldName(field.name);
     lines.push(`            ${fieldName},`);
   }
@@ -203,6 +221,11 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
   const fieldName = `self.${toRustFieldName(field.name)}`;
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+
+  // Skip fields without a type (e.g., conditional markers)
+  if (!field.type) {
+    return lines;
+  }
 
   switch (field.type) {
     case "uint8":
@@ -253,12 +276,36 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
       break;
     }
 
+    case "varlength": {
+      // Variable-length integer encoding (VLQ, LEB128, DER, etc.)
+      const encoding = (field as any).encoding || "vlq";
+      lines.push(`${indent}encoder.write_varlength(${fieldName}, "${encoding}");`);
+      break;
+    }
+
+    case "bitfield": {
+      // Bitfield - write as packed integer
+      // TODO: Full bitfield support with sub-fields
+      const bitSize = (field as any).size || 8;
+      lines.push(`${indent}encoder.write_bits(${fieldName} as u64, ${bitSize});`);
+      break;
+    }
+
     case "string":
       lines.push(...generateEncodeString(field as any, fieldName, endianness, indent));
       break;
 
     case "array":
       lines.push(...generateEncodeArray(field as any, fieldName, endianness, rustEndianness, indent));
+      break;
+
+    case "optional":
+      lines.push(...generateEncodeOptional(field as any, fieldName, endianness, indent));
+      break;
+
+    case "padding":
+      // Padding fields are computed at encode time, skip for now
+      // In a full implementation, we'd calculate alignment and write zeros
       break;
 
     default:
@@ -449,6 +496,73 @@ function generateEncodeNestedStruct(field: Field, fieldName: string, indent: str
 }
 
 /**
+ * Generates encoding code for optional field
+ */
+function generateEncodeOptional(field: any, fieldName: string, endianness: string, indent: string): string[] {
+  const lines: string[] = [];
+  const valueType = field.value_type;
+  const rustEndianness = mapEndianness(endianness);
+
+  lines.push(`${indent}if let Some(v) = ${fieldName} {`);
+  lines.push(`${indent}    encoder.write_uint8(1);`);
+
+  // Encode the value based on its type
+  switch (valueType) {
+    case "uint8":
+      lines.push(`${indent}    encoder.write_uint8(v);`);
+      break;
+    case "uint16":
+      lines.push(`${indent}    encoder.write_uint16(v, Endianness::${rustEndianness});`);
+      break;
+    case "uint32":
+      lines.push(`${indent}    encoder.write_uint32(v, Endianness::${rustEndianness});`);
+      break;
+    case "uint64":
+      lines.push(`${indent}    encoder.write_uint64(v, Endianness::${rustEndianness});`);
+      break;
+    case "int8":
+      lines.push(`${indent}    encoder.write_int8(v);`);
+      break;
+    case "int16":
+      lines.push(`${indent}    encoder.write_int16(v, Endianness::${rustEndianness});`);
+      break;
+    case "int32":
+      lines.push(`${indent}    encoder.write_int32(v, Endianness::${rustEndianness});`);
+      break;
+    case "int64":
+      lines.push(`${indent}    encoder.write_int64(v, Endianness::${rustEndianness});`);
+      break;
+    case "float32":
+      lines.push(`${indent}    encoder.write_float32(v, Endianness::${rustEndianness});`);
+      break;
+    case "float64":
+      lines.push(`${indent}    encoder.write_float64(v, Endianness::${rustEndianness});`);
+      break;
+    case "string":
+      // For strings in optional, we need to know the string kind
+      // Default to null-terminated for simplicity
+      lines.push(`${indent}    for b in v.as_bytes() {`);
+      lines.push(`${indent}        encoder.write_uint8(*b);`);
+      lines.push(`${indent}    }`);
+      lines.push(`${indent}    encoder.write_uint8(0);`);
+      break;
+    default:
+      // Type reference - nested struct
+      lines.push(`${indent}    let bytes = v.encode();`);
+      lines.push(`${indent}    for b in bytes {`);
+      lines.push(`${indent}        encoder.write_uint8(b);`);
+      lines.push(`${indent}    }`);
+      break;
+  }
+
+  lines.push(`${indent}} else {`);
+  lines.push(`${indent}    encoder.write_uint8(0);`);
+  lines.push(`${indent}}`);
+
+  return lines;
+}
+
+/**
  * Generates decoding code for a single field
  */
 function generateDecodeField(field: Field, defaultEndianness: string, indent: string): string[] {
@@ -456,6 +570,11 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
   const varName = toRustFieldName(field.name);
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+
+  // Skip fields without a type (e.g., conditional markers)
+  if (!field.type) {
+    return lines;
+  }
 
   switch (field.type) {
     case "uint8":
@@ -512,6 +631,22 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       break;
     }
 
+    case "varlength": {
+      // Variable-length integer decoding (VLQ, LEB128, DER, etc.)
+      const encoding = (field as any).encoding || "vlq";
+      lines.push(`${indent}let ${varName} = decoder.read_varlength("${encoding}")?;`);
+      break;
+    }
+
+    case "bitfield": {
+      // Bitfield - read as packed integer
+      // TODO: Full bitfield support with sub-fields
+      const bitSize = (field as any).size || 8;
+      const rustType = mapFieldToRustType(field);
+      lines.push(`${indent}let ${varName} = decoder.read_bits(${bitSize})? as ${rustType};`);
+      break;
+    }
+
     case "string":
       lines.push(...generateDecodeString(field as any, varName, endianness, indent));
       break;
@@ -520,11 +655,87 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent));
       break;
 
+    case "optional":
+      lines.push(...generateDecodeOptional(field as any, varName, endianness, indent));
+      break;
+
+    case "padding":
+      // Padding fields are computed, skip decode for now
+      // In a full implementation, we'd read and discard alignment bytes
+      break;
+
     default:
       // Type reference - nested struct
       lines.push(...generateDecodeNestedStruct(field, varName, indent));
       break;
   }
+
+  return lines;
+}
+
+/**
+ * Generates decoding code for optional field
+ */
+function generateDecodeOptional(field: any, varName: string, endianness: string, indent: string): string[] {
+  const lines: string[] = [];
+  const valueType = field.value_type;
+  const rustEndianness = mapEndianness(endianness);
+
+  lines.push(`${indent}let has_value = decoder.read_uint8()? != 0;`);
+  lines.push(`${indent}let ${varName} = if has_value {`);
+
+  // Decode the value based on its type
+  switch (valueType) {
+    case "uint8":
+      lines.push(`${indent}    Some(decoder.read_uint8()?)`);
+      break;
+    case "uint16":
+      lines.push(`${indent}    Some(decoder.read_uint16(Endianness::${rustEndianness})?)`);
+      break;
+    case "uint32":
+      lines.push(`${indent}    Some(decoder.read_uint32(Endianness::${rustEndianness})?)`);
+      break;
+    case "uint64":
+      lines.push(`${indent}    Some(decoder.read_uint64(Endianness::${rustEndianness})?)`);
+      break;
+    case "int8":
+      lines.push(`${indent}    Some(decoder.read_int8()?)`);
+      break;
+    case "int16":
+      lines.push(`${indent}    Some(decoder.read_int16(Endianness::${rustEndianness})?)`);
+      break;
+    case "int32":
+      lines.push(`${indent}    Some(decoder.read_int32(Endianness::${rustEndianness})?)`);
+      break;
+    case "int64":
+      lines.push(`${indent}    Some(decoder.read_int64(Endianness::${rustEndianness})?)`);
+      break;
+    case "float32":
+      lines.push(`${indent}    Some(decoder.read_float32(Endianness::${rustEndianness})?)`);
+      break;
+    case "float64":
+      lines.push(`${indent}    Some(decoder.read_float64(Endianness::${rustEndianness})?)`);
+      break;
+    case "string":
+      // For strings in optional, decode as null-terminated
+      lines.push(`${indent}    let mut bytes = Vec::new();`);
+      lines.push(`${indent}    loop {`);
+      lines.push(`${indent}        let b = decoder.read_uint8()?;`);
+      lines.push(`${indent}        if b == 0 { break; }`);
+      lines.push(`${indent}        bytes.push(b);`);
+      lines.push(`${indent}    }`);
+      lines.push(`${indent}    Some(String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?)`);
+      break;
+    default:
+      // Type reference - nested struct
+      const typeName = toRustTypeName(valueType);
+      lines.push(`${indent}    Some(${typeName}::decode_with_decoder(decoder)?)`);
+      break;
+  }
+
+  lines.push(`${indent}} else {`);
+  lines.push(`${indent}    None`);
+  lines.push(`${indent}};`);
 
   return lines;
 }
@@ -751,6 +962,16 @@ function mapFieldToRustType(field: Field): string {
       return "f32";
     case "float64":
       return "f64";
+    case "varlength":
+      return "u64";  // Variable-length integers decode to u64
+    case "bitfield": {
+      // Bitfields are packed integers - use appropriate size
+      const size = (field as any).size || 8;
+      if (size <= 8) return "u8";
+      if (size <= 16) return "u16";
+      if (size <= 32) return "u32";
+      return "u64";
+    }
     case "string":
       return "String";
     case "bit": {
@@ -772,7 +993,11 @@ function mapFieldToRustType(field: Field): string {
       return `Vec<${itemsType}>`;
     }
     case "optional": {
-      const valueType = mapPrimitiveToRustType((field as any).value_type);
+      const valueTypeName = (field as any).value_type;
+      if (!valueTypeName) {
+        throw new Error(`Optional field ${field.name} missing value_type`);
+      }
+      const valueType = mapPrimitiveToRustType(valueTypeName);
       return `Option<${valueType}>`;
     }
     default:
@@ -814,7 +1039,10 @@ const RUST_KEYWORDS = new Set([
 /**
  * Converts a field name to Rust field name (snake_case)
  */
-function toRustFieldName(name: string): string {
+function toRustFieldName(name: string | undefined): string {
+  if (!name) {
+    return "_unnamed";
+  }
   // Already snake_case in schema, just ensure valid Rust identifier
   // Handle camelCase to snake_case conversion if needed
   let result = name

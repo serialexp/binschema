@@ -59,6 +59,8 @@ pub struct Field {
     #[serde(default)]
     pub length_type: Option<String>,
     #[serde(default)]
+    pub length_field: Option<String>,  // For field_referenced arrays
+    #[serde(default)]
     pub items: Option<Box<Field>>,
     #[serde(default)]
     pub encoding: Option<String>,
@@ -66,6 +68,23 @@ pub struct Field {
     pub conditional: Option<String>,
     #[serde(default)]
     pub endianness: Option<String>,
+    #[serde(default)]
+    pub value_type: Option<String>,  // For optional fields
+    #[serde(default)]
+    pub align_to: Option<u32>,  // For padding fields
+    #[serde(default)]
+    pub r#const: Option<serde_json::Value>,  // For const fields
+    #[serde(default)]
+    pub size: Option<u32>,  // For bit/bitfield fields
+    #[serde(default)]
+    pub fields: Option<Vec<BitfieldSubfield>>,  // For bitfield sub-fields
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BitfieldSubfield {
+    pub name: String,
+    pub offset: u32,
+    pub size: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
