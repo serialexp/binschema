@@ -41,6 +41,7 @@ export const stringTestSuite = defineTestSuite({
     {
       description: "Empty string",
       value: { text: { data: [] } },
+      decoded_value: { text: { data: [] } },
       bytes: [0x00, 0x00, 0x00, 0x00], // length = 0
     },
     {
@@ -54,6 +55,7 @@ export const stringTestSuite = defineTestSuite({
     {
       description: "String 'Hello'",
       value: { text: { data: [0x48, 0x65, 0x6C, 0x6C, 0x6F] } },
+      decoded_value: { text: { data: [0x48, 0x65, 0x6C, 0x6C, 0x6F] } },
       bytes: [
         0x00, 0x00, 0x00, 0x05, // length = 5
         0x48, 0x65, 0x6C, 0x6C, 0x6F, // 'Hello'
@@ -62,6 +64,7 @@ export const stringTestSuite = defineTestSuite({
     {
       description: "UTF-8 emoji '👋' (U+1F44B = 0xF0 0x9F 0x91 0x8B)",
       value: { text: { data: [0xF0, 0x9F, 0x91, 0x8B] } },
+      decoded_value: { text: { data: [0xF0, 0x9F, 0x91, 0x8B] } },
       bytes: [
         0x00, 0x00, 0x00, 0x04,       // length = 4 bytes
         0xF0, 0x9F, 0x91, 0x8B,       // UTF-8 encoding of 👋

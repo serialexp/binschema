@@ -39,6 +39,9 @@ export const nestedFieldConditionalTestSuite = defineTestSuite({
       value: {
         header: { flags: 0, version: 1 }
       },
+      decoded_value: {
+        header: { flags: 0, version: 1 }
+      },
       bytes: [
         0x00, // flags = 0
         0x01, // version = 1
@@ -47,6 +50,10 @@ export const nestedFieldConditionalTestSuite = defineTestSuite({
     {
       description: "Payload only (flags=0x01, version=1)",
       value: {
+        header: { flags: 0x01, version: 1 },
+        payload: 0x12345678
+      },
+      decoded_value: {
         header: { flags: 0x01, version: 1 },
         payload: 0x12345678
       },
@@ -62,6 +69,10 @@ export const nestedFieldConditionalTestSuite = defineTestSuite({
         header: { flags: 0x02, version: 1 },
         checksum: 0xABCD
       },
+      decoded_value: {
+        header: { flags: 0x02, version: 1 },
+        checksum: 0xABCD
+      },
       bytes: [
         0x02, // flags = 0x02
         0x01, // version = 1
@@ -74,6 +85,10 @@ export const nestedFieldConditionalTestSuite = defineTestSuite({
         header: { flags: 0, version: 2 },
         timestamp: 0x123456789ABCDEFn
       },
+      decoded_value: {
+        header: { flags: 0, version: 2 },
+        timestamp: 0x123456789ABCDEFn
+      },
       bytes: [
         0x00, // flags = 0
         0x02, // version = 2
@@ -83,6 +98,12 @@ export const nestedFieldConditionalTestSuite = defineTestSuite({
     {
       description: "All fields (flags=0x03, version=2)",
       value: {
+        header: { flags: 0x03, version: 2 },
+        payload: 0xDEADBEEF,
+        checksum: 0x1234,
+        timestamp: 0xFFFFFFFFFFFFFFFFn
+      },
+      decoded_value: {
         header: { flags: 0x03, version: 2 },
         payload: 0xDEADBEEF,
         checksum: 0x1234,

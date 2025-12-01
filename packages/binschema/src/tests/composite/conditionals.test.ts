@@ -34,11 +34,13 @@ export const conditionalFieldTestSuite = defineTestSuite({
     {
       description: "Flags = 0 (no timestamp)",
       value: { flags: 0 },
+      decoded_value: { flags: 0 },
       bytes: [0x00], // Just flags
     },
     {
       description: "Flags = 0x01 (timestamp present)",
       value: { flags: 0x01, timestamp: 1234567890 },
+      decoded_value: { flags: 0x01, timestamp: 1234567890 },
       bytes: [
         0x01,             // flags
         0x49, 0x96, 0x02, 0xD2, // timestamp = 1234567890
@@ -47,6 +49,7 @@ export const conditionalFieldTestSuite = defineTestSuite({
     {
       description: "Flags = 0x02 (no timestamp, other bits set)",
       value: { flags: 0x02 },
+      decoded_value: { flags: 0x02 },
       bytes: [0x02], // Just flags, timestamp not present
     },
   ]

@@ -29,36 +29,43 @@ export const float32BigEndianTestSuite = defineTestSuite({
     {
       description: "Zero (0.0)",
       value: { value: 0.0 },
+      decoded_value: { value: 0.0 },
       bytes: [0x00, 0x00, 0x00, 0x00],
     },
     {
       description: "One (1.0)",
       value: { value: 1.0 },
+      decoded_value: { value: 1.0 },
       bytes: [0x3F, 0x80, 0x00, 0x00], // IEEE 754: 0x3F800000
     },
     {
       description: "Negative one (-1.0)",
       value: { value: -1.0 },
+      decoded_value: { value: -1.0 },
       bytes: [0xBF, 0x80, 0x00, 0x00], // IEEE 754: 0xBF800000
     },
     {
       description: "Pi (3.14159265359)",
       value: { value: 3.14159265359 },
+      decoded_value: { value: 3.14159265359 },
       bytes: [0x40, 0x49, 0x0F, 0xDB], // IEEE 754: approximately pi
     },
     {
       description: "Very small number (0.000001)",
       value: { value: 0.000001 },
+      decoded_value: { value: 0.000001 },
       bytes: [0x35, 0x86, 0x37, 0xBD],
     },
     {
       description: "Infinity",
       value: { value: Infinity },
+      decoded_value: { value: Infinity },
       bytes: [0x7F, 0x80, 0x00, 0x00],
     },
     {
       description: "Negative infinity",
       value: { value: -Infinity },
+      decoded_value: { value: -Infinity },
       bytes: [0xFF, 0x80, 0x00, 0x00],
     },
     // Note: NaN is tricky because there are multiple NaN representations

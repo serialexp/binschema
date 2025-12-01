@@ -41,6 +41,16 @@ export const boundaryValuesTestSuite = defineTestSuite({
         value_65535: 65535,
         value_65536: 65536,
       },
+      decoded_value: {
+        value_127: 127,
+        value_128: 128,
+        value_255: 255,
+        value_256: 256,
+        value_32767: 32767,
+        value_32768: 32768,
+        value_65535: 65535,
+        value_65536: 65536,
+      },
       bytes: [
         0x7F,       // 127
         0x80,       // 128

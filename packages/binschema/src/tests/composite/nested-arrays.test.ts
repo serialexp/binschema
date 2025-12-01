@@ -39,11 +39,18 @@ export const nestedArrays2DTestSuite = defineTestSuite({
     {
       description: "Empty 2D array",
       value: { rows: [] },
+      decoded_value: { rows: [] },
       bytes: [0x00], // rows.length = 0
     },
     {
       description: "2x3 matrix [[1,2,3], [4,5,6]]",
       value: {
+        rows: [
+          [1, 2, 3],
+          [4, 5, 6]
+        ]
+      },
+      decoded_value: {
         rows: [
           [1, 2, 3],
           [4, 5, 6]
@@ -70,6 +77,13 @@ export const nestedArrays2DTestSuite = defineTestSuite({
           [4, 5, 6]
         ]
       },
+      decoded_value: {
+        rows: [
+          [1],
+          [2, 3],
+          [4, 5, 6]
+        ]
+      },
       bytes: [
         0x03,       // rows.length = 3
         0x01,       // rows[0].length = 1
@@ -86,6 +100,13 @@ export const nestedArrays2DTestSuite = defineTestSuite({
     {
       description: "Array with empty inner arrays [[],[1],[]]",
       value: {
+        rows: [
+          [],
+          [42],
+          []
+        ]
+      },
+      decoded_value: {
         rows: [
           [],
           [42],

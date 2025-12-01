@@ -48,16 +48,19 @@ export const lengthPrefixedUint8TestSuite = defineTestSuite({
     {
       description: "Empty string",
       value: { label: "" },
+      decoded_value: { label: "" },
       bytes: [0x00], // length = 0
     },
     {
       description: "Single character 'a'",
       value: { label: "a" },
+      decoded_value: { label: "a" },
       bytes: [0x01, 0x61], // length=1, 'a'
     },
     {
       description: "DNS label 'example'",
       value: { label: "example" },
+      decoded_value: { label: "example" },
       bytes: [
         0x07, // length = 7
         0x65, 0x78, 0x61, 0x6D, 0x70, 0x6C, 0x65, // 'example'
@@ -66,6 +69,7 @@ export const lengthPrefixedUint8TestSuite = defineTestSuite({
     {
       description: "Maximum length label (63 bytes)",
       value: { label: "a".repeat(63) },
+      decoded_value: { label: "a".repeat(63) },
       bytes: [
         0x3F, // length = 63
         ...Array(63).fill(0x61), // 63 'a' characters
@@ -74,6 +78,7 @@ export const lengthPrefixedUint8TestSuite = defineTestSuite({
     {
       description: "Hyphenated label 'my-server'",
       value: { label: "my-server" },
+      decoded_value: { label: "my-server" },
       bytes: [
         0x09, // length = 9
         0x6D, 0x79, 0x2D, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, // 'my-server'

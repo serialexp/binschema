@@ -42,6 +42,7 @@ export const greedyBufferingFixedArrayTestSuite = defineTestSuite({
     {
       description: "Complete array in one buffer",
       value: { values: [0x1111, 0x2222, 0x3333, 0x4444, 0x5555] },
+      decoded_value: { values: [0x1111, 0x2222, 0x3333, 0x4444, 0x5555] },
       bytes: [
         0x11, 0x11,
         0x22, 0x22,

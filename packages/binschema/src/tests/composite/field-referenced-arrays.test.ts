@@ -50,11 +50,19 @@ export const simpleFieldReferencedArrayTestSuite = defineTestSuite({
         count: 0,
         items: []
       },
+      decoded_value: {
+        count: 0,
+        items: []
+      },
       bytes: [0x00], // count=0, no items
     },
     {
       description: "Single item (count=1)",
       value: {
+        count: 1,
+        items: [42]
+      },
+      decoded_value: {
         count: 1,
         items: [42]
       },
@@ -66,11 +74,19 @@ export const simpleFieldReferencedArrayTestSuite = defineTestSuite({
         count: 3,
         items: [10, 20, 30]
       },
+      decoded_value: {
+        count: 3,
+        items: [10, 20, 30]
+      },
       bytes: [0x03, 0x0A, 0x14, 0x1E], // count=3, items
     },
     {
       description: "Five items",
       value: {
+        count: 5,
+        items: [1, 2, 3, 4, 5]
+      },
+      decoded_value: {
         count: 5,
         items: [1, 2, 3, 4, 5]
       },

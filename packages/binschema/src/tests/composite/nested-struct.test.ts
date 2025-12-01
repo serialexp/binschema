@@ -38,6 +38,10 @@ export const nestedStructTestSuite = defineTestSuite({
         top_left: { x: 0, y: 0 },
         bottom_right: { x: 100, y: 50 },
       },
+      decoded_value: {
+        top_left: { x: 0, y: 0 },
+        bottom_right: { x: 100, y: 50 },
+      },
       bytes: [
         0x00, 0x00, // top_left.x = 0
         0x00, 0x00, // top_left.y = 0
@@ -48,6 +52,10 @@ export const nestedStructTestSuite = defineTestSuite({
     {
       description: "Rectangle (10,20) to (30,40)",
       value: {
+        top_left: { x: 10, y: 20 },
+        bottom_right: { x: 30, y: 40 },
+      },
+      decoded_value: {
         top_left: { x: 10, y: 20 },
         bottom_right: { x: 30, y: 40 },
       },

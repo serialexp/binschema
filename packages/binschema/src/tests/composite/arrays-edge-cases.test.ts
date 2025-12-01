@@ -59,6 +59,7 @@ export const emptyArraysAllTypesTestSuite = defineTestSuite({
     {
       description: "Empty array with uint8 length",
       value: { data: [] },
+      decoded_value: { data: [] },
       bytes: [0x00],
     },
   ]

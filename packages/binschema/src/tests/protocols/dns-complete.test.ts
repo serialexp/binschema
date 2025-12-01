@@ -166,6 +166,33 @@ export const dnsCompleteQueryTestSuite = defineTestSuite({
           }
         ]
       },
+      decoded_value: {
+        id: 0x1234,
+        flags: {
+          qr: 0,
+          opcode: 0,
+          aa: 0,
+          tc: 0,
+          rd: 1,
+          ra: 0,
+          z: 0,
+          rcode: 0
+        },
+        qdcount: 1,
+        ancount: 0,
+        nscount: 0,
+        arcount: 0,
+        questions: [
+          {
+            qname: [
+              { type: "Label", value: "example" },
+              { type: "Label", value: "com" }
+            ],
+            qtype: 1,
+            qclass: 1
+          }
+        ]
+      },
       bytes: [
         // Header
         0x12, 0x34, // id

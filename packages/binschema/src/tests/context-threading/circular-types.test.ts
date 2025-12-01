@@ -42,6 +42,9 @@ export const placeholderNonRecursiveTestSuite = defineTestSuite({
       value: {
         value: 42
       },
+      decoded_value: {
+        value: 42
+      },
       bytes: [42]
     }
   ]

@@ -26,31 +26,37 @@ export const int8TestSuite = defineTestSuite({
     {
       description: "Zero",
       value: { value: 0 },
+      decoded_value: { value: 0 },
       bytes: [0x00],
     },
     {
       description: "Positive value (42)",
       value: { value: 42 },
+      decoded_value: { value: 42 },
       bytes: [0x2A],
     },
     {
       description: "Negative value (-1)",
       value: { value: -1 },
+      decoded_value: { value: -1 },
       bytes: [0xFF], // Two's complement: -1 = 0xFF
     },
     {
       description: "Negative value (-42)",
       value: { value: -42 },
+      decoded_value: { value: -42 },
       bytes: [0xD6], // Two's complement: -42 = 0xD6
     },
     {
       description: "Minimum value (-128)",
       value: { value: -128 },
+      decoded_value: { value: -128 },
       bytes: [0x80],
     },
     {
       description: "Maximum value (127)",
       value: { value: 127 },
+      decoded_value: { value: 127 },
       bytes: [0x7F],
     },
   ]

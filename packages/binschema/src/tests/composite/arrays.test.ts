@@ -34,16 +34,19 @@ export const fixedArrayTestSuite = defineTestSuite({
     {
       description: "Array of zeros",
       value: { data: [0, 0, 0, 0] },
+      decoded_value: { data: [0, 0, 0, 0] },
       bytes: [0x00, 0x00, 0x00, 0x00],
     },
     {
       description: "Array [1, 2, 3, 4]",
       value: { data: [1, 2, 3, 4] },
+      decoded_value: { data: [1, 2, 3, 4] },
       bytes: [0x01, 0x02, 0x03, 0x04],
     },
     {
       description: "Array [0xDE, 0xAD, 0xBE, 0xEF]",
       value: { data: [0xDE, 0xAD, 0xBE, 0xEF] },
+      decoded_value: { data: [0xDE, 0xAD, 0xBE, 0xEF] },
       bytes: [0xDE, 0xAD, 0xBE, 0xEF],
     },
   ]

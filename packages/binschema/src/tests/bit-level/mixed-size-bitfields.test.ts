@@ -34,6 +34,11 @@ export const mixedSizeBitfieldsTestSuite = defineTestSuite({
         medium: 0,
         large: 0n
       },
+      decoded_value: {
+        flag: 0,
+        medium: 0,
+        large: 0n
+      },
       bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
     },
     {
@@ -82,6 +87,11 @@ export const mixedSizeBitfieldsTestSuite = defineTestSuite({
     {
       description: "All ones (flag=1, medium=0x7FFF, large=0xFFFFFFFFFFFF)",
       value: {
+        flag: 1,
+        medium: 0x7FFF,
+        large: 0xFFFFFFFFFFFFn
+      },
+      decoded_value: {
         flag: 1,
         medium: 0x7FFF,
         large: 0xFFFFFFFFFFFFn

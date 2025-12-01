@@ -59,16 +59,19 @@ export const singleStringReferenceTestSuite = defineTestSuite({
     {
       description: "Empty string",
       value: { text: "" },
+      decoded_value: { text: "" },
       bytes: [0x00], // length = 0
     },
     {
       description: "Single character 'x'",
       value: { text: "x" },
+      decoded_value: { text: "x" },
       bytes: [0x01, 0x78], // length=1, 'x'
     },
     {
       description: "Word 'hello'",
       value: { text: "hello" },
+      decoded_value: { text: "hello" },
       bytes: [
         0x05, // length = 5
         0x68, 0x65, 0x6C, 0x6C, 0x6F, // 'hello'
@@ -77,6 +80,7 @@ export const singleStringReferenceTestSuite = defineTestSuite({
     {
       description: "Long string 'The quick brown fox'",
       value: { text: "The quick brown fox" },
+      decoded_value: { text: "The quick brown fox" },
       bytes: [
         0x13, // length = 19
         0x54, 0x68, 0x65, 0x20, 0x71, 0x75, 0x69, 0x63, 0x6B, 0x20, // 'The quick '

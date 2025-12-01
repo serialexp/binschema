@@ -29,16 +29,19 @@ export const uint64BigEndianTestSuite = defineTestSuite({
     {
       description: "Zero value",
       value: { value: 0n },
+      decoded_value: { value: 0n },
       bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
     },
     {
       description: "Value 1",
       value: { value: 1n },
+      decoded_value: { value: 1n },
       bytes: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
     },
     {
       description: "Value 0x123456789ABCDEF0",
       value: { value: 0x123456789ABCDEF0n },
+      decoded_value: { value: 0x123456789ABCDEF0n },
       bytes: [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0],
     },
     {
@@ -49,6 +52,7 @@ export const uint64BigEndianTestSuite = defineTestSuite({
     {
       description: "Maximum value (2^64 - 1)",
       value: { value: 18446744073709551615n },
+      decoded_value: { value: 18446744073709551615n },
       bytes: [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
     },
   ]

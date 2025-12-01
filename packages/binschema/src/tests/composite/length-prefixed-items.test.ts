@@ -43,6 +43,7 @@ export const lengthPrefixedItemsBasicTestSuite = defineTestSuite({
     {
       description: "Empty array",
       value: { values: [] },
+      decoded_value: { values: [] },
       bytes: [
         0x00, 0x00, // Array length = 0
       ],
@@ -50,6 +51,7 @@ export const lengthPrefixedItemsBasicTestSuite = defineTestSuite({
     {
       description: "Single uint32 item",
       value: { values: [0x12345678] },
+      decoded_value: { values: [0x12345678] },
       bytes: [
         0x00, 0x01,             // Array length = 1
         0x00, 0x00, 0x00, 0x04, // Item 0 length = 4 bytes
@@ -59,6 +61,7 @@ export const lengthPrefixedItemsBasicTestSuite = defineTestSuite({
     {
       description: "Three uint32 items",
       value: { values: [0x11111111, 0x22222222, 0x33333333] },
+      decoded_value: { values: [0x11111111, 0x22222222, 0x33333333] },
       bytes: [
         0x00, 0x03,             // Array length = 3
         0x00, 0x00, 0x00, 0x04, // Item 0 length = 4 bytes

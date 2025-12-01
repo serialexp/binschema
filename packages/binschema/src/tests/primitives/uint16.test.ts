@@ -28,21 +28,25 @@ export const uint16BigEndianTestSuite = defineTestSuite({
     {
       description: "Zero value",
       value: { value: 0 },
+      decoded_value: { value: 0 },
       bytes: [0x00, 0x00],
     },
     {
       description: "Value 0x0001 (LSB set)",
       value: { value: 0x0001 },
+      decoded_value: { value: 0x0001 },
       bytes: [0x00, 0x01],
     },
     {
       description: "Value 0x0100 (byte boundary)",
       value: { value: 0x0100 },
+      decoded_value: { value: 0x0100 },
       bytes: [0x01, 0x00],
     },
     {
       description: "Value 0x1234",
       value: { value: 0x1234 },
+      decoded_value: { value: 0x1234 },
       bytes: [0x12, 0x34],
       bits: [
         0,0,0,1,0,0,1,0, // 0x12
@@ -52,6 +56,7 @@ export const uint16BigEndianTestSuite = defineTestSuite({
     {
       description: "Maximum value (65535)",
       value: { value: 0xFFFF },
+      decoded_value: { value: 0xFFFF },
       bytes: [0xFF, 0xFF],
     },
   ]

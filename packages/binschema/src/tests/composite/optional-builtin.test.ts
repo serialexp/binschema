@@ -39,11 +39,13 @@ export const optionalBuiltinUint64TestSuite = defineTestSuite({
     {
       description: "Not present",
       value: {},
+      decoded_value: {},
       bytes: [0x00], // presence = 0
     },
     {
       description: "Present with value 0",
       value: { maybe_id: 0n },
+      decoded_value: { maybe_id: 0n },
       bytes: [
         0x01, // presence = 1
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // value = 0
@@ -52,6 +54,7 @@ export const optionalBuiltinUint64TestSuite = defineTestSuite({
     {
       description: "Present with value 0x123456789ABCDEF0",
       value: { maybe_id: 0x123456789ABCDEF0n },
+      decoded_value: { maybe_id: 0x123456789ABCDEF0n },
       bytes: [
         0x01, // presence = 1
         0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,

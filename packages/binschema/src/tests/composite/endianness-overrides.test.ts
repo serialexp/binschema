@@ -35,6 +35,11 @@ export const mixedEndiannessTestSuite = defineTestSuite({
         version: 1,
         length: 1000,
       },
+      decoded_value: {
+        magic: 0xCAFE,
+        version: 1,
+        length: 1000,
+      },
       bytes: [
         0xCA, 0xFE,       // magic (big endian)
         0x01, 0x00,       // version (little endian!)
@@ -44,6 +49,11 @@ export const mixedEndiannessTestSuite = defineTestSuite({
     {
       description: "Demonstrates byte order difference",
       value: {
+        magic: 0x1234,
+        version: 0x1234,
+        length: 0x12345678,
+      },
+      decoded_value: {
         magic: 0x1234,
         version: 0x1234,
         length: 0x12345678,

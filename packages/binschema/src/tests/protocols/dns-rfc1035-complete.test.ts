@@ -295,6 +295,73 @@ export const multiAnswerTestSuite = defineTestSuite({
         authority: [],
         additional: []
       },
+      decoded_value: {
+        id: 0x1234,
+        flags: {
+          qr: 1, opcode: 0, aa: 0, tc: 0,
+          rd: 1, ra: 1, z: 0, rcode: 0
+        },
+        qdcount: 1,
+        ancount: 3,
+        nscount: 0,
+        arcount: 0,
+        questions: [
+          {
+            qname: [
+              { type: "Label", value: "example" },
+              { type: "Label", value: "com" }
+            ],
+            qtype: 1,
+            qclass: 1
+          }
+        ],
+        answers: [
+          {
+            name: [
+              { type: "Label", value: "example" },
+              { type: "Label", value: "com" }
+            ],
+            type: 1,
+            class: 1,
+            ttl: 300,
+            rdlength: 4,
+            rdata: {
+              type: "ARdata",
+              value: { address: 0x5DB8D822 }  // 93.184.216.34
+            }
+          },
+          {
+            name: [
+              { type: "Label", value: "example" },
+              { type: "Label", value: "com" }
+            ],
+            type: 1,
+            class: 1,
+            ttl: 300,
+            rdlength: 4,
+            rdata: {
+              type: "ARdata",
+              value: { address: 0x5DB8D823 }  // 93.184.216.35
+            }
+          },
+          {
+            name: [
+              { type: "Label", value: "example" },
+              { type: "Label", value: "com" }
+            ],
+            type: 1,
+            class: 1,
+            ttl: 300,
+            rdlength: 4,
+            rdata: {
+              type: "ARdata",
+              value: { address: 0x5DB8D824 }  // 93.184.216.36
+            }
+          }
+        ],
+        authority: [],
+        additional: []
+      },
       bytes: [
         // Header
         0x12, 0x34, // id

@@ -29,16 +29,19 @@ export const simpleStructTestSuite = defineTestSuite({
     {
       description: "Origin (0, 0)",
       value: { x: 0, y: 0 },
+      decoded_value: { x: 0, y: 0 },
       bytes: [0x00, 0x00, 0x00, 0x00],
     },
     {
       description: "Point (10, 20)",
       value: { x: 10, y: 20 },
+      decoded_value: { x: 10, y: 20 },
       bytes: [0x00, 0x0A, 0x00, 0x14],
     },
     {
       description: "Point (0x1234, 0x5678)",
       value: { x: 0x1234, y: 0x5678 },
+      decoded_value: { x: 0x1234, y: 0x5678 },
       bytes: [0x12, 0x34, 0x56, 0x78],
     },
   ]

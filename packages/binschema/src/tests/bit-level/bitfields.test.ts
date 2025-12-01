@@ -46,12 +46,28 @@ export const bitfield8TestSuite = defineTestSuite({
           reserved: 0,
         }
       },
+      decoded_value: {
+        flags: {
+          compressed: 0,
+          encrypted: 0,
+          priority: 0,
+          reserved: 0,
+        }
+      },
       bytes: [0x00],
       bits: [0,0,0,0,0,0,0,0],
     },
     {
       description: "Compressed flag set",
       value: {
+        flags: {
+          compressed: 1,
+          encrypted: 0,
+          priority: 0,
+          reserved: 0,
+        }
+      },
+      decoded_value: {
         flags: {
           compressed: 1,
           encrypted: 0,
@@ -72,6 +88,14 @@ export const bitfield8TestSuite = defineTestSuite({
           reserved: 0,
         }
       },
+      decoded_value: {
+        flags: {
+          compressed: 0,
+          encrypted: 0,
+          priority: 3, // 0b11
+          reserved: 0,
+        }
+      },
       bytes: [0x30], // 00110000
       bits: [0,0,1,1,0,0,0,0],
     },
@@ -85,12 +109,28 @@ export const bitfield8TestSuite = defineTestSuite({
           reserved: 0,
         }
       },
+      decoded_value: {
+        flags: {
+          compressed: 1,
+          encrypted: 1,
+          priority: 2, // 0b10 (MSB first: writes as [1,0])
+          reserved: 0,
+        }
+      },
       bytes: [0xE0], // 11100000
       bits: [1,1,1,0,0,0,0,0],
     },
     {
       description: "All bits set",
       value: {
+        flags: {
+          compressed: 1,
+          encrypted: 1,
+          priority: 3,
+          reserved: 15, // 0b1111
+        }
+      },
+      decoded_value: {
         flags: {
           compressed: 1,
           encrypted: 1,

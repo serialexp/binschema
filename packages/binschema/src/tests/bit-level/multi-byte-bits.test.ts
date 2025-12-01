@@ -29,36 +29,43 @@ export const twelveBitsTestSuite = defineTestSuite({
     {
       description: "Zero (0x000)",
       value: { value: 0 },
+      decoded_value: { value: 0 },
       bytes: [0x00, 0x00],
     },
     {
       description: "One (0x001)",
       value: { value: 1 },
+      decoded_value: { value: 1 },
       bytes: [0x00, 0x10], // MSB first: 0000 0000 0001 -> 00000000 0001____
     },
     {
       description: "0x0FF (255)",
       value: { value: 255 },
+      decoded_value: { value: 255 },
       bytes: [0x0F, 0xF0], // 0000 1111 1111 -> 00001111 1111____
     },
     {
       description: "0x100 (256)",
       value: { value: 256 },
+      decoded_value: { value: 256 },
       bytes: [0x10, 0x00], // 0001 0000 0000 -> 00010000 0000____
     },
     {
       description: "0x7FF (2047)",
       value: { value: 2047 },
+      decoded_value: { value: 2047 },
       bytes: [0x7F, 0xF0], // 0111 1111 1111
     },
     {
       description: "0x800 (2048)",
       value: { value: 2048 },
+      decoded_value: { value: 2048 },
       bytes: [0x80, 0x00], // 1000 0000 0000
     },
     {
       description: "Maximum (0xFFF = 4095)",
       value: { value: 4095 },
+      decoded_value: { value: 4095 },
       bytes: [0xFF, 0xF0], // 1111 1111 1111 -> 11111111 1111____
     },
   ]
