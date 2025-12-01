@@ -35,6 +35,7 @@ import {
 } from "./typescript/array-support.js";
 import { generateContextInterface, schemaRequiresContext } from "./typescript/context-analysis.js";
 import { generateNestedTypeContextExtension } from "./typescript/context-extension.js";
+import { generateInterfaces, getFieldTypeScriptType as getFieldTypeScriptTypeFromInterface } from "./typescript/interface-generation.js";
 
 /**
  * TypeScript Code Generator
@@ -129,8 +130,8 @@ function generateTypeCode(
     return generateTypeAliasCode(typeName, typeDef, schema, globalEndianness, globalBitOrder);
   }
 
-  // Composite type - generate interface, encoder, and decoder
-  const interfaceCode = generateInterface(typeName, typeDef, schema);
+  // Composite type - generate interfaces (Input/Output), encoder, and decoder
+  const interfaceCode = generateInterfaces(typeName, typeDef, schema);
   const encoderCode = generateEncoder(typeName, typeDef, schema, globalEndianness, globalBitOrder);
   const decoderCode = generateDecoder(typeName, typeDef, schema, globalEndianness, globalBitOrder, addTraceLogs);
 
@@ -494,7 +495,7 @@ function generateTypeAliasEncoder(
   // Add context parameter if schema uses context threading
   const hasContext = schemaRequiresContext(schema);
   const contextParam = hasContext ? ', context: EncodingContext = EMPTY_CONTEXT' : '';
-  code += `  encode(value: ${typeName}${contextParam}): Uint8Array {\n`;
+  code += `  encode(value: ${typeName}Input${contextParam}): Uint8Array {\n`;
   code += `    // Reset compression dictionary for each encode\n`;
   code += `    this.compressionDict.clear();\n\n`;
 
@@ -530,7 +531,7 @@ function generateTypeAliasDecoder(
   code += `    const reader = createReader(input);\n`;
   code += `    super(reader, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
-  code += `  decode(): ${typeName} {\n`;
+  code += `  decode(): ${typeName}Output {\n`;
 
   // For simple types, decode directly and return
   // For complex types (arrays, etc), use existing decoding logic
@@ -849,7 +850,7 @@ function generateEncoder(
   // Add context parameter if schema uses context threading
   const hasContext = schemaRequiresContext(schema);
   const contextParam = hasContext ? ', context: EncodingContext = EMPTY_CONTEXT' : '';
-  code += `  encode(value: ${typeName}${contextParam}): Uint8Array {\n`;
+  code += `  encode(value: ${typeName}Input${contextParam}): Uint8Array {\n`;
   code += `    // Reset compression dictionary for each encode\n`;
   code += `    this.compressionDict.clear();\n\n`;
 
@@ -1650,7 +1651,7 @@ function generateDecoder(
   code += `    const reader = createReader(input);\n`;
   code += `    super(reader, "${globalBitOrder}");\n`;
   code += `  }\n\n`;
-  code += `  decode(): ${typeName} {\n`;
+  code += `  decode(): ${typeName}Output {\n`;
   if (addTraceLogs) {
     code += `    console.log('[TRACE] Decoding ${typeName}');\n`;
   }

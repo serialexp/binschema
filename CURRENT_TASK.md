@@ -1,4 +1,8 @@
-# Current Task: Split TypeScript Interfaces into Input/Output Types
+# Current Task: COMPLETED - Split TypeScript Interfaces into Input/Output Types
+
+**Status**: ✅ Completed on 2025-12-01
+**Tests**: All 810 tests passing
+**Implementation**: Separate Input/Output interfaces successfully generated
 
 ## Context
 
@@ -174,11 +178,40 @@ Supporting:
 - Current decoder already returns const fields in output
 - HTML documentation already shows correct input (omits const/computed)
 
-## Notes
+## Implementation Summary
 
-This change makes the TypeScript type system **accurately reflect runtime behavior**. Users will no longer see misleading required fields that are actually ignored.
+**What was done:**
 
-The split also provides better documentation - Input types show "what you need to provide", Output types show "what you get back".
+1. **Created new module**: `packages/binschema/src/generators/typescript/interface-generation.ts`
+   - Extracted and enhanced interface generation logic
+   - Clean separation of concerns (keeps main generator focused)
+   - ~240 lines of focused interface generation code
+
+2. **Generated separate interfaces**:
+   - `{TypeName}Input` - Omits const and computed fields, used by encoders
+   - `{TypeName}Output` - Includes all fields, returned by decoders
+   - `type {TypeName} = {TypeName}Output` - Backward compatibility
+
+3. **Recursive type handling**:
+   - Input interfaces reference nested `{NestedType}Input`
+   - Output interfaces reference nested `{NestedType}Output`
+   - Generic types (e.g., `Optional<T>`) expand correctly
+
+4. **Updated signatures**:
+   - Encoders: `encode(value: {TypeName}Input): Uint8Array`
+   - Decoders: `decode(): {TypeName}Output`
+
+5. **Test results**: All 810 tests passing ✅
+
+**Files modified:**
+- Created: `packages/binschema/src/generators/typescript/interface-generation.ts`
+- Modified: `packages/binschema/src/generators/typescript.ts` (imports and calls)
+
+**Benefits:**
+- TypeScript type system now accurately reflects runtime behavior
+- Users no longer see misleading required fields that are ignored
+- Better documentation - Input types show "what you provide", Output types show "what you get"
+- Modular code structure - interface generation is now separate and maintainable
 
 ---
 
