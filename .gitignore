@@ -16,3 +16,6 @@ kerberos-rfc*.txt
 # Duplicate generated files in wrong locations
 /type-reference.html
 /packages/binschema/type-reference.html
+
+# Rust build artifacts
+rust/target/
