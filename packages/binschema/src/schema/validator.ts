@@ -1602,7 +1602,10 @@ function validateElementType(
 /**
  * Extract the base type from a type reference (e.g., "Point" from "Optional<Point>")
  */
-function extractTypeReference(typeRef: string): string {
+function extractTypeReference(typeRef: string | undefined): string {
+  if (!typeRef) {
+    throw new Error("extractTypeReference called with undefined typeRef");
+  }
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
   if (genericMatch) {
     return `${genericMatch[1]}<T>`;

@@ -10,6 +10,27 @@ function isFieldConditional(field: Field): boolean {
 }
 
 /**
+ * Check if instance type is an inline discriminated union
+ */
+function isInlineDiscriminatedUnion(instanceType: any): instanceType is { discriminator: any; variants: any[] } {
+  return typeof instanceType === 'object' && instanceType !== null && 'discriminator' in instanceType && 'variants' in instanceType;
+}
+
+/**
+ * Generate TypeScript union type for inline discriminated union in instances
+ * Produces wrapped format: { type: 'TypeA'; value: TypeAOutput } | { type: 'TypeB'; value: TypeBOutput }
+ */
+function generateInlineDiscriminatedUnionType(unionDef: { discriminator: any; variants: any[] }, schema: BinarySchema, useInputTypes: boolean): string {
+  const variants: string[] = [];
+  for (const variant of unionDef.variants) {
+    const suffix = useInputTypes ? "Input" : "Output";
+    const variantType = schema.types[variant.type] ? `${variant.type}${suffix}` : variant.type;
+    variants.push(`{ type: '${variant.type}'; value: ${variantType} }`);
+  }
+  return variants.join(" | ");
+}
+
+/**
  * Interface Generation Module
  *
  * Generates TypeScript interfaces for binary schema types.
@@ -104,7 +125,11 @@ export function getFieldTypeScriptType(
 /**
  * Resolve type reference (handles generics like Optional<T>)
  */
-function resolveTypeReference(typeRef: string, schema: BinarySchema, useInputTypes: boolean): string {
+function resolveTypeReference(typeRef: string | undefined, schema: BinarySchema, useInputTypes: boolean): string {
+  // Handle undefined/null type references
+  if (!typeRef) {
+    throw new Error("resolveTypeReference called with undefined typeRef");
+  }
   // Check for generic syntax: Optional<T>
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
   if (genericMatch) {
@@ -229,7 +254,10 @@ export function generateOutputInterface(typeName: string, typeDef: TypeDef, sche
   // Add instance fields (position-based lazy fields)
   if (typeDefAny.instances && Array.isArray(typeDefAny.instances)) {
     for (const instance of typeDefAny.instances) {
-      const instanceType = resolveTypeReference(instance.type, schema, false);
+      // Handle inline discriminated unions vs simple type references
+      const instanceType = isInlineDiscriminatedUnion(instance.type)
+        ? generateInlineDiscriminatedUnionType(instance.type, schema, false)
+        : resolveTypeReference(instance.type, schema, false);
 
       // Add JSDoc for instance field
       const instanceDoc: any = {

@@ -719,7 +719,11 @@ function isInlineDiscriminatedUnion(instanceType: any): instanceType is { discri
 /**
  * Resolve type reference (handles generics like Optional<T>)
  */
-function resolveTypeReference(typeRef: string, schema: BinarySchema): string {
+function resolveTypeReference(typeRef: string | undefined, schema: BinarySchema): string {
+  // Handle undefined/null type references
+  if (!typeRef) {
+    throw new Error("resolveTypeReference called with undefined typeRef");
+  }
   // Check for generic syntax: Optional<T>
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
   if (genericMatch) {
@@ -1521,7 +1525,7 @@ function generateEncodeOptional(
  * Generate encoding for type reference
  */
 function generateEncodeTypeReference(
-  typeRef: string,
+  typeRef: string | undefined,
   schema: BinarySchema,
   globalEndianness: Endianness,
   valuePath: string,
@@ -1529,6 +1533,10 @@ function generateEncodeTypeReference(
   contextVarName?: string,
   baseContextVar?: string
 ): string {
+  // Handle undefined/null type references
+  if (!typeRef) {
+    throw new Error(`generateEncodeTypeReference called with undefined typeRef for ${valuePath}`);
+  }
   // Check if this is a generic type instantiation (e.g., Optional<uint64>)
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
   if (genericMatch) {
@@ -2247,13 +2255,18 @@ function generateDecodeValueField(
  * Generate decoding for type reference
  */
 function generateDecodeTypeReference(
-  typeRef: string,
+  typeRef: string | undefined,
   schema: BinarySchema,
   globalEndianness: Endianness,
   fieldName: string,
   indent: string
 ): string {
   const target = getTargetPath(fieldName);
+
+  // Handle undefined/null type references
+  if (!typeRef) {
+    throw new Error(`generateDecodeTypeReference called with undefined typeRef for ${fieldName}`);
+  }
 
   // Check if this is a generic type instantiation (e.g., Optional<uint64>)
   const genericMatch = typeRef.match(/^(\w+)<(.+)>$/);
