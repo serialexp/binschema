@@ -202,7 +202,7 @@ export const multiFileZipTestSuite = defineTestSuite({
           // Local files with minimal content
           {
             type: "LocalFile",
-            signature: 0x04034b50,
+
             header: {
               version: 20,
               flags: 0,
@@ -216,7 +216,7 @@ export const multiFileZipTestSuite = defineTestSuite({
           },
           {
             type: "LocalFile",
-            signature: 0x04034b50,
+
             header: {
               version: 20,
               flags: 0,
@@ -231,7 +231,7 @@ export const multiFileZipTestSuite = defineTestSuite({
           // Central directory entries (auto-correlated with LocalFiles)
           {
             type: "CentralDirEntry",
-            signature: 0x02014b50,
+
             version_made_by: 20,
             version_needed: 20,
             flags: 0,
@@ -247,7 +247,7 @@ export const multiFileZipTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
-            signature: 0x02014b50,
+
             version_made_by: 20,
             version_needed: 20,
             flags: 0,
@@ -264,7 +264,7 @@ export const multiFileZipTestSuite = defineTestSuite({
           // End of central directory (auto-computed sizes and positions)
           {
             type: "EndOfCentralDir",
-            signature: 0x06054b50,
+
             disk_number: 0,
             disk_with_central_dir: 0,
             num_entries_this_disk: 2,
@@ -524,7 +524,7 @@ export const multiFileUtf8TestSuite = defineTestSuite({
         sections: [
           {
             type: "LocalFile",
-            signature: 0x04034b50,
+
             header: {
               version: 20,
               flags: 0,
@@ -538,7 +538,7 @@ export const multiFileUtf8TestSuite = defineTestSuite({
           },
           {
             type: "LocalFile",
-            signature: 0x04034b50,
+
             header: {
               version: 20,
               flags: 0,
@@ -552,7 +552,7 @@ export const multiFileUtf8TestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
-            signature: 0x02014b50,
+
             version_made_by: 20,
             version_needed: 20,
             flags: 0,
@@ -568,7 +568,7 @@ export const multiFileUtf8TestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
-            signature: 0x02014b50,
+
             version_made_by: 20,
             version_needed: 20,
             flags: 0,
@@ -584,7 +584,7 @@ export const multiFileUtf8TestSuite = defineTestSuite({
           },
           {
             type: "EndOfCentralDir",
-            signature: 0x06054b50,
+
             disk_number: 0,
             disk_with_central_dir: 0,
             num_entries_this_disk: 2,

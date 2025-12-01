@@ -203,7 +203,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // Local file
           {
             type: "LocalFile",
-            signature: 0x04034b50,
+
             header: {
               version: 20,
               flags: 0,
@@ -219,7 +219,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // Central directory entry
           {
             type: "CentralDirEntry",
-            signature: 0x02014b50,
+
             version_made_by: 20,
             version_needed: 20,
             flags: 0,
@@ -237,7 +237,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           // End of central directory
           {
             type: "EndOfCentralDir",
-            signature: 0x06054b50,
+
             disk_number: 0,
             disk_with_central_dir: 0,
             num_entries_this_disk: 1,
@@ -393,7 +393,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
         sections: [
           {
             type: "LocalFile",
-            signature: 0x04034b50,
+
             header: {
               version: 20,
               flags: 0,
@@ -407,7 +407,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           },
           {
             type: "CentralDirEntry",
-            signature: 0x02014b50,
+
             version_made_by: 20,
             version_needed: 20,
             flags: 0,
@@ -423,7 +423,7 @@ export const minimalZipSingleFileTestSuite = defineTestSuite({
           },
           {
             type: "EndOfCentralDir",
-            signature: 0x06054b50,
+
             disk_number: 0,
             disk_with_central_dir: 0,
             num_entries_this_disk: 1,
