@@ -115,10 +115,16 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
             .map(|cap| cap[1].to_string())
     );
 
-    // Also collect type names referenced in enum variants (they might be defined later or in the same enum)
+    // Collect enum variant names (first capture group) - these should NOT be prefixed in ::Variant( patterns
     // Pattern: EnumVariant(TypeName) or EnumVariant(TypeName,
     let re_variant_types = regex::Regex::new(r"\s+([A-Z][a-zA-Z0-9_]*)\(([A-Z][a-zA-Z0-9_]*)[\),]").unwrap();
+    let mut variant_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for cap in re_variant_types.captures_iter(&code) {
+        // Collect variant name (first group) - don't replace in ::VariantName( patterns
+        if let Some(variant_match) = cap.get(1) {
+            variant_names.insert(variant_match.as_str().to_string());
+        }
+        // Collect type name (second group) - add to types to be prefixed
         if let Some(type_match) = cap.get(2) {
             type_names.push(type_match.as_str().to_string());
         }
@@ -181,8 +187,11 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
 
         // 6. Qualified enum variants in match/construction: `SomeEnum::TypeName(`
         // This handles patterns like `ChoiceAB::TypeA(` in match arms
-        let re_qualified = regex::Regex::new(&format!(r"::{}([\(\,\)])", regex::escape(type_name))).unwrap();
-        result = re_qualified.replace_all(&result, format!("::{}{}", prefixed, "$1")).to_string();
+        // IMPORTANT: Only replace if TypeName is NOT an enum variant name (variants should not be prefixed)
+        if !variant_names.contains(type_name) {
+            let re_qualified = regex::Regex::new(&format!(r"::{}([\(\,\)])", regex::escape(type_name))).unwrap();
+            result = re_qualified.replace_all(&result, format!("::{}{}", prefixed, "$1")).to_string();
+        }
 
         // 7. Return type: `-> Foo`
         result = result.replace(
