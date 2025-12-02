@@ -19,3 +19,6 @@ kerberos-rfc*.txt
 
 # Rust build artifacts
 rust/target/
+rust/debug-test/
+rust/rust/tmp-*/
+rust/tmp-*/

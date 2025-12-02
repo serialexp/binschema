@@ -423,8 +423,9 @@ make clean
 - `src/schema/validator.ts` - Schema validation
 
 **Code Generation:**
-- `src/generators/typescript.ts` - TypeScript code generator
+- `src/generators/typescript.ts` - TypeScript code generator (reference implementation)
 - `src/generators/go.ts` - Go code generator
+- `src/generators/rust.ts` - Rust code generator
 - `src/generators/html.ts` - HTML documentation generator
 - `go/codegen/generator.go` - Go code generator implementation
 
@@ -472,6 +473,29 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
    - Decode functions (bytes → value)
    - Bitstream handling for bit-level fields
 
+## Code Generator Development
+
+### Reference Implementation Priority
+
+**IMPORTANT:** The TypeScript generator (`src/generators/typescript.ts`) is the **reference implementation** and receives all new features first. When implementing features in Go or Rust generators:
+
+1. **Always refer to the TypeScript generator** when unsure how to implement a feature
+2. The TypeScript generator has the most complete implementation and handles all edge cases
+3. Look for similar patterns in `typescript.ts` before implementing in other languages
+4. TypeScript generator patterns are proven to work - use them as a template
+
+### Generator Feature Parity
+
+**Implementation order:**
+1. TypeScript generator (reference) - gets features first
+2. Go generator - follows TypeScript patterns
+3. Rust generator - follows TypeScript/Go patterns
+
+**When adding a feature to Go/Rust:**
+- Check `src/generators/typescript.ts` for the canonical implementation
+- Follow the same logic flow and edge case handling
+- Adapt TypeScript patterns to the target language idioms
+
 ## Common Patterns
 
 ### Adding a New Test
@@ -485,10 +509,11 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
 ### Adding a New Feature
 
 1. Add test cases first (TDD approach)
-2. Implement in TypeScript generator and runtime
-3. Update Go generator and runtime to match
-4. Verify both implementations pass the same JSON test cases
-5. Update documentation if needed
+2. Implement in TypeScript generator and runtime (reference implementation)
+3. Update Go generator and runtime to match (refer to TypeScript implementation)
+4. Update Rust generator if applicable (refer to TypeScript/Go implementations)
+5. Verify all implementations pass the same JSON test cases
+6. Update documentation if needed
 
 ### Adding a New Generator
 

@@ -61,17 +61,21 @@ export function generateRust(
 
   // Generate all types in the schema
   for (const [name, typeDef] of Object.entries(schema.types)) {
+    // Convert type name to Rust PascalCase convention
+    const rustTypeName = toRustTypeName(name);
+
     // Check if this is a composite type (has sequence) or type alias
+    // IMPORTANT: Check for "variants" before "type" because discriminated unions have both
     if ("sequence" in typeDef) {
       // Composite type with fields
-      lines.push(...generateStruct(name, typeDef.sequence));
-      lines.push(...generateImpl(name, typeDef.sequence, defaultEndianness, defaultBitOrder));
+      lines.push(...generateStruct(rustTypeName, typeDef.sequence));
+      lines.push(...generateImpl(rustTypeName, typeDef.sequence, defaultEndianness, defaultBitOrder));
+    } else if ("variants" in typeDef) {
+      // Discriminated union type - must check before "type" since it has both
+      lines.push(...generateDiscriminatedUnion(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ("type" in typeDef) {
       // Type alias - generate wrapper struct
-      lines.push(...generateTypeAlias(name, typeDef as any, defaultEndianness, defaultBitOrder));
-    } else if ("variants" in typeDef) {
-      // Discriminated union type alias
-      lines.push(...generateDiscriminatedUnion(name, typeDef as any, defaultEndianness, defaultBitOrder));
+      lines.push(...generateTypeAlias(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder));
     } else {
       // Unknown type definition
       throw new Error(`Unknown type definition for ${name}: ${JSON.stringify(typeDef)}`);
@@ -1397,6 +1401,15 @@ function toRustFieldName(name: string | undefined): string {
   if (!name) {
     return "_unnamed";
   }
+
+  // Handle _root references (e.g., "_root.end_of_central_dir.total_entries")
+  if (name.startsWith('_root.')) {
+    // For now, Rust generator doesn't support context/root references
+    // This is a complex feature that requires passing context through decoders
+    throw new Error(`Rust generator does not yet support _root references: ${name}. ` +
+      `This requires context threading which is not implemented.`);
+  }
+
   // Already snake_case in schema, just ensure valid Rust identifier
   // Handle camelCase to snake_case conversion if needed
   let result = name

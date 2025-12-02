@@ -100,20 +100,49 @@ fn generate_rust_code(schema_json: &str, type_name: &str) -> Result<String, Box<
 fn prefix_type_names(code: &str, prefix: &str) -> String {
     let mut result = code.to_string();
 
-    // Find all struct definitions
+    // Find all struct and enum definitions
     let re_struct = regex::Regex::new(r"pub struct ([A-Z][a-zA-Z0-9_]*)").unwrap();
-    let type_names: Vec<String> = re_struct
+    let re_enum = regex::Regex::new(r"pub enum ([A-Z][a-zA-Z0-9_]*)").unwrap();
+
+    let mut type_names: Vec<String> = re_struct
         .captures_iter(&code)
         .map(|cap| cap[1].to_string())
         .collect();
 
+    type_names.extend(
+        re_enum
+            .captures_iter(&code)
+            .map(|cap| cap[1].to_string())
+    );
+
+    // Also collect type names referenced in enum variants (they might be defined later or in the same enum)
+    // Pattern: EnumVariant(TypeName) or EnumVariant(TypeName,
+    let re_variant_types = regex::Regex::new(r"\s+([A-Z][a-zA-Z0-9_]*)\(([A-Z][a-zA-Z0-9_]*)[\),]").unwrap();
+    for cap in re_variant_types.captures_iter(&code) {
+        if let Some(type_match) = cap.get(2) {
+            type_names.push(type_match.as_str().to_string());
+        }
+    }
+
+    // Remove duplicates
+    type_names.sort();
+    type_names.dedup();
+
+    // Sort by length (longest first) to avoid substring replacement issues
+    // E.g., replace "ChoiceTypeATypeB" before "TypeB" to avoid partial matches
+    type_names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+
     for type_name in &type_names {
         let prefixed = format!("{}_{}", prefix, type_name);
 
-        // Replace struct definition
+        // Replace struct/enum definition
         result = result.replace(
             &format!("pub struct {}", type_name),
             &format!("pub struct {}", prefixed),
+        );
+        result = result.replace(
+            &format!("pub enum {}", type_name),
+            &format!("pub enum {}", prefixed),
         );
 
         // Replace impl block
@@ -123,40 +152,58 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
         );
 
         // Replace type references in various contexts:
-        // 1. Field types ending with comma: `: Foo,`
+        // 1. Enum variant with tuple: `Variant(TypeName)` or `Variant(TypeName,`
+        let re_tuple_variant = regex::Regex::new(&format!(r"\b([A-Z][a-zA-Z0-9_]*)\({}([,\)])", regex::escape(type_name))).unwrap();
+        result = re_tuple_variant.replace_all(&result, format!("$1({}$2", prefixed)).to_string();
+
+        // 2. Field types ending with comma: `: Foo,`
         result = result.replace(
             &format!(": {},", type_name),
             &format!(": {},", prefixed),
         );
 
-        // 2. Field types ending with space: `: Foo `
+        // 3. Field types ending with space: `: Foo `
         result = result.replace(
             &format!(": {} ", type_name),
             &format!(": {} ", prefixed),
         );
 
-        // 3. Generic parameters: `Vec<Foo>`
+        // 4. Generic parameters: `Vec<Foo>`
         result = result.replace(
             &format!("<{}>", type_name),
             &format!("<{}>", prefixed),
         );
 
-        // 4. Method calls: `Foo::decode`
-        result = result.replace(
-            &format!("{}::", type_name),
-            &format!("{}::", prefixed),
-        );
+        // 5. Method calls: `Foo::decode` or `EnumName::Variant`
+        // Use word boundary to avoid matching TypeB:: inside ChoiceTypeATypeB::
+        let re_method_call = regex::Regex::new(&format!(r"\b{}::", regex::escape(type_name))).unwrap();
+        result = re_method_call.replace_all(&result, format!("{}::", prefixed)).to_string();
 
-        // 5. Return type: `-> Foo`
+        // 6. Qualified enum variants in match/construction: `SomeEnum::TypeName(`
+        // This handles patterns like `ChoiceAB::TypeA(` in match arms
+        let re_qualified = regex::Regex::new(&format!(r"::{}([\(\,\)])", regex::escape(type_name))).unwrap();
+        result = re_qualified.replace_all(&result, format!("::{}{}", prefixed, "$1")).to_string();
+
+        // 7. Return type: `-> Foo`
         result = result.replace(
             &format!("-> {}", type_name),
             &format!("-> {}", prefixed),
         );
 
-        // 6. Let binding types: `let x: Foo =`
+        // 8. Let binding types: `let x: Foo =`
         result = result.replace(
             &format!(": {} =", type_name),
             &format!(": {} =", prefixed),
+        );
+
+        // 9. Result/Option wrapped types: `Result<Foo>` or `Option<Foo>`
+        result = result.replace(
+            &format!("Result<{}>", type_name),
+            &format!("Result<{}>", prefixed),
+        );
+        result = result.replace(
+            &format!("Option<{}>", type_name),
+            &format!("Option<{}>", prefixed),
         );
     }
 
