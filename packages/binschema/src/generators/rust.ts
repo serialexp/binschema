@@ -93,8 +93,51 @@ export function generateRust(
  */
 function generateTypeAlias(name: string, typeDef: any, defaultEndianness: string, defaultBitOrder: string): string[] {
   const lines: string[] = [];
+  const bitOrder = mapBitOrder(defaultBitOrder);
 
-  // Create a wrapper struct with a single field "value"
+  // Special handling for string type aliases - don't create wrapper struct
+  // Just generate encode/decode that handles the string with its specific options
+  if (typeDef.type === "string") {
+    // Generate a newtype wrapper for string
+    lines.push(`#[derive(Debug, Clone, PartialEq)]`);
+    lines.push(`pub struct ${name}(pub std::string::String);`);
+    lines.push(``);
+    lines.push(`impl ${name} {`);
+
+    // Generate encode method
+    lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
+    lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
+
+    // Create a temporary field to use generateEncodeString
+    const stringField: Field = {
+      name: "0",  // For tuple struct, access is self.0
+      type: "string",
+      ...typeDef
+    };
+    lines.push(...generateEncodeString(stringField, "self.0", defaultEndianness, "        "));
+    lines.push(`        Ok(encoder.finish())`);
+    lines.push(`    }`);
+    lines.push(``);
+
+    // Generate decode method
+    lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
+    lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+    lines.push(`        Self::decode_with_decoder(&mut decoder)`);
+    lines.push(`    }`);
+    lines.push(``);
+
+    // Generate decode_with_decoder method
+    lines.push(`    pub fn decode_with_decoder(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
+    lines.push(...generateDecodeString(stringField, "value", defaultEndianness, "        "));
+    lines.push(`        Ok(Self(value))`);
+    lines.push(`    }`);
+    lines.push(`}`);
+    lines.push(``);
+
+    return lines;
+  }
+
+  // For other type aliases, create a wrapper struct with a single field "value"
   const field: Field = {
     name: "value",
     type: typeDef.type,
@@ -130,7 +173,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
   lines.push(`impl ${name} {`);
 
   // Generate encode method
-  lines.push(`    pub fn encode(&self) -> Vec<u8> {`);
+  lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
   lines.push(`        match self {`);
   for (const variant of variants) {
     const variantTypeName = toRustTypeName(variant.type);
@@ -298,7 +341,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
   lines.push(`impl ${enumName} {`);
 
   // Generate encode method
-  lines.push(`    pub fn encode(&self) -> Vec<u8> {`);
+  lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
   lines.push(`        match self {`);
   for (const typeName of variantTypes) {
     const rustTypeName = toRustTypeName(typeName);
@@ -396,7 +439,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   const lines: string[] = [];
   const bitOrder = mapBitOrder(defaultBitOrder);
 
-  lines.push(`    pub fn encode(&self) -> Vec<u8> {`);
+  lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
   lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
 
   // Generate encoding logic for each field
@@ -409,7 +452,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
     lines.push(...generateEncodeField(field, defaultEndianness, "        "));
   }
 
-  lines.push(`        encoder.finish()`);
+  lines.push(`        Ok(encoder.finish())`);
   lines.push(`    }`);
   lines.push(``);
 
@@ -523,7 +566,7 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
     case "varlength": {
       // Variable-length integer encoding (VLQ, LEB128, DER, etc.)
       const encoding = (field as any).encoding || "vlq";
-      lines.push(`${indent}encoder.write_varlength(${fieldName}, "${encoding}");`);
+      lines.push(`${indent}encoder.write_varlength(${fieldName}, "${encoding}")?;`);
       break;
     }
 
@@ -722,7 +765,7 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
     }
     default:
       // Type reference - nested struct
-      lines.push(`${indent}let bytes = ${itemVar}.encode();`);
+      lines.push(`${indent}let bytes = ${itemVar}.encode()?;`);
       lines.push(`${indent}for b in bytes {`);
       lines.push(`${indent}    encoder.write_uint8(b);`);
       lines.push(`${indent}}`);
@@ -738,7 +781,7 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
 function generateEncodeNestedStruct(field: Field, fieldName: string, indent: string): string[] {
   const lines: string[] = [];
 
-  lines.push(`${indent}let bytes = ${fieldName}.encode();`);
+  lines.push(`${indent}let bytes = ${fieldName}.encode()?;`);
   lines.push(`${indent}for b in bytes {`);
   lines.push(`${indent}    encoder.write_uint8(b);`);
   lines.push(`${indent}}`);
@@ -754,40 +797,41 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
   const valueType = field.value_type;
   const rustEndianness = mapEndianness(endianness);
 
-  lines.push(`${indent}if let Some(v) = ${fieldName} {`);
+  lines.push(`${indent}if let Some(ref v) = ${fieldName} {`);
   lines.push(`${indent}    encoder.write_uint8(1);`);
 
   // Encode the value based on its type
+  // Note: v is a reference due to `if let Some(ref v)`, so primitives need *v to dereference
   switch (valueType) {
     case "uint8":
-      lines.push(`${indent}    encoder.write_uint8(v);`);
+      lines.push(`${indent}    encoder.write_uint8(*v);`);
       break;
     case "uint16":
-      lines.push(`${indent}    encoder.write_uint16(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_uint16(*v, Endianness::${rustEndianness});`);
       break;
     case "uint32":
-      lines.push(`${indent}    encoder.write_uint32(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_uint32(*v, Endianness::${rustEndianness});`);
       break;
     case "uint64":
-      lines.push(`${indent}    encoder.write_uint64(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_uint64(*v, Endianness::${rustEndianness});`);
       break;
     case "int8":
-      lines.push(`${indent}    encoder.write_int8(v);`);
+      lines.push(`${indent}    encoder.write_int8(*v);`);
       break;
     case "int16":
-      lines.push(`${indent}    encoder.write_int16(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_int16(*v, Endianness::${rustEndianness});`);
       break;
     case "int32":
-      lines.push(`${indent}    encoder.write_int32(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_int32(*v, Endianness::${rustEndianness});`);
       break;
     case "int64":
-      lines.push(`${indent}    encoder.write_int64(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_int64(*v, Endianness::${rustEndianness});`);
       break;
     case "float32":
-      lines.push(`${indent}    encoder.write_float32(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_float32(*v, Endianness::${rustEndianness});`);
       break;
     case "float64":
-      lines.push(`${indent}    encoder.write_float64(v, Endianness::${rustEndianness});`);
+      lines.push(`${indent}    encoder.write_float64(*v, Endianness::${rustEndianness});`);
       break;
     case "string":
       // For strings in optional, we need to know the string kind
@@ -799,7 +843,7 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
       break;
     default:
       // Type reference - nested struct
-      lines.push(`${indent}    let bytes = v.encode();`);
+      lines.push(`${indent}    let bytes = v.encode()?;`);
       lines.push(`${indent}    for b in bytes {`);
       lines.push(`${indent}        encoder.write_uint8(b);`);
       lines.push(`${indent}    }`);
@@ -975,7 +1019,7 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
       lines.push(`${indent}        if b == 0 { break; }`);
       lines.push(`${indent}        bytes.push(b);`);
       lines.push(`${indent}    }`);
-      lines.push(`${indent}    Some(String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?)`);
+      lines.push(`${indent}    Some(std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?)`);
       break;
     default:
       // Type reference - nested struct
@@ -1022,7 +1066,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       lines.push(`${indent}for _ in 0..length {`);
       lines.push(`${indent}    bytes.push(decoder.read_uint8()?);`);
       lines.push(`${indent}}`);
-      lines.push(`${indent}let ${varName} = String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+      lines.push(`${indent}let ${varName} = std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
       break;
     }
 
@@ -1035,7 +1079,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       lines.push(`${indent}    }`);
       lines.push(`${indent}    bytes.push(b);`);
       lines.push(`${indent}}`);
-      lines.push(`${indent}let ${varName} = String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+      lines.push(`${indent}let ${varName} = std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
       break;
 
     case "fixed": {
@@ -1047,7 +1091,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       lines.push(`${indent}        bytes.push(b);`);
       lines.push(`${indent}    }`);
       lines.push(`${indent}}`);
-      lines.push(`${indent}let ${varName} = String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+      lines.push(`${indent}let ${varName} = std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
       break;
     }
 
@@ -1059,7 +1103,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       lines.push(`${indent}for _ in 0..${lengthFieldRust} {`);
       lines.push(`${indent}    bytes.push(decoder.read_uint8()?);`);
       lines.push(`${indent}}`);
-      lines.push(`${indent}let ${varName} = String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+      lines.push(`${indent}let ${varName} = std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
       break;
     }
 
@@ -1131,9 +1175,11 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
       case "uint64":
         lines.push(`${indent}let byte_length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
         break;
-      case "varlength":
-        lines.push(`${indent}let byte_length = decoder.read_varlength()? as usize;`);
+      case "varlength": {
+        const lengthEncoding = field.length_encoding || "der";
+        lines.push(`${indent}let byte_length = decoder.read_varlength("${lengthEncoding}")? as usize;`);
         break;
+      }
     }
     lines.push(`${indent}let start_pos = decoder.position();`);
     lines.push(`${indent}let mut ${varName}: Vec<${itemType}> = Vec::new();`);
@@ -1306,7 +1352,7 @@ function mapFieldToRustType(field: Field): string {
       return "u64";
     }
     case "string":
-      return "String";
+      return "std::string::String";
     case "bit": {
       const size = (field as any).size || 1;
       if (size <= 8) return "u8";
@@ -1379,7 +1425,7 @@ function mapPrimitiveToRustType(typeName: string): string {
     case "int64": return "i64";
     case "float32": return "f32";
     case "float64": return "f64";
-    case "string": return "String";
+    case "string": return "std::string::String";
     default: return toRustTypeName(typeName);
   }
 }

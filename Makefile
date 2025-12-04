@@ -1,4 +1,4 @@
-.PHONY: test test-ts test-go test-go-filter clean docker-build docker-build-push docker-run docker-stop website
+.PHONY: test test-ts test-go test-go-filter test-rust test-rust-debug clean docker-build docker-build-push docker-run docker-stop website
 
 # Run all tests (TypeScript and Go)
 test: test-ts test-go
@@ -14,6 +14,14 @@ test-go:
 # Run Go tests with filter (usage: make test-go-filter FILTER=primitives)
 test-go-filter:
 	cd go && TEST_FILTER=$(FILTER) go test -v ./test
+
+# Run Rust batch compilation tests
+test-rust:
+	cd rust && rm -rf tmp-rust && RUST_TESTS=1 cargo test test_compile_and_run_all -- --nocapture
+
+# Run Rust tests with debug output (saves generated code to rust/tmp-rust/)
+test-rust-debug:
+	cd rust && rm -rf tmp-rust && DEBUG_GENERATED=tmp-rust RUST_TESTS=1 cargo test test_compile_and_run_all -- --nocapture
 
 # Build website
 website:
@@ -48,6 +56,7 @@ docker-stop:
 clean:
 	rm -rf .generated/
 	rm -rf tmp-go/
+	rm -rf rust/tmp-rust/
 	rm -f test_output.txt
 	rm -rf go/test/generated/
 	rm -rf dist/

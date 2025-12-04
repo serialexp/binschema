@@ -98,7 +98,13 @@ fn generate_rust_code(schema_json: &str, type_name: &str) -> Result<String, Box<
 
 /// Prefix all type names in generated code to avoid conflicts
 fn prefix_type_names(code: &str, prefix: &str) -> String {
+    // First, protect Rust standard library paths from replacement
+    // by replacing them with placeholders
     let mut result = code.to_string();
+    result = result.replace("std::string::String", "__PLACEHOLDER_STD_STRING__");
+    result = result.replace("std::vec::Vec", "__PLACEHOLDER_STD_VEC__");
+    result = result.replace("std::option::Option", "__PLACEHOLDER_STD_OPTION__");
+    result = result.replace("std::result::Result", "__PLACEHOLDER_STD_RESULT__");
 
     // Find all struct and enum definitions
     let re_struct = regex::Regex::new(r"pub struct ([A-Z][a-zA-Z0-9_]*)").unwrap();
@@ -215,6 +221,12 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
             &format!("Option<{}>", prefixed),
         );
     }
+
+    // Restore the protected Rust standard library paths
+    result = result.replace("__PLACEHOLDER_STD_STRING__", "std::string::String");
+    result = result.replace("__PLACEHOLDER_STD_VEC__", "std::vec::Vec");
+    result = result.replace("__PLACEHOLDER_STD_OPTION__", "std::option::Option");
+    result = result.replace("__PLACEHOLDER_STD_RESULT__", "std::result::Result");
 
     result
 }

@@ -146,6 +146,115 @@ impl BitStreamEncoder {
         self.write_uint64(value.to_bits(), endianness);
     }
 
+    /// Write variable-length integer with specified encoding
+    /// Supported encodings: "der", "leb128", "ebml", "vlq"
+    pub fn write_varlength(&mut self, value: u64, encoding: &str) -> Result<()> {
+        match encoding {
+            "der" => self.write_varlength_der(value),
+            "leb128" => self.write_varlength_leb128(value),
+            "ebml" => self.write_varlength_ebml(value),
+            "vlq" => self.write_varlength_vlq(value),
+            _ => Err(BinSchemaError::InvalidValue(format!("Unknown varlength encoding: {}", encoding))),
+        }
+    }
+
+    /// DER encoding: Short form (0-127) or long form (0x80+N followed by N bytes)
+    fn write_varlength_der(&mut self, value: u64) -> Result<()> {
+        if value < 128 {
+            self.write_uint8(value as u8);
+        } else {
+            // Determine number of bytes needed
+            let mut num_bytes = 0u8;
+            let mut temp = value;
+            while temp > 0 {
+                num_bytes += 1;
+                temp >>= 8;
+            }
+
+            // Write length-of-length byte
+            self.write_uint8(0x80 | num_bytes);
+
+            // Write value bytes in big-endian order
+            for i in (0..num_bytes).rev() {
+                self.write_uint8((value >> (i * 8)) as u8);
+            }
+        }
+        Ok(())
+    }
+
+    /// LEB128 encoding: 7 bits per byte, continuation bit in MSB, little-endian
+    fn write_varlength_leb128(&mut self, value: u64) -> Result<()> {
+        let mut val = value;
+        loop {
+            let mut byte = (val & 0x7F) as u8;
+            val >>= 7;
+            if val != 0 {
+                byte |= 0x80; // Set continuation bit
+            }
+            self.write_uint8(byte);
+            if val == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// EBML encoding: Leading zeros indicate width, self-synchronizing
+    fn write_varlength_ebml(&mut self, value: u64) -> Result<()> {
+        // Determine width needed (1-8 bytes)
+        // Width 1: values 0-126 (7 data bits, marker at bit 7)
+        // Width 2: values 127-16382 (14 data bits, marker at bit 14)
+        // etc.
+        let mut width = 1u8;
+        let mut max_val = (1u64 << 7) - 2; // -2 for marker bit overhead
+
+        while value > max_val && width < 8 {
+            width += 1;
+            max_val = (1u64 << (width * 7)) - 2;
+        }
+
+        if value > max_val {
+            return Err(BinSchemaError::InvalidValue(format!("EBML value {} too large for 8-byte encoding", value)));
+        }
+
+        // Set marker bit at position (width * 7)
+        let marker_bit = 1u64 << (width * 7);
+        let encoded = marker_bit | value;
+
+        // Write bytes in big-endian order
+        for i in (0..width).rev() {
+            self.write_uint8((encoded >> (i * 8)) as u8);
+        }
+        Ok(())
+    }
+
+    /// VLQ encoding (MIDI style): 7 bits per byte, continuation bit in MSB, big-endian
+    fn write_varlength_vlq(&mut self, value: u64) -> Result<()> {
+        if value > 0x0FFFFFFF {
+            return Err(BinSchemaError::InvalidValue(format!("VLQ value {} exceeds maximum (0x0FFFFFFF)", value)));
+        }
+
+        // Collect bytes in reverse order (LSB first)
+        let mut bytes = Vec::new();
+        let mut remaining = value;
+
+        // First byte (LSB) has continuation bit = 0
+        bytes.push((remaining & 0x7F) as u8);
+        remaining >>= 7;
+
+        // Subsequent bytes have continuation bit = 1
+        while remaining > 0 {
+            bytes.push(((remaining & 0x7F) | 0x80) as u8);
+            remaining >>= 7;
+        }
+
+        // Write bytes in reverse order (MSB first)
+        for byte in bytes.into_iter().rev() {
+            self.write_uint8(byte);
+        }
+        Ok(())
+    }
+
     pub fn finish(mut self) -> Vec<u8> {
         if self.bit_position > 0 {
             self.flush_byte();
@@ -290,17 +399,27 @@ impl BitStreamDecoder {
         Ok(f64::from_bits(self.read_uint64(endianness)?))
     }
 
-    /// Reads a DER-encoded variable length value
-    /// Short form: if first byte < 128, that's the value
-    /// Long form: first byte & 0x7F gives number of following bytes containing the value
-    pub fn read_varlength(&mut self) -> Result<u64> {
+    /// Reads a variable-length integer with specified encoding
+    /// Supported encodings: "der", "leb128", "ebml", "vlq"
+    pub fn read_varlength(&mut self, encoding: &str) -> Result<u64> {
+        match encoding {
+            "der" => self.read_varlength_der(),
+            "leb128" => self.read_varlength_leb128(),
+            "ebml" => self.read_varlength_ebml(),
+            "vlq" => self.read_varlength_vlq(),
+            _ => Err(BinSchemaError::InvalidValue(format!("Unknown varlength encoding: {}", encoding))),
+        }
+    }
+
+    /// DER encoding: Short form (0-127) or long form (0x80+N followed by N bytes)
+    fn read_varlength_der(&mut self) -> Result<u64> {
         let first = self.read_uint8()?;
         if first < 128 {
             Ok(first as u64)
         } else {
             let num_bytes = (first & 0x7F) as usize;
             if num_bytes > 8 {
-                return Err(BinSchemaError::InvalidValue("Variable length too large".to_string()));
+                return Err(BinSchemaError::InvalidValue("DER variable length too large".to_string()));
             }
             let mut value = 0u64;
             for _ in 0..num_bytes {
@@ -308,6 +427,80 @@ impl BitStreamDecoder {
             }
             Ok(value)
         }
+    }
+
+    /// LEB128 encoding: 7 bits per byte, continuation bit in MSB, little-endian
+    fn read_varlength_leb128(&mut self) -> Result<u64> {
+        let mut result = 0u64;
+        let mut shift = 0u32;
+
+        loop {
+            let byte = self.read_uint8()?;
+            result |= ((byte & 0x7F) as u64) << shift;
+            shift += 7;
+
+            if shift > 64 {
+                return Err(BinSchemaError::InvalidValue("LEB128 value too large".to_string()));
+            }
+
+            if (byte & 0x80) == 0 {
+                break;
+            }
+        }
+        Ok(result)
+    }
+
+    /// EBML encoding: Leading zeros indicate width, self-synchronizing
+    fn read_varlength_ebml(&mut self) -> Result<u64> {
+        let first_byte = self.read_uint8()?;
+
+        // Count leading zeros to determine width
+        let mut width = 1u8;
+        let mut mask = 0x80u8;
+
+        while (first_byte & mask) == 0 && width < 8 {
+            width += 1;
+            mask >>= 1;
+        }
+
+        if width > 8 {
+            return Err(BinSchemaError::InvalidValue("EBML VINT: no marker bit found".to_string()));
+        }
+
+        // Start with first byte, removing marker bit
+        let mut value = (first_byte & (mask - 1)) as u64;
+
+        // Read remaining bytes
+        for _ in 1..width {
+            value = (value << 8) | self.read_uint8()? as u64;
+        }
+
+        Ok(value)
+    }
+
+    /// VLQ encoding (MIDI style): 7 bits per byte, continuation bit in MSB, big-endian
+    fn read_varlength_vlq(&mut self) -> Result<u64> {
+        let mut result = 0u64;
+        let mut bytes_read = 0u8;
+
+        loop {
+            if bytes_read >= 4 {
+                return Err(BinSchemaError::InvalidValue("VLQ value too large (exceeds 4 bytes)".to_string()));
+            }
+
+            let byte = self.read_uint8()?;
+            bytes_read += 1;
+
+            // Add 7 bits of data (MSB-first, so shift existing bits left)
+            result = (result << 7) | (byte & 0x7F) as u64;
+
+            // Check continuation bit
+            if (byte & 0x80) == 0 {
+                break;
+            }
+        }
+
+        Ok(result)
     }
 
     /// Returns the current byte position in the stream
