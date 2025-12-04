@@ -763,6 +763,95 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
       lines.push(`${indent}encoder.write_bits(*${itemVar} as u64, ${bitSize});`);
       break;
     }
+    case "string": {
+      // Inline string encoding for array items
+      const kind = (field as any).kind;
+      switch (kind) {
+        case "length_prefixed": {
+          const lengthType = (field as any).length_type || "uint8";
+          switch (lengthType) {
+            case "uint8":
+              lines.push(`${indent}encoder.write_uint8(${itemVar}.len() as u8);`);
+              break;
+            case "uint16":
+              lines.push(`${indent}encoder.write_uint16(${itemVar}.len() as u16, Endianness::${rustEndianness});`);
+              break;
+            case "uint32":
+              lines.push(`${indent}encoder.write_uint32(${itemVar}.len() as u32, Endianness::${rustEndianness});`);
+              break;
+            case "uint64":
+              lines.push(`${indent}encoder.write_uint64(${itemVar}.len() as u64, Endianness::${rustEndianness});`);
+              break;
+          }
+          lines.push(`${indent}for b in ${itemVar}.as_bytes() {`);
+          lines.push(`${indent}    encoder.write_uint8(*b);`);
+          lines.push(`${indent}}`);
+          break;
+        }
+        case "null_terminated":
+          lines.push(`${indent}for b in ${itemVar}.as_bytes() {`);
+          lines.push(`${indent}    encoder.write_uint8(*b);`);
+          lines.push(`${indent}}`);
+          lines.push(`${indent}encoder.write_uint8(0);`);
+          break;
+        case "fixed": {
+          const length = (field as any).length || 0;
+          lines.push(`${indent}let bytes = ${itemVar}.as_bytes();`);
+          lines.push(`${indent}for i in 0..${length} {`);
+          lines.push(`${indent}    if i < bytes.len() {`);
+          lines.push(`${indent}        encoder.write_uint8(bytes[i]);`);
+          lines.push(`${indent}    } else {`);
+          lines.push(`${indent}        encoder.write_uint8(0);`);
+          lines.push(`${indent}    }`);
+          lines.push(`${indent}}`);
+          break;
+        }
+        default:
+          // Default to null-terminated for unknown string kinds
+          lines.push(`${indent}for b in ${itemVar}.as_bytes() {`);
+          lines.push(`${indent}    encoder.write_uint8(*b);`);
+          lines.push(`${indent}}`);
+          lines.push(`${indent}encoder.write_uint8(0);`);
+          break;
+      }
+      break;
+    }
+    case "array": {
+      // Nested array - inline encoding
+      const innerItems = (field as any).items;
+      const innerKind = (field as any).kind;
+      const innerLengthType = (field as any).length_type || "uint8";
+
+      // Write length prefix if length_prefixed
+      if (innerKind === "length_prefixed") {
+        switch (innerLengthType) {
+          case "uint8":
+            lines.push(`${indent}encoder.write_uint8(${itemVar}.len() as u8);`);
+            break;
+          case "uint16":
+            lines.push(`${indent}encoder.write_uint16(${itemVar}.len() as u16, Endianness::${rustEndianness});`);
+            break;
+          case "uint32":
+            lines.push(`${indent}encoder.write_uint32(${itemVar}.len() as u32, Endianness::${rustEndianness});`);
+            break;
+          case "uint64":
+            lines.push(`${indent}encoder.write_uint64(${itemVar}.len() as u64, Endianness::${rustEndianness});`);
+            break;
+        }
+      }
+
+      // Encode inner items
+      const innerItemField: Field = {
+        name: "",
+        type: innerItems.type,
+        ...(innerItems as any)
+      };
+      lines.push(`${indent}for inner_item in ${itemVar} {`);
+      const innerLines = generateEncodeArrayItem(innerItemField, "inner_item", endianness, `${indent}    `);
+      lines.push(...innerLines);
+      lines.push(`${indent}}`);
+      break;
+    }
     default:
       // Type reference - nested struct
       lines.push(`${indent}let bytes = ${itemVar}.encode()?;`);
@@ -1294,6 +1383,107 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
       lines.push(`${indent}let item = ${enumName}::decode_with_decoder(decoder)?;`);
       break;
     }
+    case "string": {
+      // Inline string decoding for array items
+      const kind = items.kind;
+      switch (kind) {
+        case "length_prefixed": {
+          const lengthType = items.length_type || "uint8";
+          switch (lengthType) {
+            case "uint8":
+              lines.push(`${indent}let str_len = decoder.read_uint8()? as usize;`);
+              break;
+            case "uint16":
+              lines.push(`${indent}let str_len = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
+              break;
+            case "uint32":
+              lines.push(`${indent}let str_len = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
+              break;
+            case "uint64":
+              lines.push(`${indent}let str_len = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
+              break;
+          }
+          lines.push(`${indent}let mut str_bytes = Vec::with_capacity(str_len);`);
+          lines.push(`${indent}for _ in 0..str_len {`);
+          lines.push(`${indent}    str_bytes.push(decoder.read_uint8()?);`);
+          lines.push(`${indent}}`);
+          lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+          break;
+        }
+        case "null_terminated":
+          lines.push(`${indent}let mut str_bytes = Vec::new();`);
+          lines.push(`${indent}loop {`);
+          lines.push(`${indent}    let b = decoder.read_uint8()?;`);
+          lines.push(`${indent}    if b == 0 { break; }`);
+          lines.push(`${indent}    str_bytes.push(b);`);
+          lines.push(`${indent}}`);
+          lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+          break;
+        case "fixed": {
+          const length = items.length || 0;
+          lines.push(`${indent}let mut str_bytes = Vec::new();`);
+          lines.push(`${indent}for _ in 0..${length} {`);
+          lines.push(`${indent}    let b = decoder.read_uint8()?;`);
+          lines.push(`${indent}    if b != 0 {`);
+          lines.push(`${indent}        str_bytes.push(b);`);
+          lines.push(`${indent}    }`);
+          lines.push(`${indent}}`);
+          lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+          break;
+        }
+        default:
+          // Default to null-terminated for unknown string kinds
+          lines.push(`${indent}let mut str_bytes = Vec::new();`);
+          lines.push(`${indent}loop {`);
+          lines.push(`${indent}    let b = decoder.read_uint8()?;`);
+          lines.push(`${indent}    if b == 0 { break; }`);
+          lines.push(`${indent}    str_bytes.push(b);`);
+          lines.push(`${indent}}`);
+          lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
+          break;
+      }
+      break;
+    }
+    case "array": {
+      // Nested array - inline decoding
+      const innerItems = items.items;
+      const innerKind = items.kind;
+      const innerLengthType = items.length_type || "uint8";
+
+      // Read length prefix if length_prefixed
+      if (innerKind === "length_prefixed") {
+        switch (innerLengthType) {
+          case "uint8":
+            lines.push(`${indent}let inner_len = decoder.read_uint8()? as usize;`);
+            break;
+          case "uint16":
+            lines.push(`${indent}let inner_len = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
+            break;
+          case "uint32":
+            lines.push(`${indent}let inner_len = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
+            break;
+          case "uint64":
+            lines.push(`${indent}let inner_len = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
+            break;
+        }
+      } else {
+        // For fixed arrays, use the length directly
+        const fixedLen = items.length || 0;
+        lines.push(`${indent}let inner_len = ${fixedLen};`);
+      }
+
+      // Decode inner items
+      lines.push(`${indent}let mut item = Vec::with_capacity(inner_len);`);
+      lines.push(`${indent}for _ in 0..inner_len {`);
+      const innerLines = generateDecodeArrayItem(innerItems, endianness, rustEndianness, `${indent}    `);
+      // Rename 'item' to 'inner_item' in the inner lines to avoid shadowing
+      for (const line of innerLines) {
+        lines.push(line.replace(/let item = /, 'let inner_item = '));
+      }
+      lines.push(`${indent}    item.push(inner_item);`);
+      lines.push(`${indent}}`);
+      break;
+    }
     default:
       // Type reference - nested struct
       const typeName = toRustTypeName(items.type);
@@ -1454,6 +1644,25 @@ function toRustFieldName(name: string | undefined): string {
     // This is a complex feature that requires passing context through decoders
     throw new Error(`Rust generator does not yet support _root references: ${name}. ` +
       `This requires context threading which is not implemented.`);
+  }
+
+  // Handle dotted references (e.g., "header.body_length" or "flags.count")
+  // For parent struct field references, convert to Rust field access
+  // Note: Bitfield sub-field references (e.g., "flags.count" where flags is a bitfield)
+  // will produce invalid Rust code and fail at compile time - this is a known limitation
+  if (name.includes('.')) {
+    const parts = name.split('.');
+    const rustParts = parts.map(part => {
+      let result = part
+        .replace(/([A-Z])/g, '_$1')
+        .toLowerCase()
+        .replace(/^_/, '');
+      if (RUST_KEYWORDS.has(result)) {
+        return `r#${result}`;
+      }
+      return result;
+    });
+    return rustParts.join('.');
   }
 
   // Already snake_case in schema, just ensure valid Rust identifier
