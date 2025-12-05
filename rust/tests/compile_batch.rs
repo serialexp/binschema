@@ -1,7 +1,7 @@
 // ABOUTME: Batched compilation for Rust test suites
 // ABOUTME: Compiles all test suites at once for fast execution
 
-use binschema_runtime::test_schema::{TestCase, TestSuite};
+use binschema_runtime::test_schema::{TestCase, TestSuite, Schema, TypeDef, Field};
 use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
@@ -278,46 +278,57 @@ fn main() {
             ));
 
             // Generate value construction
-            harness.push_str(&generate_value_construction(&prefixed_type, &tc.value, "test_value"));
+            harness.push_str(&generate_value_construction(&prefixed_type, &tc.value, "test_value", &suite.schema, prefix, &suite.test_type));
 
-            // Encode
-            harness.push_str("            let encoded = test_value.encode();\n");
+            // Encode (handle Result)
+            harness.push_str("            match test_value.encode() {\n");
+            harness.push_str("                Ok(encoded) => {\n");
 
             // Compare bytes
             if let Some(bytes) = &tc.bytes {
                 harness.push_str(&format!(
-                    "            let expected: Vec<u8> = vec![{}];\n",
+                    "                    let expected: Vec<u8> = vec![{}];\n",
                     bytes
                         .iter()
                         .map(|b| b.to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
-                harness.push_str("            if encoded != expected {\n");
-                harness.push_str("                result.error = Some(format!(\"encode mismatch: got {:?}, want {:?}\", encoded, expected));\n");
-                harness.push_str("                results.push(result);\n");
-                harness.push_str("            } else {\n");
+                harness.push_str("                    if encoded != expected {\n");
+                harness.push_str("                        result.error = Some(format!(\"encode mismatch: got {:?}, want {:?}\", encoded, expected));\n");
+                harness.push_str("                        results.push(result);\n");
+                harness.push_str("                    } else {\n");
 
                 // Decode
                 harness.push_str(&format!(
-                    "                match {}::decode(&encoded) {{\n",
+                    "                        match {}::decode(&encoded) {{\n",
                     prefixed_type
                 ));
-                harness.push_str("                    Ok(decoded) => {\n");
-                harness.push_str("                        if decoded == test_value {\n");
-                harness.push_str("                            result.pass = true;\n");
-                harness.push_str("                        } else {\n");
-                harness.push_str("                            result.error = Some(format!(\"decode mismatch: got {:?}, want {:?}\", decoded, test_value));\n");
+                harness.push_str("                            Ok(decoded) => {\n");
+                harness.push_str("                                if decoded == test_value {\n");
+                harness.push_str("                                    result.pass = true;\n");
+                harness.push_str("                                } else {\n");
+                harness.push_str("                                    result.error = Some(format!(\"decode mismatch: got {:?}, want {:?}\", decoded, test_value));\n");
+                harness.push_str("                                }\n");
+                harness.push_str("                                results.push(result);\n");
+                harness.push_str("                            }\n");
+                harness.push_str("                            Err(e) => {\n");
+                harness.push_str("                                result.error = Some(format!(\"decode error: {}\", e));\n");
+                harness.push_str("                                results.push(result);\n");
+                harness.push_str("                            }\n");
                 harness.push_str("                        }\n");
-                harness.push_str("                        results.push(result);\n");
                 harness.push_str("                    }\n");
-                harness.push_str("                    Err(e) => {\n");
-                harness.push_str("                        result.error = Some(format!(\"decode error: {}\", e));\n");
-                harness.push_str("                        results.push(result);\n");
-                harness.push_str("                    }\n");
-                harness.push_str("                }\n");
-                harness.push_str("            }\n");
             }
+
+            // Close Ok(encoded) arm
+            harness.push_str("                }\n");
+            // Add Err arm for encode errors
+            harness.push_str("                Err(e) => {\n");
+            harness.push_str("                    result.error = Some(format!(\"encode error: {}\", e));\n");
+            harness.push_str("                    results.push(result);\n");
+            harness.push_str("                }\n");
+            // Close match test_value.encode()
+            harness.push_str("            }\n");
 
             harness.push_str("        }\n\n");
         }
@@ -339,24 +350,411 @@ fn main() {
 }
 
 /// Generate Rust code to construct a value from JSON
-fn generate_value_construction(type_name: &str, value: &serde_json::Value, var_name: &str) -> String {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut result = format!("            let {} = {} {{\n", var_name, type_name);
-            for (key, val) in map {
-                let field_name = to_snake_case(key);
-                let field_value = format_value(val);
-                result.push_str(&format!("                {}: {},\n", field_name, field_value));
-            }
-            result.push_str("            };\n");
-            result
+/// Uses Go-style approach: iterate over schema sequence, not JSON keys
+fn generate_value_construction(
+    type_name: &str,
+    value: &serde_json::Value,
+    var_name: &str,
+    schema: &Schema,
+    prefix: &str,
+    current_type_name: &str,
+) -> String {
+    // Handle non-object values (e.g., string for newtype wrappers)
+    let value_map = match value {
+        serde_json::Value::Object(map) => map,
+        serde_json::Value::String(s) => {
+            // Newtype string wrapper - construct with the string value
+            return format!("            let {} = {}({:?}.to_string());\n", var_name, type_name, s);
         }
-        _ => format!("            let {} = {}::default();\n", var_name, type_name),
+        serde_json::Value::Number(n) => {
+            // Newtype number wrapper
+            if let Some(i) = n.as_i64() {
+                return format!("            let {} = {}({});\n", var_name, type_name, i);
+            } else if let Some(u) = n.as_u64() {
+                return format!("            let {} = {}({});\n", var_name, type_name, u);
+            } else if let Some(f) = n.as_f64() {
+                return format!("            let {} = {}({:?});\n", var_name, type_name, f);
+            }
+            return format!("            let {} = {}({});\n", var_name, type_name, n);
+        }
+        serde_json::Value::Bool(b) => {
+            return format!("            let {} = {}({});\n", var_name, type_name, b);
+        }
+        serde_json::Value::Array(arr) => {
+            // Array type - format as vec
+            let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+            return format!("            let {} = {}(vec![{}]);\n", var_name, type_name, items.join(", "));
+        }
+        serde_json::Value::Null => {
+            return format!("            let {} = {}::default();\n", var_name, type_name);
+        }
+    };
+
+    // Get the type definition from the schema
+    let type_def = match schema.types.get(current_type_name) {
+        Some(def) => def,
+        None => {
+            // Fallback: iterate JSON keys if type not found
+            return generate_value_construction_from_json(type_name, value_map, var_name, schema, prefix);
+        }
+    };
+
+    // Get the sequence of fields from the type definition
+    let sequence = match type_def {
+        TypeDef::Sequence { sequence } => sequence,
+        _ => {
+            // For non-sequence types, fallback to JSON iteration
+            return generate_value_construction_from_json(type_name, value_map, var_name, schema, prefix);
+        }
+    };
+
+    let mut result = format!("            let {} = {} {{\n", var_name, type_name);
+
+    // Iterate over schema sequence fields (not JSON keys)
+    for field in sequence {
+        let field_name_lower = match &field.name {
+            Some(name) => name.as_str(),
+            None => continue,
+        };
+
+        // Check if there's a value for this field in the JSON
+        let field_value = match value_map.get(field_name_lower) {
+            Some(val) => val,
+            None => continue, // Field not present in test value (computed/const field)
+        };
+
+        let rust_field_name = escape_rust_keyword(&to_snake_case(field_name_lower));
+        // Pass the current type name as containing type for bitfield struct naming
+        let formatted_value = format_value_with_field_and_context(field_value, field, schema, prefix, current_type_name);
+        result.push_str(&format!("                {}: {},\n", rust_field_name, formatted_value));
     }
+
+    result.push_str("            };\n");
+    result
 }
 
-/// Convert a value to Rust literal
-fn format_value(value: &serde_json::Value) -> String {
+/// Fallback: generate value construction by iterating JSON keys
+fn generate_value_construction_from_json(
+    type_name: &str,
+    value_map: &serde_json::Map<String, serde_json::Value>,
+    var_name: &str,
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    let mut result = format!("            let {} = {} {{\n", var_name, type_name);
+    for (key, val) in value_map {
+        let field_name = escape_rust_keyword(&to_snake_case(key));
+        let field_value = format_value_simple(val);
+        result.push_str(&format!("                {}: {},\n", field_name, field_value));
+    }
+    result.push_str("            };\n");
+    result
+}
+
+/// Format a value using the field definition from the schema
+/// This is the main formatting function - it uses the field's type info
+fn format_value_with_field(
+    value: &serde_json::Value,
+    field: &Field,
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    // Call with default empty containing type name
+    format_value_with_field_and_context(value, field, schema, prefix, "")
+}
+
+/// Format a value with full context including containing type name
+fn format_value_with_field_and_context(
+    value: &serde_json::Value,
+    field: &Field,
+    schema: &Schema,
+    prefix: &str,
+    containing_type_name: &str,
+) -> String {
+    let field_type = &field.field_type;
+
+    // Handle optional fields - look at value_type and wrap in Some(...)
+    if field_type == "optional" {
+        if let Some(ref value_type) = field.value_type {
+            // Check if the inner type is a named type in the schema
+            if let Some(type_def) = schema.types.get(value_type) {
+                match type_def {
+                    TypeDef::Sequence { .. } => {
+                        let inner = format_nested_struct(value, value_type, schema, prefix);
+                        return format!("Some({})", inner);
+                    }
+                    TypeDef::Direct { .. } => {
+                        // Direct type reference (newtype wrapper)
+                        let inner = format_value_as_newtype(value, value_type, prefix);
+                        return format!("Some({})", inner);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Primitive optional - wrap in Some(...)
+        let inner = format_value_simple(value);
+        return format!("Some({})", inner);
+    }
+
+    // Handle bitfield with sub-fields
+    if field_type == "bitfield" && field.fields.is_some() {
+        if let Some(ref field_name) = field.name {
+            // Bitfield struct name: {ContainingTypeName}{FieldName}
+            let struct_name = if containing_type_name.is_empty() {
+                // Fallback: just use field name capitalized
+                to_pascal_case(field_name)
+            } else {
+                format!("{}{}", to_pascal_case(containing_type_name), to_pascal_case(field_name))
+            };
+            return format_bitfield_struct_with_name(value, &struct_name, prefix);
+        }
+    }
+
+    // Handle array fields
+    if field_type == "array" {
+        if let serde_json::Value::Array(arr) = value {
+            return format_array_with_field(arr, field, schema, prefix);
+        }
+        return "vec![]".to_string();
+    }
+
+    // Check if it's a named type (struct, discriminated union, or direct type reference)
+    if let Some(type_def) = schema.types.get(field_type) {
+        match type_def {
+            TypeDef::Sequence { .. } => {
+                return format_nested_struct(value, field_type, schema, prefix);
+            }
+            TypeDef::DiscriminatedUnion { .. } => {
+                return format_discriminated_union_value(value, field_type, schema, prefix);
+            }
+            TypeDef::Direct { .. } => {
+                // Direct type reference (newtype wrapper like String, InlineString)
+                return format_value_as_newtype(value, field_type, prefix);
+            }
+        }
+    }
+
+    // Handle null values for float fields (JSON null = Infinity)
+    if value.is_null() {
+        if field_type == "float32" {
+            return "f32::INFINITY".to_string();
+        } else if field_type == "float64" {
+            return "f64::INFINITY".to_string();
+        }
+    }
+
+    // Handle numeric types with proper casting
+    if let serde_json::Value::Number(n) = value {
+        // Check if the field type is float32
+        if field_type == "float32" {
+            if let Some(f) = n.as_f64() {
+                if f.is_infinite() && f.is_sign_positive() {
+                    return "f32::INFINITY".to_string();
+                } else if f.is_infinite() && f.is_sign_negative() {
+                    return "f32::NEG_INFINITY".to_string();
+                } else if f.is_nan() {
+                    return "f32::NAN".to_string();
+                } else {
+                    return format!("{}_f32", f);
+                }
+            } else if let Some(i) = n.as_i64() {
+                return format!("{}.0_f32", i);
+            }
+        }
+        // For float64, use default formatting
+        if field_type == "float64" {
+            if let Some(f) = n.as_f64() {
+                if f.is_infinite() && f.is_sign_positive() {
+                    return "f64::INFINITY".to_string();
+                } else if f.is_infinite() && f.is_sign_negative() {
+                    return "f64::NEG_INFINITY".to_string();
+                } else if f.is_nan() {
+                    return "f64::NAN".to_string();
+                } else if f == f.trunc() {
+                    return format!("{}.0_f64", f as i64);
+                } else {
+                    return format!("{}_f64", f);
+                }
+            }
+        }
+    }
+
+    // Primitive or string - use simple formatting
+    format_value_simple(value)
+}
+
+/// Format a value as a newtype wrapper (e.g., MyString("hello".to_string()))
+fn format_value_as_newtype(
+    value: &serde_json::Value,
+    type_name: &str,
+    prefix: &str,
+) -> String {
+    let rust_type = format!("{}_{}", prefix, to_pascal_case(type_name));
+    let inner_value = format_value_simple(value);
+    format!("{}({})", rust_type, inner_value)
+}
+
+/// Format a nested struct value (recursive)
+fn format_nested_struct(
+    value: &serde_json::Value,
+    type_name: &str,
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    let value_map = match value {
+        serde_json::Value::Object(map) => map,
+        _ => return format!("{}_{} {{ }}", prefix, to_pascal_case(type_name)),
+    };
+
+    // Get the type definition
+    let type_def = match schema.types.get(type_name) {
+        Some(def) => def,
+        None => {
+            // Fallback: format without schema info
+            return format_nested_object_simple(value_map, type_name, prefix);
+        }
+    };
+
+    let sequence = match type_def {
+        TypeDef::Sequence { sequence } => sequence,
+        _ => {
+            return format_nested_object_simple(value_map, type_name, prefix);
+        }
+    };
+
+    let rust_type_name = format!("{}_{}", prefix, to_pascal_case(type_name));
+    let mut result = format!("{} {{ ", rust_type_name);
+
+    for field in sequence {
+        let field_name_lower = match &field.name {
+            Some(name) => name.as_str(),
+            None => continue,
+        };
+
+        let field_value = match value_map.get(field_name_lower) {
+            Some(val) => val,
+            None => continue, // Skip fields not in test value
+        };
+
+        let rust_field_name = escape_rust_keyword(&to_snake_case(field_name_lower));
+        // Pass the type_name as containing type for bitfield struct naming
+        let formatted_value = format_value_with_field_and_context(field_value, field, schema, prefix, type_name);
+        result.push_str(&format!("{}: {}, ", rust_field_name, formatted_value));
+    }
+
+    result.push_str("}");
+    result
+}
+
+/// Format a nested object without full schema info (fallback)
+fn format_nested_object_simple(
+    value_map: &serde_json::Map<String, serde_json::Value>,
+    type_name: &str,
+    prefix: &str,
+) -> String {
+    let rust_type_name = format!("{}_{}", prefix, to_pascal_case(type_name));
+    let mut result = format!("{} {{ ", rust_type_name);
+
+    for (key, val) in value_map {
+        let field_name = escape_rust_keyword(&to_snake_case(key));
+        let field_value = format_value_simple(val);
+        result.push_str(&format!("{}: {}, ", field_name, field_value));
+    }
+
+    result.push_str("}");
+    result
+}
+
+/// Format an array using field definition
+fn format_array_with_field(
+    arr: &[serde_json::Value],
+    field: &Field,
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    if arr.is_empty() {
+        return "vec![]".to_string();
+    }
+
+    // Get item type from field definition
+    let items = match &field.items {
+        Some(items) => items,
+        None => {
+            // No items definition - format as simple array
+            let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+            return format!("vec![{}]", items.join(", "));
+        }
+    };
+
+    let item_type = &items.field_type;
+
+    // Check if it's a choice type
+    if item_type == "choice" {
+        if let Some(ref choices) = items.choices {
+            let variant_types: Vec<String> = choices.iter()
+                .map(|c| c.type_name.clone())
+                .collect();
+            let formatted: Vec<String> = arr.iter()
+                .map(|v| format_choice_value(v, &variant_types, schema, prefix))
+                .collect();
+            return format!("vec![{}]", formatted.join(", "));
+        }
+    }
+
+    // Check if items are a named type in the schema
+    if let Some(type_def) = schema.types.get(item_type) {
+        match type_def {
+            TypeDef::Sequence { .. } => {
+                let formatted: Vec<String> = arr.iter()
+                    .map(|v| format_nested_struct(v, item_type, schema, prefix))
+                    .collect();
+                return format!("vec![{}]", formatted.join(", "));
+            }
+            TypeDef::DiscriminatedUnion { .. } => {
+                let formatted: Vec<String> = arr.iter()
+                    .map(|v| format_discriminated_union_value(v, item_type, schema, prefix))
+                    .collect();
+                return format!("vec![{}]", formatted.join(", "));
+            }
+            _ => {}
+        }
+    }
+
+    // Primitive array
+    let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+    format!("vec![{}]", items.join(", "))
+}
+
+/// Format a bitfield struct value with the full struct name
+fn format_bitfield_struct_with_name(
+    value: &serde_json::Value,
+    struct_name: &str,
+    prefix: &str,
+) -> String {
+    let value_map = match value {
+        serde_json::Value::Object(map) => map,
+        _ => return format!("{}_{} {{ }}", prefix, struct_name),
+    };
+
+    let rust_type_name = format!("{}_{}", prefix, struct_name);
+    let mut result = format!("{} {{ ", rust_type_name);
+
+    for (key, val) in value_map {
+        let field_name = escape_rust_keyword(&to_snake_case(key));
+        let field_value = format_value_simple(val);
+        result.push_str(&format!("{}: {}, ", field_name, field_value));
+    }
+
+    result.push_str("}");
+    result
+}
+
+// Old format_nested_object and format_nested_object_with_name removed
+// Use format_nested_struct instead
+
+/// Simple value formatting without schema (for primitives)
+fn format_value_simple(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
@@ -383,7 +781,6 @@ fn format_value(value: &serde_json::Value) -> String {
             // Check if it's a BigInt string (ends with 'n')
             if s.ends_with('n') {
                 let num_str = s.trim_end_matches('n');
-                // Try parsing as i64 first, then u64
                 if let Ok(i) = num_str.parse::<i64>() {
                     return i.to_string();
                 }
@@ -395,14 +792,242 @@ fn format_value(value: &serde_json::Value) -> String {
         }
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(format_value).collect();
+            let items: Vec<String> = arr.iter().map(format_value_simple).collect();
             format!("vec![{}]", items.join(", "))
         }
-        serde_json::Value::Object(_map) => {
-            // For nested structs, we'd need the type name - skip for now
-            format!("/* nested object */")
-        }
+        serde_json::Value::Object(_) => "/* nested object */".to_string(),
         serde_json::Value::Null => "None".to_string(),
+    }
+}
+
+/// Get the type of a field from the schema
+/// For optional fields, returns the value_type instead of "optional"
+fn get_field_type(schema: &Schema, type_name: &str, field_name: &str) -> Option<String> {
+    if let Some(type_def) = schema.types.get(type_name) {
+        match type_def {
+            TypeDef::Sequence { sequence } => {
+                for field in sequence {
+                    if field.name.as_deref() == Some(field_name) {
+                        // For optional fields, return the value_type
+                        if field.field_type == "optional" {
+                            if let Some(ref value_type) = field.value_type {
+                                return Some(value_type.clone());
+                            }
+                        }
+                        return Some(field.field_type.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Check if a field exists in the schema sequence (not in instances)
+fn field_exists_in_schema(schema: &Schema, type_name: &str, field_name: &str) -> bool {
+    if let Some(type_def) = schema.types.get(type_name) {
+        match type_def {
+            TypeDef::Sequence { sequence } => {
+                for field in sequence {
+                    if field.name.as_deref() == Some(field_name) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Check if a field is a bitfield with sub-fields
+fn is_bitfield_with_subfields(schema: &Schema, type_name: &str, field_name: &str) -> bool {
+    if let Some(type_def) = schema.types.get(type_name) {
+        match type_def {
+            TypeDef::Sequence { sequence } => {
+                for field in sequence {
+                    if field.name.as_deref() == Some(field_name) {
+                        if field.field_type == "bitfield" && field.fields.is_some() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Get the generated struct name for a bitfield field
+fn get_bitfield_struct_name(type_name: &str, field_name: &str) -> String {
+    // Convert to PascalCase and concatenate: TypeName + FieldName
+    let type_pascal = to_pascal_case(type_name);
+    let field_pascal = to_pascal_case(field_name);
+    format!("{}{}", type_pascal, field_pascal)
+}
+
+/// Convert to PascalCase
+fn to_pascal_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+    for c in s.chars() {
+        if c == '_' || c == '-' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_uppercase().next().unwrap());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Get the item type for an array field (returns None if it's a primitive array)
+fn get_array_item_type(schema: &Schema, type_name: &str, field_name: &str) -> Option<ArrayItemType> {
+    if let Some(type_def) = schema.types.get(type_name) {
+        match type_def {
+            TypeDef::Sequence { sequence } => {
+                for field in sequence {
+                    if field.name.as_deref() == Some(field_name) {
+                        if field.field_type == "array" {
+                            if let Some(ref items) = field.items {
+                                // Check if items type is "choice" with choices
+                                if items.field_type == "choice" {
+                                    if let Some(ref choices) = items.choices {
+                                        let choice_types: Vec<String> = choices.iter()
+                                            .map(|c| c.type_name.clone())
+                                            .collect();
+                                        return Some(ArrayItemType::Choice(choice_types));
+                                    }
+                                }
+                                // Check if items type is a named type in schema (struct or discriminated union)
+                                if schema.types.contains_key(&items.field_type) {
+                                    if is_discriminated_union(schema, &items.field_type) {
+                                        return Some(ArrayItemType::DiscriminatedUnion(items.field_type.clone()));
+                                    } else {
+                                        return Some(ArrayItemType::Struct(items.field_type.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Enum to represent different array item types
+enum ArrayItemType {
+    Struct(String),
+    DiscriminatedUnion(String),
+    Choice(Vec<String>),  // list of variant type names
+}
+
+/// Check if a type is a discriminated union
+fn is_discriminated_union(schema: &Schema, type_name: &str) -> bool {
+    if let Some(type_def) = schema.types.get(type_name) {
+        match type_def {
+            TypeDef::DiscriminatedUnion { .. } => true,
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
+/// Format a discriminated union value
+fn format_discriminated_union_value(
+    value: &serde_json::Value,
+    enum_type_name: &str,
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    if let serde_json::Value::Object(map) = value {
+        // Get the variant type from the "type" field
+        let variant_type = map.get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Get the variant payload from the "value" field
+        let payload = map.get("value");
+
+        if !variant_type.is_empty() {
+            let prefixed_enum = format!("{}_{}", prefix, to_pascal_case(enum_type_name));
+            let variant_pascal = to_pascal_case(variant_type);
+
+            if let Some(payload_val) = payload {
+                let payload_str = format_nested_struct(payload_val, variant_type, schema, prefix);
+                return format!("{}::{}({})", prefixed_enum, variant_pascal, payload_str);
+            } else {
+                // No payload - unit variant (shouldn't happen for discriminated unions but handle it)
+                return format!("{}::{}", prefixed_enum, variant_pascal);
+            }
+        }
+    }
+    // Fallback
+    "/* unknown discriminated union */".to_string()
+}
+
+/// Format a choice type value (inline enum)
+/// Choice format in JSON: { type: "VariantName", ...variantFields }
+/// The variant fields are at the top level, not nested in a "value" field
+fn format_choice_value(
+    value: &serde_json::Value,
+    variant_types: &[String],
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    let value_map = match value {
+        serde_json::Value::Object(map) => map,
+        _ => return "/* invalid choice value */".to_string(),
+    };
+
+    // Get the variant type from the "type" field
+    let variant_type = match value_map.get("type").and_then(|v| v.as_str()) {
+        Some(t) => t,
+        None => return "/* missing type field in choice */".to_string(),
+    };
+
+    // Build the choice enum name: Choice{Type1}{Type2}...
+    let enum_name = format!("Choice{}", variant_types.iter()
+        .map(|t| to_pascal_case(t))
+        .collect::<Vec<_>>()
+        .join(""));
+    let prefixed_enum = format!("{}_{}", prefix, enum_name);
+
+    // The variant name in Rust is PascalCase
+    let variant_pascal = to_pascal_case(variant_type);
+
+    // For choice types, the payload is the entire object except the "type" field
+    // We need to construct the variant struct from the remaining fields
+    let payload_map: serde_json::Map<String, serde_json::Value> = value_map.iter()
+        .filter(|(k, _)| *k != "type")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let payload_value = serde_json::Value::Object(payload_map);
+
+    // Format the payload struct
+    let payload_str = format_nested_struct(&payload_value, variant_type, schema, prefix);
+
+    format!("{}::{}({})", prefixed_enum, variant_pascal, payload_str)
+}
+
+/// Escape Rust reserved keywords
+fn escape_rust_keyword(name: &str) -> String {
+    match name {
+        "type" | "struct" | "enum" | "fn" | "let" | "mut" | "ref" | "const" | "static" |
+        "pub" | "mod" | "use" | "self" | "super" | "crate" | "as" | "break" | "continue" |
+        "else" | "for" | "if" | "in" | "loop" | "match" | "move" | "return" | "trait" |
+        "where" | "while" | "async" | "await" | "dyn" | "impl" | "extern" | "unsafe" => {
+            format!("r#{}", name)
+        }
+        _ => name.to_string()
     }
 }
 
