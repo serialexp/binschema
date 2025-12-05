@@ -59,6 +59,12 @@ export function generateRust(
     lines.push(...generateUnionEnum(enumName, variantTypes, defaultEndianness, defaultBitOrder));
   }
 
+  // Collect bitfield types with sub-fields and generate structs for them
+  const bitfieldTypes = collectBitfieldTypes(schema);
+  for (const [structName, bitfieldDef] of Object.entries(bitfieldTypes)) {
+    lines.push(...generateBitfieldStruct(structName, bitfieldDef, defaultBitOrder));
+  }
+
   // Generate all types in the schema
   for (const [name, typeDef] of Object.entries(schema.types)) {
     // Convert type name to Rust PascalCase convention
@@ -386,6 +392,115 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
 }
 
 /**
+ * Bitfield sub-field definition
+ */
+interface BitfieldSubField {
+  name: string;
+  offset: number;
+  size: number;
+  description?: string;
+}
+
+/**
+ * Bitfield type definition for code generation
+ */
+interface BitfieldDef {
+  size: number;
+  fields: BitfieldSubField[];
+  containingType: string;
+  fieldName: string;
+}
+
+/**
+ * Collects all bitfield types with sub-fields from the schema
+ * Returns a map of struct name -> bitfield definition
+ */
+function collectBitfieldTypes(schema: BinarySchema): Record<string, BitfieldDef> {
+  const bitfieldTypes: Record<string, BitfieldDef> = {};
+
+  for (const [typeName, typeDef] of Object.entries(schema.types)) {
+    if ("sequence" in (typeDef as any)) {
+      for (const field of (typeDef as any).sequence) {
+        if (field.type === "bitfield" && field.fields && Array.isArray(field.fields) && field.fields.length > 0) {
+          // Generate a unique struct name based on containing type and field name
+          const structName = `${toRustTypeName(typeName)}${toRustTypeName(field.name)}`;
+          bitfieldTypes[structName] = {
+            size: field.size || 8,
+            fields: field.fields,
+            containingType: typeName,
+            fieldName: field.name
+          };
+        }
+      }
+    }
+  }
+
+  return bitfieldTypes;
+}
+
+/**
+ * Generates a struct for a bitfield type with sub-fields
+ */
+function generateBitfieldStruct(structName: string, bitfieldDef: BitfieldDef, defaultBitOrder: string): string[] {
+  const lines: string[] = [];
+  const bitOrder = mapBitOrder(defaultBitOrder);
+
+  // Generate struct definition
+  lines.push(`#[derive(Debug, Clone, PartialEq)]`);
+  lines.push(`pub struct ${structName} {`);
+  for (const subField of bitfieldDef.fields) {
+    const rustType = getBitfieldSubFieldType(subField.size);
+    const fieldName = toRustFieldName(subField.name);
+    lines.push(`    pub ${fieldName}: ${rustType},`);
+  }
+  lines.push(`}`);
+  lines.push(``);
+
+  // Generate impl block
+  lines.push(`impl ${structName} {`);
+
+  // Generate encode method - writes each sub-field in order
+  lines.push(`    pub fn encode(&self, encoder: &mut BitStreamEncoder) {`);
+  for (const subField of bitfieldDef.fields) {
+    const fieldName = toRustFieldName(subField.name);
+    lines.push(`        encoder.write_bits(self.${fieldName} as u64, ${subField.size});`);
+  }
+  lines.push(`    }`);
+  lines.push(``);
+
+  // Generate decode method - reads each sub-field in order
+  lines.push(`    pub fn decode(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
+  for (const subField of bitfieldDef.fields) {
+    const fieldName = toRustFieldName(subField.name);
+    const rustType = getBitfieldSubFieldType(subField.size);
+    lines.push(`        let ${fieldName} = decoder.read_bits(${subField.size})? as ${rustType};`);
+  }
+  // Construct the result
+  lines.push(`        Ok(Self {`);
+  for (const subField of bitfieldDef.fields) {
+    const fieldName = toRustFieldName(subField.name);
+    lines.push(`            ${fieldName},`);
+  }
+  lines.push(`        })`);
+  lines.push(`    }`);
+
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
+}
+
+/**
+ * Gets the Rust type for a bitfield sub-field based on its size
+ */
+function getBitfieldSubFieldType(size: number): string {
+  if (size <= 8) return "u8";
+  if (size <= 16) return "u16";
+  if (size <= 32) return "u32";
+  return "u64";
+}
+
+/**
  * Generates a Rust struct definition
  */
 function generateStruct(name: string, fields: Field[]): string[] {
@@ -401,7 +516,13 @@ function generateStruct(name: string, fields: Field[]): string[] {
     if (!field.name || !field.type || field.type === "padding") {
       continue;
     }
-    const rustType = mapFieldToRustType(field);
+    // Special handling for bitfields with sub-fields - use generated struct name
+    let rustType: string;
+    if (field.type === "bitfield" && (field as any).fields && Array.isArray((field as any).fields) && (field as any).fields.length > 0) {
+      rustType = `${name}${toRustTypeName(field.name)}`;
+    } else {
+      rustType = mapFieldToRustType(field);
+    }
     const fieldName = toRustFieldName(field.name);
     lines.push(`    pub ${fieldName}: ${rustType},`);
   }
@@ -480,7 +601,7 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
   // Note: We decode ALL fields (including unnamed) because they may be referenced
   // by other fields (e.g., as length_field for arrays)
   for (const field of fields) {
-    lines.push(...generateDecodeField(field, defaultEndianness, "        "));
+    lines.push(...generateDecodeField(field, defaultEndianness, "        ", name));
   }
 
   // Construct the result - only include named, non-padding fields in the struct
@@ -571,10 +692,16 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
     }
 
     case "bitfield": {
-      // Bitfield - write as packed integer
-      // TODO: Full bitfield support with sub-fields
-      const bitSize = (field as any).size || 8;
-      lines.push(`${indent}encoder.write_bits(${fieldName} as u64, ${bitSize});`);
+      // Check if this bitfield has sub-fields
+      const subFields = (field as any).fields;
+      if (subFields && Array.isArray(subFields) && subFields.length > 0) {
+        // Bitfield with sub-fields - use the struct's encode method
+        lines.push(`${indent}${fieldName}.encode(&mut encoder);`);
+      } else {
+        // Bitfield without sub-fields - write as packed integer
+        const bitSize = (field as any).size || 8;
+        lines.push(`${indent}encoder.write_bits(${fieldName} as u64, ${bitSize});`);
+      }
       break;
     }
 
@@ -949,7 +1076,7 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
 /**
  * Generates decoding code for a single field
  */
-function generateDecodeField(field: Field, defaultEndianness: string, indent: string): string[] {
+function generateDecodeField(field: Field, defaultEndianness: string, indent: string, containingTypeName?: string): string[] {
   const lines: string[] = [];
   const varName = toRustFieldName(field.name);
   const endianness = (field as any).endianness || defaultEndianness;
@@ -1023,11 +1150,19 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
     }
 
     case "bitfield": {
-      // Bitfield - read as packed integer
-      // TODO: Full bitfield support with sub-fields
-      const bitSize = (field as any).size || 8;
-      const rustType = mapFieldToRustType(field);
-      lines.push(`${indent}let ${varName} = decoder.read_bits(${bitSize})? as ${rustType};`);
+      // Check if this bitfield has sub-fields
+      const subFields = (field as any).fields;
+      if (subFields && Array.isArray(subFields) && subFields.length > 0 && containingTypeName) {
+        // Bitfield with sub-fields - use the struct's decode method
+        // Note: decoder is already &mut, so pass it directly without additional &mut
+        const bitfieldStructName = `${containingTypeName}${toRustTypeName(field.name)}`;
+        lines.push(`${indent}let ${varName} = ${bitfieldStructName}::decode(decoder)?;`);
+      } else {
+        // Bitfield without sub-fields - read as packed integer
+        const bitSize = (field as any).size || 8;
+        const rustType = mapFieldToRustType(field);
+        lines.push(`${indent}let ${varName} = decoder.read_bits(${bitSize})? as ${rustType};`);
+      }
       break;
     }
 
@@ -1534,7 +1669,8 @@ function mapFieldToRustType(field: Field): string {
     case "varlength":
       return "u64";  // Variable-length integers decode to u64
     case "bitfield": {
-      // Bitfields are packed integers - use appropriate size
+      // Bitfields without sub-fields are packed integers - use appropriate size
+      // Note: Bitfields WITH sub-fields are handled specially in generateStruct
       const size = (field as any).size || 8;
       if (size <= 8) return "u8";
       if (size <= 16) return "u16";
