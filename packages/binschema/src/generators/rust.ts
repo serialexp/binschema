@@ -73,15 +73,15 @@ export function generateRust(
     // Check if this is a composite type (has sequence) or type alias
     // IMPORTANT: Check for "variants" before "type" because discriminated unions have both
     if ("sequence" in typeDef) {
-      // Composite type with fields
-      lines.push(...generateStruct(rustTypeName, typeDef.sequence));
-      lines.push(...generateImpl(rustTypeName, typeDef.sequence, defaultEndianness, defaultBitOrder));
+      // Composite type with fields - generate Input/Output structs
+      lines.push(...generateStructs(rustTypeName, typeDef.sequence, schema));
+      lines.push(...generateImpl(rustTypeName, typeDef.sequence, defaultEndianness, defaultBitOrder, schema));
     } else if ("variants" in typeDef) {
       // Discriminated union type - must check before "type" since it has both
       lines.push(...generateDiscriminatedUnion(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ("type" in typeDef) {
       // Type alias - generate wrapper struct
-      lines.push(...generateTypeAlias(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder));
+      lines.push(...generateTypeAlias(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder, schema));
     } else {
       // Unknown type definition
       throw new Error(`Unknown type definition for ${name}: ${JSON.stringify(typeDef)}`);
@@ -97,7 +97,7 @@ export function generateRust(
 /**
  * Generates a type alias as a wrapper struct
  */
-function generateTypeAlias(name: string, typeDef: any, defaultEndianness: string, defaultBitOrder: string): string[] {
+function generateTypeAlias(name: string, typeDef: any, defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const bitOrder = mapBitOrder(defaultBitOrder);
 
@@ -150,14 +150,26 @@ function generateTypeAlias(name: string, typeDef: any, defaultEndianness: string
     ...typeDef
   };
 
-  lines.push(...generateStruct(name, [field]));
-  lines.push(...generateImpl(name, [field], defaultEndianness, defaultBitOrder));
+  // Check if the wrapped type is composite - if so, use Input/Output separation
+  const wrappedTypeDef = schema.types[typeDef.type];
+  const wrappedIsComposite = wrappedTypeDef && "sequence" in wrappedTypeDef;
+
+  if (wrappedIsComposite) {
+    // Use Input/Output separation for wrappers of composite types
+    lines.push(...generateStructs(name, [field], schema));
+    lines.push(...generateImpl(name, [field], defaultEndianness, defaultBitOrder, schema));
+  } else {
+    // Simple wrappers (primitives, other type aliases) don't need Input/Output
+    lines.push(...generateSimpleStruct(name, [field]));
+    lines.push(...generateSimpleImpl(name, [field], defaultEndianness, defaultBitOrder, schema));
+  }
 
   return lines;
 }
 
 /**
  * Generates a discriminated union as a Rust enum
+ * Uses Output types for variants since these are created during decoding
  */
 function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianness: string, defaultBitOrder: string): string[] {
   const lines: string[] = [];
@@ -165,12 +177,12 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
   const variants = unionDef.variants || [];
   const bitOrder = mapBitOrder(defaultBitOrder);
 
-  // Generate enum definition
+  // Generate enum definition - variants wrap Output types
   lines.push(`#[derive(Debug, Clone, PartialEq)]`);
   lines.push(`pub enum ${name} {`);
   for (const variant of variants) {
     const variantTypeName = toRustTypeName(variant.type);
-    lines.push(`    ${variantTypeName}(${variantTypeName}),`);
+    lines.push(`    ${variantTypeName}(${variantTypeName}Output),`);
   }
   lines.push(`}`);
   lines.push(``);
@@ -178,12 +190,15 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
   // Generate impl block
   lines.push(`impl ${name} {`);
 
-  // Generate encode method
+  // Generate encode method - uses the wrapped Output's encode (which doesn't exist on Output)
+  // TODO: Proper encoding would need Input variants
   lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
   lines.push(`        match self {`);
   for (const variant of variants) {
     const variantTypeName = toRustTypeName(variant.type);
-    lines.push(`            ${name}::${variantTypeName}(v) => v.encode(),`);
+    // Note: This references encode on Output which doesn't have it
+    // For now, we'll need to skip this or implement differently
+    lines.push(`            ${name}::${variantTypeName}(_v) => Err(binschema_runtime::BinSchemaError::NotImplemented("discriminated union encoding".to_string())),`);
   }
   lines.push(`        }`);
   lines.push(`    }`);
@@ -236,7 +251,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
       } else {
         lines.push(`        } else if ${condition} {`);
       }
-      lines.push(`            Ok(${name}::${variantTypeName}(${variantTypeName}::decode_with_decoder(decoder)?))`);
+      lines.push(`            Ok(${name}::${variantTypeName}(${variantTypeName}Output::decode_with_decoder(decoder)?))`);
     }
 
     // Handle fallback or error
@@ -244,10 +259,10 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
       const variantTypeName = toRustTypeName(fallbackVariant.type);
       if (conditionalVariants.length > 0) {
         lines.push(`        } else {`);
-        lines.push(`            Ok(${name}::${variantTypeName}(${variantTypeName}::decode_with_decoder(decoder)?))`);
+        lines.push(`            Ok(${name}::${variantTypeName}(${variantTypeName}Output::decode_with_decoder(decoder)?))`);
         lines.push(`        }`);
       } else {
-        lines.push(`        Ok(${name}::${variantTypeName}(${variantTypeName}::decode_with_decoder(decoder)?))`);
+        lines.push(`        Ok(${name}::${variantTypeName}(${variantTypeName}Output::decode_with_decoder(decoder)?))`);
       }
     } else {
       if (conditionalVariants.length > 0) {
@@ -328,17 +343,18 @@ function collectInlineUnionTypes(schema: BinarySchema): Record<string, string[]>
 
 /**
  * Generates an enum for inline union types (choice or discriminated_union)
+ * Uses Output types for variants since these are created during decoding
  */
 function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndianness: string, defaultBitOrder: string): string[] {
   const lines: string[] = [];
   const bitOrder = mapBitOrder(defaultBitOrder);
 
-  // Generate enum definition
+  // Generate enum definition - variants wrap Output types
   lines.push(`#[derive(Debug, Clone, PartialEq)]`);
   lines.push(`pub enum ${enumName} {`);
   for (const typeName of variantTypes) {
     const rustTypeName = toRustTypeName(typeName);
-    lines.push(`    ${rustTypeName}(${rustTypeName}),`);
+    lines.push(`    ${rustTypeName}(${rustTypeName}Output),`);
   }
   lines.push(`}`);
   lines.push(``);
@@ -346,12 +362,12 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
   // Generate impl block
   lines.push(`impl ${enumName} {`);
 
-  // Generate encode method
+  // Generate encode method - not yet properly implemented for Output types
   lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
   lines.push(`        match self {`);
   for (const typeName of variantTypes) {
     const rustTypeName = toRustTypeName(typeName);
-    lines.push(`            ${enumName}::${rustTypeName}(v) => v.encode(),`);
+    lines.push(`            ${enumName}::${rustTypeName}(_v) => Err(binschema_runtime::BinSchemaError::NotImplemented("union encoding".to_string())),`);
   }
   lines.push(`        }`);
   lines.push(`    }`);
@@ -376,7 +392,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
     if (i === 0) {
       lines.push(`        let start_pos = decoder.position();`);
     }
-    lines.push(`        if let Ok(v) = ${rustTypeName}::decode_with_decoder(decoder) {`);
+    lines.push(`        if let Ok(v) = ${rustTypeName}Output::decode_with_decoder(decoder) {`);
     lines.push(`            return Ok(${enumName}::${rustTypeName}(v));`);
     lines.push(`        }`);
     if (i < variantTypes.length - 1) {
@@ -501,13 +517,15 @@ function getBitfieldSubFieldType(size: number): string {
 }
 
 /**
- * Generates a Rust struct definition
+ * Generates a Rust Input struct definition (for encoding)
+ * Excludes computed and const fields
+ * Uses Input types for nested composite types
  */
-function generateStruct(name: string, fields: Field[]): string[] {
+function generateInputStruct(name: string, fields: Field[], schema: BinarySchema): string[] {
   const lines: string[] = [];
 
   lines.push(`#[derive(Debug, Clone, PartialEq)]`);
-  lines.push(`pub struct ${name} {`);
+  lines.push(`pub struct ${name}Input {`);
 
   for (const field of fields) {
     // Skip fields without names (e.g., conditional fields)
@@ -516,7 +534,101 @@ function generateStruct(name: string, fields: Field[]): string[] {
     if (!field.name || !field.type || field.type === "padding") {
       continue;
     }
+    // Skip computed and const fields - they're not part of Input
+    if (!isInputField(field)) {
+      continue;
+    }
     // Special handling for bitfields with sub-fields - use generated struct name
+    let rustType: string;
+    if (field.type === "bitfield" && (field as any).fields && Array.isArray((field as any).fields) && (field as any).fields.length > 0) {
+      rustType = `${name}${toRustTypeName(field.name)}`;
+    } else {
+      rustType = mapFieldToRustTypeForInput(field, schema);
+    }
+    const fieldName = toRustFieldName(field.name);
+    lines.push(`    pub ${fieldName}: ${rustType},`);
+  }
+
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
+}
+
+/**
+ * Generates a Rust Output struct definition (from decoding)
+ * Includes ALL fields (computed, const, and regular)
+ */
+function generateOutputStruct(name: string, fields: Field[], schema: BinarySchema): string[] {
+  const lines: string[] = [];
+
+  lines.push(`#[derive(Debug, Clone, PartialEq)]`);
+  lines.push(`pub struct ${name}Output {`);
+
+  for (const field of fields) {
+    // Skip fields without names (e.g., conditional fields)
+    // Skip fields without types (e.g., conditional markers)
+    // Skip padding fields (computed at encode/decode time)
+    if (!field.name || !field.type || field.type === "padding") {
+      continue;
+    }
+    // Include all fields in Output (isOutputField always returns true)
+    if (!isOutputField(field)) {
+      continue;
+    }
+    // Special handling for bitfields with sub-fields - use generated struct name
+    let rustType: string;
+    if (field.type === "bitfield" && (field as any).fields && Array.isArray((field as any).fields) && (field as any).fields.length > 0) {
+      rustType = `${name}${toRustTypeName(field.name)}`;
+    } else {
+      rustType = mapFieldToRustType(field, schema);
+    }
+    const fieldName = toRustFieldName(field.name);
+    lines.push(`    pub ${fieldName}: ${rustType},`);
+  }
+
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
+}
+
+/**
+ * Generates a backward-compatible type alias
+ * The main type name refers to the Output struct
+ */
+function generateBackwardCompatAlias(name: string): string[] {
+  return [
+    `pub type ${name} = ${name}Output;`,
+    ``
+  ];
+}
+
+/**
+ * Generates both Input and Output struct definitions plus type alias
+ */
+function generateStructs(name: string, fields: Field[], schema: BinarySchema): string[] {
+  const lines: string[] = [];
+  lines.push(...generateInputStruct(name, fields, schema));
+  lines.push(...generateOutputStruct(name, fields, schema));
+  lines.push(...generateBackwardCompatAlias(name));
+  return lines;
+}
+
+/**
+ * Generates a simple Rust struct definition (for type aliases/wrappers)
+ * This is used for wrapper structs that don't need Input/Output separation
+ */
+function generateSimpleStruct(name: string, fields: Field[]): string[] {
+  const lines: string[] = [];
+
+  lines.push(`#[derive(Debug, Clone, PartialEq)]`);
+  lines.push(`pub struct ${name} {`);
+
+  for (const field of fields) {
+    if (!field.name || !field.type || field.type === "padding") {
+      continue;
+    }
     let rustType: string;
     if (field.type === "bitfield" && (field as any).fields && Array.isArray((field as any).fields) && (field as any).fields.length > 0) {
       rustType = `${name}${toRustTypeName(field.name)}`;
@@ -534,9 +646,32 @@ function generateStruct(name: string, fields: Field[]): string[] {
 }
 
 /**
- * Generates an impl block with encode and decode methods
+ * Generates impl blocks for Input and Output structs
+ * Input struct gets encode method, Output struct gets decode methods
  */
-function generateImpl(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string): string[] {
+function generateImpl(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema): string[] {
+  const lines: string[] = [];
+
+  // Generate impl for Input struct (encode method)
+  lines.push(`impl ${name}Input {`);
+  lines.push(...generateEncodeMethod(fields, defaultEndianness, defaultBitOrder));
+  lines.push(`}`);
+  lines.push(``);
+
+  // Generate impl for Output struct (decode methods)
+  lines.push(`impl ${name}Output {`);
+  lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema));
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
+}
+
+/**
+ * Generates a simple impl block with encode and decode methods (for type aliases)
+ * This is used for wrapper structs that don't need Input/Output separation
+ */
+function generateSimpleImpl(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
 
   lines.push(`impl ${name} {`);
@@ -545,7 +680,7 @@ function generateImpl(name: string, fields: Field[], defaultEndianness: string, 
   lines.push(...generateEncodeMethod(fields, defaultEndianness, defaultBitOrder));
 
   // Generate decode methods
-  lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder));
+  lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema));
 
   lines.push(`}`);
   lines.push(``);
@@ -555,6 +690,7 @@ function generateImpl(name: string, fields: Field[], defaultEndianness: string, 
 
 /**
  * Generates the encode method
+ * Encodes input fields from self, writes const values directly, skips computed fields
  */
 function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaultBitOrder: string): string[] {
   const lines: string[] = [];
@@ -564,12 +700,30 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
 
   // Generate encoding logic for each field
-  // Note: We only encode NAMED fields - unnamed fields (const, padding) aren't in the struct
   for (const field of fields) {
-    // Skip fields without names - they're not in the struct
+    // Skip fields without names
     if (!field.name) {
       continue;
     }
+
+    const fieldAny = field as any;
+
+    // Handle const fields - write the constant value directly
+    // Note: Use loose equality (!=) to handle both undefined and null
+    // (Rust serde serializes Option::None as null in JSON)
+    if (fieldAny.const != null) {
+      lines.push(...generateEncodeConstField(field, fieldAny.const, defaultEndianness, "        "));
+      continue;
+    }
+
+    // Skip computed fields - they need runtime computation (not yet implemented)
+    // Note: Use loose equality (!=) to handle both undefined and null
+    if (fieldAny.computed != null) {
+      lines.push(`        // TODO: computed field '${field.name}' - requires runtime computation`);
+      continue;
+    }
+
+    // Regular input field - encode from self
     lines.push(...generateEncodeField(field, defaultEndianness, "        "));
   }
 
@@ -581,9 +735,53 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
 }
 
 /**
+ * Generates encoding code for a const field (writes a fixed value)
+ */
+function generateEncodeConstField(field: Field, constValue: any, defaultEndianness: string, indent: string): string[] {
+  const lines: string[] = [];
+  const endianness = (field as any).endianness || defaultEndianness;
+  const rustEndianness = mapEndianness(endianness);
+
+  // Handle null/undefined const values - use 0 as default
+  const value = constValue === null || constValue === undefined ? 0 : constValue;
+
+  switch (field.type) {
+    case "uint8":
+      lines.push(`${indent}encoder.write_uint8(${value});`);
+      break;
+    case "uint16":
+      lines.push(`${indent}encoder.write_uint16(${value}, Endianness::${rustEndianness});`);
+      break;
+    case "uint32":
+      lines.push(`${indent}encoder.write_uint32(${value}, Endianness::${rustEndianness});`);
+      break;
+    case "uint64":
+      lines.push(`${indent}encoder.write_uint64(${value}, Endianness::${rustEndianness});`);
+      break;
+    case "int8":
+      lines.push(`${indent}encoder.write_int8(${value});`);
+      break;
+    case "int16":
+      lines.push(`${indent}encoder.write_int16(${value}, Endianness::${rustEndianness});`);
+      break;
+    case "int32":
+      lines.push(`${indent}encoder.write_int32(${value}, Endianness::${rustEndianness});`);
+      break;
+    case "int64":
+      lines.push(`${indent}encoder.write_int64(${value}, Endianness::${rustEndianness});`);
+      break;
+    default:
+      lines.push(`${indent}// TODO: const field '${field.name}' of type '${field.type}' not yet supported`);
+      break;
+  }
+
+  return lines;
+}
+
+/**
  * Generates the decode methods
  */
-function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string): string[] {
+function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const bitOrder = mapBitOrder(defaultBitOrder);
 
@@ -601,7 +799,7 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
   // Note: We decode ALL fields (including unnamed) because they may be referenced
   // by other fields (e.g., as length_field for arrays)
   for (const field of fields) {
-    lines.push(...generateDecodeField(field, defaultEndianness, "        ", name));
+    lines.push(...generateDecodeField(field, defaultEndianness, "        ", name, schema));
   }
 
   // Construct the result - only include named, non-padding fields in the struct
@@ -1076,7 +1274,7 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
 /**
  * Generates decoding code for a single field
  */
-function generateDecodeField(field: Field, defaultEndianness: string, indent: string, containingTypeName?: string): string[] {
+function generateDecodeField(field: Field, defaultEndianness: string, indent: string, containingTypeName: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const varName = toRustFieldName(field.name);
   const endianness = (field as any).endianness || defaultEndianness;
@@ -1171,11 +1369,11 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       break;
 
     case "array":
-      lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent));
+      lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent, schema));
       break;
 
     case "optional":
-      lines.push(...generateDecodeOptional(field as any, varName, endianness, indent));
+      lines.push(...generateDecodeOptional(field as any, varName, endianness, indent, schema));
       break;
 
     case "padding":
@@ -1185,7 +1383,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
 
     default:
       // Type reference - nested struct
-      lines.push(...generateDecodeNestedStruct(field, varName, indent));
+      lines.push(...generateDecodeNestedStruct(field, varName, indent, schema));
       break;
   }
 
@@ -1195,7 +1393,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
 /**
  * Generates decoding code for optional field
  */
-function generateDecodeOptional(field: any, varName: string, endianness: string, indent: string): string[] {
+function generateDecodeOptional(field: any, varName: string, endianness: string, indent: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const valueType = field.value_type;
   const rustEndianness = mapEndianness(endianness);
@@ -1245,11 +1443,17 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
       lines.push(`${indent}    }`);
       lines.push(`${indent}    Some(std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?)`);
       break;
-    default:
+    default: {
       // Type reference - nested struct
       const typeName = toRustTypeName(valueType);
-      lines.push(`${indent}    Some(${typeName}::decode_with_decoder(decoder)?)`);
+      // Check if the referenced type is composite (has sequence) or a type alias
+      const typeDef = schema.types[valueType];
+      const isComposite = typeDef && "sequence" in typeDef;
+      // Use Output suffix only for composite types
+      const decodeName = isComposite ? `${typeName}Output` : typeName;
+      lines.push(`${indent}    Some(${decodeName}::decode_with_decoder(decoder)?)`);
       break;
+    }
   }
 
   lines.push(`${indent}} else {`);
@@ -1341,7 +1545,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
 /**
  * Generates decoding code for array field
  */
-function generateDecodeArray(field: any, varName: string, endianness: string, rustEndianness: string, indent: string): string[] {
+function generateDecodeArray(field: any, varName: string, endianness: string, rustEndianness: string, indent: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const kind = field.kind;
   const items = field.items;
@@ -1444,7 +1648,7 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
   }
 
   // Decode item
-  const itemLines = generateDecodeArrayItem(items, endianness, rustEndianness, `${indent}    `);
+  const itemLines = generateDecodeArrayItem(items, endianness, rustEndianness, `${indent}    `, schema);
   lines.push(...itemLines);
   lines.push(`${indent}    ${varName}.push(item);`);
 
@@ -1461,7 +1665,7 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
 /**
  * Generates decoding code for a single array item
  */
-function generateDecodeArrayItem(items: any, endianness: string, rustEndianness: string, indent: string): string[] {
+function generateDecodeArrayItem(items: any, endianness: string, rustEndianness: string, indent: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
 
   switch (items.type) {
@@ -1610,7 +1814,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
       // Decode inner items
       lines.push(`${indent}let mut item = Vec::with_capacity(inner_len);`);
       lines.push(`${indent}for _ in 0..inner_len {`);
-      const innerLines = generateDecodeArrayItem(innerItems, endianness, rustEndianness, `${indent}    `);
+      const innerLines = generateDecodeArrayItem(innerItems, endianness, rustEndianness, `${indent}    `, schema);
       // Rename 'item' to 'inner_item' in the inner lines to avoid shadowing
       for (const line of innerLines) {
         lines.push(line.replace(/let item = /, 'let inner_item = '));
@@ -1622,7 +1826,12 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
     default:
       // Type reference - nested struct
       const typeName = toRustTypeName(items.type);
-      lines.push(`${indent}let item = ${typeName}::decode_with_decoder(decoder)?;`);
+      // Check if the referenced type is composite (has sequence) or a type alias
+      const typeDef = schema.types[items.type];
+      const isComposite = typeDef && "sequence" in typeDef;
+      // Use Output suffix only for composite types
+      const decodeName = isComposite ? `${typeName}Output` : typeName;
+      lines.push(`${indent}let item = ${decodeName}::decode_with_decoder(decoder)?;`);
       break;
   }
 
@@ -1631,20 +1840,144 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
 
 /**
  * Generates decoding code for nested struct
+ * Uses Output suffix only for composite types (with sequence)
  */
-function generateDecodeNestedStruct(field: Field, varName: string, indent: string): string[] {
+function generateDecodeNestedStruct(field: Field, varName: string, indent: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const typeName = toRustTypeName(field.type);
 
-  lines.push(`${indent}let ${varName} = ${typeName}::decode_with_decoder(decoder)?;`);
+  // Check if the referenced type is composite (has sequence) or a type alias
+  const typeDef = schema.types[field.type];
+  const isComposite = typeDef && "sequence" in typeDef;
+
+  // Use Output suffix only for composite types
+  const decodeName = isComposite ? `${typeName}Output` : typeName;
+  lines.push(`${indent}let ${varName} = ${decodeName}::decode_with_decoder(decoder)?;`);
 
   return lines;
 }
 
 /**
- * Maps a field to its Rust type
+ * Maps a field to its Rust type for Input structs
+ * Composite types get Input suffix, type aliases stay as-is
  */
-function mapFieldToRustType(field: Field): string {
+function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema): string {
+  // Handle primitive types first
+  switch (field.type) {
+    case "uint8": return "u8";
+    case "uint16": return "u16";
+    case "uint32": return "u32";
+    case "uint64": return "u64";
+    case "int8": return "i8";
+    case "int16": return "i16";
+    case "int32": return "i32";
+    case "int64": return "i64";
+    case "float32": return "f32";
+    case "float64": return "f64";
+    case "varlength": return "u64";
+    case "string": return "std::string::String";
+    case "bit": {
+      const size = (field as any).size || 1;
+      if (size <= 8) return "u8";
+      if (size <= 16) return "u16";
+      if (size <= 32) return "u32";
+      return "u64";
+    }
+    case "bitfield": {
+      // Bitfields without sub-fields are packed integers
+      const size = (field as any).size || 8;
+      if (size <= 8) return "u8";
+      if (size <= 16) return "u16";
+      if (size <= 32) return "u32";
+      return "u64";
+    }
+    case "array": {
+      const items = (field as any).items;
+      const itemsType = mapFieldToRustTypeForInput(items, schema);
+      return `Vec<${itemsType}>`;
+    }
+    case "choice": {
+      // Choice type - generate enum name from choices
+      const choices = (field as any).choices || [];
+      if (choices.length === 0) {
+        throw new Error(`Choice field has no choices`);
+      }
+      const choiceTypes = choices.map((c: any) => toRustTypeName(c.type));
+      return `Choice${choiceTypes.join('')}`;
+    }
+    case "discriminated_union": {
+      // Discriminated union - generate enum name from variants
+      const variants = (field as any).variants || [];
+      if (variants.length === 0) {
+        throw new Error(`Discriminated union field has no variants`);
+      }
+      const variantTypes = variants.map((v: any) => toRustTypeName(v.type));
+      return `Union${variantTypes.join('')}`;
+    }
+    case "optional": {
+      const valueTypeName = (field as any).value_type;
+      if (!valueTypeName) {
+        throw new Error(`Optional field ${field.name} missing value_type`);
+      }
+      // Check if the value type is composite (including through type aliases)
+      const optIsComposite = isCompositeType(valueTypeName, schema);
+      const rustTypeName = toRustTypeName(valueTypeName);
+      const valueType = optIsComposite ? `${rustTypeName}Input` : mapPrimitiveToRustType(valueTypeName);
+      return `Option<${valueType}>`;
+    }
+    default: {
+      // Type reference - check if composite or type alias
+      const typeName = toRustTypeName(field.type);
+      const typeDef = schema.types[field.type];
+
+      // Check if this type is composite (has sequence) or is a type alias to a composite type
+      const isComposite = isCompositeType(field.type, schema);
+
+      // Use Input suffix for composite types
+      return isComposite ? `${typeName}Input` : typeName;
+    }
+  }
+}
+
+/**
+ * Checks if a type is composite (has sequence) or is a type alias to a composite type.
+ * Follows type alias chains to determine if the ultimate type is composite.
+ */
+function isCompositeType(typeName: string, schema: BinarySchema): boolean {
+  const visited = new Set<string>();
+  let currentType = typeName;
+
+  while (currentType && !visited.has(currentType)) {
+    visited.add(currentType);
+    const typeDef = schema.types[currentType];
+
+    if (!typeDef) {
+      // Not defined in schema - must be a primitive
+      return false;
+    }
+
+    if ("sequence" in typeDef) {
+      // Direct composite type with sequence
+      return true;
+    }
+
+    if ("type" in typeDef && typeof typeDef.type === "string") {
+      // Type alias - follow the reference
+      currentType = typeDef.type;
+    } else {
+      // Not a type alias, not a sequence - not composite
+      return false;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Maps a field to its Rust type
+ * The schema parameter is optional - when provided, composite types get Output suffix
+ */
+function mapFieldToRustType(field: Field, schema?: BinarySchema): string {
   switch (field.type) {
     case "uint8":
       return "u8";
@@ -1730,9 +2063,18 @@ function mapFieldToRustType(field: Field): string {
       const valueType = mapPrimitiveToRustType(valueTypeName);
       return `Option<${valueType}>`;
     }
-    default:
-      // Assume it's a type reference (nested struct)
-      return toRustTypeName(field.type);
+    default: {
+      // Assume it's a type reference (nested struct or type alias)
+      const typeName = toRustTypeName(field.type);
+      // If schema is provided, check if the type is composite
+      if (schema) {
+        const typeDef = schema.types[field.type];
+        const isComposite = typeDef && "sequence" in typeDef;
+        // Use Output suffix only for composite types
+        return isComposite ? `${typeName}Output` : typeName;
+      }
+      return typeName;
+    }
   }
 }
 
@@ -1754,6 +2096,37 @@ function mapPrimitiveToRustType(typeName: string): string {
     case "string": return "std::string::String";
     default: return toRustTypeName(typeName);
   }
+}
+
+/**
+ * Determines if a field should be included in the Input struct (for encoding)
+ * Input excludes computed and const fields - they are calculated during encoding
+ */
+function isInputField(field: Field): boolean {
+  const fieldAny = field as any;
+
+  // Exclude computed fields - they are calculated during encoding
+  // Note: Use loose equality (!=) to handle both undefined and null
+  // (Rust serde serializes Option::None as null in JSON)
+  if (fieldAny.computed != null) {
+    return false;
+  }
+
+  // Exclude const fields - they use schema-defined values
+  // Note: Use loose equality (!=) to handle both undefined and null
+  if (fieldAny.const != null) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Determines if a field should be included in the Output struct (from decoding)
+ * Output includes ALL fields (const, computed, and regular)
+ */
+function isOutputField(_field: Field): boolean {
+  return true;
 }
 
 // Rust reserved keywords that need r# prefix
