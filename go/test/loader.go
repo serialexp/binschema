@@ -23,12 +23,15 @@ type TestSuite struct {
 
 // TestCase represents a single test case within a suite
 type TestCase struct {
-	Description string        `json:"description"`
-	Value       interface{}   `json:"value"`
-	Bytes       []byte        `json:"bytes"`
-	Bits        []int         `json:"bits,omitempty"`
-	ChunkSizes  []int         `json:"chunkSizes,omitempty"`
-	Error       *string       `json:"error,omitempty"`
+	Description         string      `json:"description"`
+	Value               interface{} `json:"value"`
+	DecodedValue        interface{} `json:"decoded_value,omitempty"` // Expected value after decoding (may differ from input due to computed fields)
+	Bytes               []byte      `json:"bytes"`
+	Bits                []int       `json:"bits,omitempty"`
+	ChunkSizes          []int       `json:"chunkSizes,omitempty"`
+	Error               *string     `json:"error,omitempty"`
+	ShouldErrorOnEncode bool        `json:"should_error_on_encode,omitempty"`
+	ShouldErrorOnDecode bool        `json:"should_error_on_decode,omitempty"`
 }
 
 // LoadTestSuite loads a single test suite from a JSON file
@@ -46,8 +49,16 @@ func LoadTestSuite(path string) (*TestSuite, error) {
 	// Post-process to handle BigInt strings (e.g., "12345n" -> int64)
 	suite.TestCases = processBigIntInTestCases(suite.TestCases)
 
+	// Get schema's bit_order (default to "msb_first")
+	bitOrder := "msb_first"
+	if config, ok := suite.Schema["config"].(map[string]interface{}); ok {
+		if order, ok := config["bit_order"].(string); ok {
+			bitOrder = order
+		}
+	}
+
 	// Convert bits to bytes for test cases that use bit-level encoding
-	suite.TestCases = convertBitsToBytes(suite.TestCases)
+	suite.TestCases = convertBitsToBytes(suite.TestCases, bitOrder)
 
 	return &suite, nil
 }
@@ -84,6 +95,9 @@ func LoadAllTestSuites(rootDir string) ([]*TestSuite, error) {
 func processBigIntInTestCases(cases []TestCase) []TestCase {
 	for i := range cases {
 		cases[i].Value = processBigIntValue(cases[i].Value)
+		if cases[i].DecodedValue != nil {
+			cases[i].DecodedValue = processBigIntValue(cases[i].DecodedValue)
+		}
 	}
 	return cases
 }
@@ -124,18 +138,20 @@ func processBigIntValue(val interface{}) interface{} {
 
 // convertBitsToBytes converts test cases with `bits` field to `bytes` field
 // This is needed because the Go test harness compares bytes, not bits
-func convertBitsToBytes(cases []TestCase) []TestCase {
+func convertBitsToBytes(cases []TestCase, bitOrder string) []TestCase {
 	for i := range cases {
 		// If test case has bits but no bytes, convert bits to bytes
 		if len(cases[i].Bits) > 0 && len(cases[i].Bytes) == 0 {
-			cases[i].Bytes = bitsToBytes(cases[i].Bits)
+			cases[i].Bytes = bitsToBytes(cases[i].Bits, bitOrder)
 		}
 	}
 	return cases
 }
 
-// bitsToBytes converts a bit array to byte array (MSB first within each byte)
-func bitsToBytes(bits []int) []byte {
+// bitsToBytes converts a bit array to byte array respecting bit order
+// For MSB first: bit 0 of array goes to position 7 of first byte
+// For LSB first: bit 0 of array goes to position 0 of first byte
+func bitsToBytes(bits []int, bitOrder string) []byte {
 	if len(bits) == 0 {
 		return []byte{}
 	}
@@ -144,11 +160,16 @@ func bitsToBytes(bits []int) []byte {
 	numBytes := (len(bits) + 7) / 8
 	bytes := make([]byte, numBytes)
 
-	// Pack bits into bytes (MSB first)
+	// Pack bits into bytes according to bit order
 	for i, bit := range bits {
 		if bit != 0 {
 			byteIdx := i / 8
-			bitIdx := 7 - (i % 8) // MSB first
+			var bitIdx int
+			if bitOrder == "lsb_first" {
+				bitIdx = i % 8 // LSB first: bit 0 at position 0
+			} else {
+				bitIdx = 7 - (i % 8) // MSB first: bit 0 at position 7
+			}
 			bytes[byteIdx] |= 1 << bitIdx
 		}
 	}

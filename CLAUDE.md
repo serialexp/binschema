@@ -72,22 +72,25 @@ npm test -- --filter='uint8|uint16|uint32'     # Tests matching ANY of the patte
 npm test -- --failures                         # Only show test suites with failures
 DEBUG_TEST=1 npm test -- --filter=zip          # Debug zip tests with verbose output
 
-# Go test suite
+# Go test suite - USE MAKE COMMANDS (not raw go test)
 # Uses batched compilation for efficiency (single compilation, ~5-10s vs one-by-one, ~60s)
-cd go
-go test -v ./test                             # Run all tests with batched compilation
+make test-go                                  # Run all Go tests
+make test-go FILTER=primitives                # Run only tests matching 'primitives' (regex)
+make test-go FILTER='^uint8$'                 # Exact match using regex anchors
+make test-go REPORT=summary                   # Print overall statistics
+make test-go REPORT=failing-tests             # Show individual failing test cases
+make test-go FILTER=bit REPORT=summary        # Combine filter and report
+make test-go-debug FILTER=uint8               # Debug mode (saves generated code to go/test/tmp-go-debug/)
 
-# Test filtering and reporting flags (Go)
-TEST_FILTER=primitives go test -v ./test      # Run only tests matching 'primitives'
-TEST_FILTER=bit go test -v ./test             # Run only bitfield tests (bit_order, bitfield, single_bit, etc.)
-TEST_REPORT=summary go test -v ./test         # Print overall statistics
-TEST_REPORT=failed-suites go test -v ./test   # List only test suites with failures
-TEST_REPORT=passing-suites go test -v ./test  # List 100% passing test suites
-TEST_REPORT=failing-tests go test -v ./test   # Show individual failing test cases
-TEST_REPORT=json go test -v ./test            # JSON output for scripting
+# Available REPORT values:
+# - summary: Overall pass/fail statistics
+# - failed-suites: List only test suites with failures
+# - passing-suites: List 100% passing test suites
+# - failing-tests: Show individual failing test cases
+# - json: JSON output for scripting
 ```
 
-**⚠️ Important**: Please use the environment variable flags above for analyzing test results and filtering tests. Custom shell commands are fragile and hard to maintain. If you need a report format that doesn't exist, add it to `go/test/test_summary.go` and document it here.
+**⚠️ Important**: Always use `make test-go` commands instead of raw `go test` commands. The make targets handle the working directory and environment variables correctly. If you need a new report format, add it to `go/test/test_summary.go` and document it here.
 
 ### TypeScript Test Flags
 
@@ -527,8 +530,8 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
 
 If you need to inspect generated Go code:
 ```bash
-DEBUG_GENERATED=tmp-go cd go && go test -v ./test
-# Generated code will be in tmp-go/ directory instead of being deleted
+make test-go-debug FILTER=uint8
+# Generated code will be in go/test/tmp-go-debug/ directory instead of being deleted
 ```
 
 ## Important Constraints

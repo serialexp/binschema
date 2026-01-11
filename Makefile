@@ -8,12 +8,17 @@ test-ts:
 	bun test
 
 # Run Go tests with batched compilation
+# Usage: make test-go [FILTER=pattern] [REPORT=summary|failing-tests|failed-suites|passing-suites]
 test-go:
-	cd go && go test -v ./test
+	cd go && TEST_FILTER="$(FILTER)" TEST_REPORT="$(REPORT)" go test -v ./test
 
-# Run Go tests with filter (usage: make test-go-filter FILTER=primitives)
-test-go-filter:
-	cd go && TEST_FILTER=$(FILTER) go test -v ./test
+# Run Go tests summary
+test-go-summary:
+	cd go && TEST_REPORT=summary go test -v ./test
+
+# Run Go tests with debug output (saves generated code)
+test-go-debug:
+	cd go && DEBUG_GENERATED=tmp-go-debug TEST_FILTER="$(FILTER)" TEST_REPORT="$(REPORT)" go test -v ./test
 
 # Run Rust batch compilation tests
 test-rust:

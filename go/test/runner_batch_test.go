@@ -6,7 +6,7 @@ package test
 import (
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -22,12 +22,16 @@ func TestBinSchema(t *testing.T) {
 
 	t.Logf("Loaded %d test suites", len(suites))
 
-	// Support filtering by environment variable (e.g., TEST_FILTER=primitives)
+	// Support filtering by environment variable (e.g., TEST_FILTER=primitives or TEST_FILTER=^uint8$)
 	filter := os.Getenv("TEST_FILTER")
 	if filter != "" {
+		filterRegex, err := regexp.Compile(filter)
+		if err != nil {
+			t.Fatalf("Invalid TEST_FILTER regex %q: %v", filter, err)
+		}
 		var filtered []*TestSuite
 		for _, suite := range suites {
-			if strings.Contains(suite.Name, filter) {
+			if filterRegex.MatchString(suite.Name) {
 				filtered = append(filtered, suite)
 			}
 		}

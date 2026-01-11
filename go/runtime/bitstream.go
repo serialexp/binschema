@@ -8,6 +8,8 @@ package runtime
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"math"
 )
 
@@ -44,6 +46,14 @@ func NewBitStreamEncoder(bitOrder BitOrder) *BitStreamEncoder {
 	}
 }
 
+// Position returns the current byte position in the output stream
+func (e *BitStreamEncoder) Position() int {
+	if e.bitOffset > 0 {
+		return len(e.bytes) + 1
+	}
+	return len(e.bytes)
+}
+
 // Finish returns the encoded bytes, flushing any partial byte
 func (e *BitStreamEncoder) Finish() []byte {
 	// Flush partial byte if any
@@ -77,6 +87,17 @@ func (d *BitStreamDecoder) Position() int {
 	return d.byteOffset
 }
 
+// SkipBytes skips the specified number of bytes
+func (d *BitStreamDecoder) SkipBytes(n int) {
+	d.byteOffset += n
+}
+
+// Seek sets the current byte offset to an absolute position
+func (d *BitStreamDecoder) Seek(offset int) {
+	d.byteOffset = offset
+	d.bitOffset = 0 // Reset bit offset when seeking
+}
+
 // ReadUint8 reads an 8-bit unsigned integer
 func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 	if d.bitOffset == 0 {
@@ -95,7 +116,7 @@ func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 	// Not byte-aligned: read bit by bit (LSB first for byte values)
 	var result uint8
 	for i := 0; i < 8; i++ {
-		bit, err := d.readBit()
+		bit, err := d.ReadBit()
 		if err != nil {
 			return 0, err
 		}
@@ -105,8 +126,8 @@ func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 	return result, nil
 }
 
-// readBit reads a single bit
-func (d *BitStreamDecoder) readBit() (uint8, error) {
+// ReadBit reads a single bit
+func (d *BitStreamDecoder) ReadBit() (uint8, error) {
 	if d.byteOffset >= len(d.bytes) {
 		errCode := "INCOMPLETE_DATA"
 		d.LastErrorCode = &errCode
@@ -134,15 +155,29 @@ func (d *BitStreamDecoder) readBit() (uint8, error) {
 	return bit, nil
 }
 
-// ReadBits reads numBits and returns them as uint64 (MSB first within the value)
+// ReadBits reads numBits and returns the value respecting bit order setting
+// MSB first: First bit read is the MSB of the value
+// LSB first: First bit read is the LSB of the value
 func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
 	var result uint64
-	for i := numBits - 1; i >= 0; i-- {
-		bit, err := d.readBit()
-		if err != nil {
-			return 0, err
+	if d.bitOrder == LSBFirst {
+		// LSB first: first bit read is bit 0 of result
+		for i := 0; i < numBits; i++ {
+			bit, err := d.ReadBit()
+			if err != nil {
+				return 0, err
+			}
+			result |= uint64(bit) << i
 		}
-		result |= uint64(bit) << i
+	} else {
+		// MSB first: first bit read is bit (numBits-1) of result
+		for i := numBits - 1; i >= 0; i-- {
+			bit, err := d.ReadBit()
+			if err != nil {
+				return 0, err
+			}
+			result |= uint64(bit) << i
+		}
 	}
 	d.LastErrorCode = nil
 	return result, nil
@@ -157,13 +192,26 @@ func (e *BitStreamEncoder) WriteUint8(value uint8) {
 		// Not byte-aligned: write bit by bit (LSB first for byte values)
 		for i := 0; i < 8; i++ {
 			bit := (value >> i) & 1
-			e.writeBit(bit)
+			e.WriteBit(bit)
 		}
 	}
 }
 
-// writeBit writes a single bit
-func (e *BitStreamEncoder) writeBit(bit uint8) {
+// WriteBytes writes a slice of bytes to the encoder
+func (e *BitStreamEncoder) WriteBytes(data []byte) {
+	if e.bitOffset == 0 {
+		// Byte-aligned: append directly
+		e.bytes = append(e.bytes, data...)
+	} else {
+		// Not byte-aligned: write byte by byte
+		for _, b := range data {
+			e.WriteUint8(b)
+		}
+	}
+}
+
+// WriteBit writes a single bit
+func (e *BitStreamEncoder) WriteBit(bit uint8) {
 	if e.bitOrder == MSBFirst {
 		// MSB first: fill from left to right
 		e.currentByte |= (bit << (7 - e.bitOffset))
@@ -182,11 +230,22 @@ func (e *BitStreamEncoder) writeBit(bit uint8) {
 	}
 }
 
-// WriteBits writes numBits from value (MSB first within the value)
+// WriteBits writes numBits from value respecting bit order setting
+// MSB first: Write MSB of value first (video codecs, network protocols)
+// LSB first: Write LSB of value first (hardware bitfields)
 func (e *BitStreamEncoder) WriteBits(value uint64, numBits int) {
-	for i := numBits - 1; i >= 0; i-- {
-		bit := uint8((value >> i) & 1)
-		e.writeBit(bit)
+	if e.bitOrder == LSBFirst {
+		// LSB first: bit 0 of value goes to first bit position
+		for i := 0; i < numBits; i++ {
+			bit := uint8((value >> i) & 1)
+			e.WriteBit(bit)
+		}
+	} else {
+		// MSB first: bit (numBits-1) of value goes to first bit position
+		for i := numBits - 1; i >= 0; i-- {
+			bit := uint8((value >> i) & 1)
+			e.WriteBit(bit)
+		}
 	}
 }
 
@@ -288,6 +347,70 @@ func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
 	}
 	d.LastErrorCode = nil
 	return result, nil
+}
+
+// PeekUint8 reads an 8-bit unsigned integer without advancing the stream position
+func (d *BitStreamDecoder) PeekUint8() (uint8, error) {
+	// Save current position
+	savedByteOffset := d.byteOffset
+	savedBitOffset := d.bitOffset
+
+	// Read the value
+	val, err := d.ReadUint8()
+
+	// Restore position
+	d.byteOffset = savedByteOffset
+	d.bitOffset = savedBitOffset
+
+	return val, err
+}
+
+// PeekUint16 reads a 16-bit unsigned integer without advancing the stream position
+func (d *BitStreamDecoder) PeekUint16(endianness Endianness) (uint16, error) {
+	// Save current position
+	savedByteOffset := d.byteOffset
+	savedBitOffset := d.bitOffset
+
+	// Read the value
+	val, err := d.ReadUint16(endianness)
+
+	// Restore position
+	d.byteOffset = savedByteOffset
+	d.bitOffset = savedBitOffset
+
+	return val, err
+}
+
+// PeekUint32 reads a 32-bit unsigned integer without advancing the stream position
+func (d *BitStreamDecoder) PeekUint32(endianness Endianness) (uint32, error) {
+	// Save current position
+	savedByteOffset := d.byteOffset
+	savedBitOffset := d.bitOffset
+
+	// Read the value
+	val, err := d.ReadUint32(endianness)
+
+	// Restore position
+	d.byteOffset = savedByteOffset
+	d.bitOffset = savedBitOffset
+
+	return val, err
+}
+
+// PeekUint64 reads a 64-bit unsigned integer without advancing the stream position
+func (d *BitStreamDecoder) PeekUint64(endianness Endianness) (uint64, error) {
+	// Save current position
+	savedByteOffset := d.byteOffset
+	savedBitOffset := d.bitOffset
+
+	// Read the value
+	val, err := d.ReadUint64(endianness)
+
+	// Restore position
+	d.byteOffset = savedByteOffset
+	d.bitOffset = savedBitOffset
+
+	return val, err
 }
 
 // ReadInt8 reads an 8-bit signed integer (two's complement)
@@ -479,4 +602,269 @@ func (e *BitStreamEncoder) WriteFloat64(value float64, endianness Endianness) {
 	for i := 0; i < 8; i++ {
 		e.WriteUint8(buf[i])
 	}
+}
+
+// WriteVarlengthDER writes a variable-length integer using DER encoding
+// - Short form: 0x00-0x7F (values 0-127)
+// - Long form: 0x80+N followed by N bytes big-endian (values 128+)
+func (e *BitStreamEncoder) WriteVarlengthDER(value uint64) {
+	if value < 128 {
+		// Short form: single byte
+		e.WriteUint8(uint8(value))
+		return
+	}
+
+	// Long form: determine number of bytes needed
+	numBytes := 0
+	temp := value
+	for temp > 0 {
+		numBytes++
+		temp >>= 8
+	}
+
+	// Write length-of-length byte
+	e.WriteUint8(uint8(0x80 | numBytes))
+
+	// Write length bytes in big-endian order
+	for i := numBytes - 1; i >= 0; i-- {
+		e.WriteUint8(uint8((value >> (i * 8)) & 0xFF))
+	}
+}
+
+// VarlengthDERSize calculates the encoded size of a DER variable-length integer
+// - Short form (0-127): 1 byte
+// - Long form (128+): 1 + ceil(log256(value)) bytes
+func VarlengthDERSize(value uint64) int {
+	if value < 128 {
+		return 1
+	}
+
+	// Count bytes needed for the value
+	numBytes := 0
+	temp := value
+	for temp > 0 {
+		numBytes++
+		temp >>= 8
+	}
+
+	// 1 byte for 0x80+N, plus N bytes for value
+	return 1 + numBytes
+}
+
+// WriteVarlengthLEB128 writes a variable-length integer using LEB128 encoding
+// - MSB continuation bit, little-endian, 7 bits per byte
+// - Used in Protocol Buffers, WebAssembly, DWARF
+func (e *BitStreamEncoder) WriteVarlengthLEB128(value uint64) {
+	for {
+		b := uint8(value & 0x7F) // Get lower 7 bits
+		value >>= 7              // Shift right by 7 bits
+
+		if value != 0 {
+			b |= 0x80 // Set continuation bit
+		}
+
+		e.WriteUint8(b)
+
+		if value == 0 {
+			break
+		}
+	}
+}
+
+// WriteVarlengthEBML writes a variable-length integer using EBML VINT encoding
+// - Leading zeros indicate width, self-synchronizing
+// - Used in Matroska/WebM
+func (e *BitStreamEncoder) WriteVarlengthEBML(value uint64) {
+	// Determine width needed (including marker bit)
+	// 1 byte: 0-126 (7 bits data)
+	// 2 bytes: 127-16382 (14 bits data)
+	// 3 bytes: 16383-2097151 (21 bits data)
+	// etc.
+
+	width := 1
+	maxVal := uint64((1 << 7) - 2) // -2 because marker bit takes one value
+
+	for value > maxVal && width < 8 {
+		width++
+		maxVal = uint64((1 << (width * 7)) - 2)
+	}
+
+	// Set marker bit: leading zeros followed by 1
+	markerBit := uint64(1) << (width * 7)
+	encoded := markerBit | value
+
+	// Write bytes in big-endian order
+	for i := width - 1; i >= 0; i-- {
+		e.WriteUint8(uint8((encoded >> (i * 8)) & 0xFF))
+	}
+}
+
+// WriteVarlengthVLQ writes a variable-length integer using VLQ encoding (MIDI style)
+// - MSB-first (big-endian), 7 bits per byte, MSB is continuation bit
+// - Used in MIDI files, Git packfiles
+// - Max 4 bytes (28 bits), max value 0x0FFFFFFF
+func (e *BitStreamEncoder) WriteVarlengthVLQ(value uint64) {
+	// Collect bytes in reverse order (LSB first)
+	var bytes [4]uint8
+	numBytes := 0
+
+	// First byte (LSB) has continuation bit = 0
+	bytes[numBytes] = uint8(value & 0x7F)
+	numBytes++
+	value >>= 7
+
+	// Subsequent bytes have continuation bit = 1
+	for value > 0 && numBytes < 4 {
+		bytes[numBytes] = uint8((value & 0x7F) | 0x80)
+		numBytes++
+		value >>= 7
+	}
+
+	// Write bytes in reverse order (MSB first)
+	for i := numBytes - 1; i >= 0; i-- {
+		e.WriteUint8(bytes[i])
+	}
+}
+
+// ReadVarlengthDER reads a variable-length integer using DER encoding
+// - Short form: 0x00-0x7F (values 0-127)
+// - Long form: 0x80+N followed by N bytes big-endian (values 128+)
+func (d *BitStreamDecoder) ReadVarlengthDER() (uint64, error) {
+	firstByte, err := d.ReadUint8()
+	if err != nil {
+		return 0, err
+	}
+
+	if firstByte < 0x80 {
+		// Short form: single byte value
+		return uint64(firstByte), nil
+	}
+
+	// Long form: 0x80 + number of length bytes
+	numBytes := int(firstByte & 0x7F)
+
+	if numBytes == 0 {
+		return 0, fmt.Errorf("DER indefinite length (0x80) not supported")
+	}
+
+	if numBytes > 8 {
+		return 0, fmt.Errorf("DER length too large: %d bytes (max 8 supported)", numBytes)
+	}
+
+	// Read length bytes in big-endian order
+	var value uint64
+	for i := 0; i < numBytes; i++ {
+		b, err := d.ReadUint8()
+		if err != nil {
+			return 0, err
+		}
+		value = (value << 8) | uint64(b)
+	}
+
+	return value, nil
+}
+
+// ReadVarlengthLEB128 reads a variable-length integer using LEB128 encoding
+// - MSB continuation bit, little-endian, 7 bits per byte
+// - Used in Protocol Buffers, WebAssembly, DWARF
+func (d *BitStreamDecoder) ReadVarlengthLEB128() (uint64, error) {
+	var result uint64
+	var shift uint
+
+	for {
+		b, err := d.ReadUint8()
+		if err != nil {
+			return 0, err
+		}
+
+		value := uint64(b & 0x7F) // Get lower 7 bits
+		result |= value << shift
+		shift += 7
+
+		if (b & 0x80) == 0 {
+			// No continuation bit, we're done
+			break
+		}
+
+		if shift > 64 {
+			return 0, fmt.Errorf("LEB128 value too large (exceeds 64 bits)")
+		}
+	}
+
+	return result, nil
+}
+
+// ReadVarlengthEBML reads a variable-length integer using EBML VINT encoding
+// - Leading zeros indicate width, self-synchronizing
+// - Used in Matroska/WebM
+func (d *BitStreamDecoder) ReadVarlengthEBML() (uint64, error) {
+	firstByte, err := d.ReadUint8()
+	if err != nil {
+		return 0, err
+	}
+
+	// Find width by counting leading zeros
+	width := 1
+	mask := uint8(0x80)
+
+	for width <= 8 && (firstByte&mask) == 0 {
+		width++
+		mask >>= 1
+	}
+
+	if width > 8 {
+		return 0, fmt.Errorf("EBML VINT: no marker bit found in first byte")
+	}
+
+	// Start with first byte, removing marker bit
+	value := uint64(firstByte & (mask - 1))
+
+	// Read remaining bytes
+	for i := 1; i < width; i++ {
+		b, err := d.ReadUint8()
+		if err != nil {
+			return 0, err
+		}
+		value = (value << 8) | uint64(b)
+	}
+
+	return value, nil
+}
+
+// ReadVarlengthVLQ reads a variable-length integer using VLQ encoding (MIDI style)
+// - MSB-first (big-endian), 7 bits per byte, MSB is continuation bit
+// - Used in MIDI files, Git packfiles
+// - Max 4 bytes (28 bits), max value 0x0FFFFFFF
+func (d *BitStreamDecoder) ReadVarlengthVLQ() (uint64, error) {
+	var result uint64
+	bytesRead := 0
+
+	for {
+		if bytesRead >= 4 {
+			return 0, fmt.Errorf("VLQ value too large (exceeds 4 bytes)")
+		}
+
+		b, err := d.ReadUint8()
+		if err != nil {
+			return 0, err
+		}
+		bytesRead++
+
+		// Add 7 bits of data (MSB-first, so shift existing bits left)
+		result = (result << 7) | uint64(b&0x7F)
+
+		// Check continuation bit
+		if (b & 0x80) == 0 {
+			// No continuation bit, we're done
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// CRC32 computes the CRC32 checksum (IEEE polynomial) of the given data.
+// This matches the CRC32 implementation used by ZIP and other formats.
+func CRC32(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
 }
