@@ -57,7 +57,8 @@ function getTypesNeedingContext(schema: BinarySchema): Set<string> {
 
 /**
  * Check if any type in the schema has computed fields with parent references (../)
- * that require the reflect package (length_of/count_of use reflect for the default slice case)
+ * that require the reflect package (length_of/count_of use reflect for the default slice case,
+ * sum_of_sizes and sum_of_type_sizes always use reflect)
  * This is used to determine if we need to import the reflect package
  */
 function hasParentReferenceComputedFields(schema: BinarySchema): boolean {
@@ -67,6 +68,13 @@ function hasParentReferenceComputedFields(schema: BinarySchema): boolean {
     for (const field of typeDef.sequence) {
       const fieldAny = field as any;
       const computed = fieldAny.computed;
+      if (!computed) continue;
+
+      // sum_of_sizes and sum_of_type_sizes always use reflect
+      if (computed.type === "sum_of_sizes" || computed.type === "sum_of_type_sizes") {
+        return true;
+      }
+
       if (!computed?.target?.startsWith("../")) continue;
 
       // length_of and count_of require reflect for the default slice case
@@ -138,11 +146,12 @@ function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: st
 
 /**
  * Parse a corresponding selector pattern like "../sections[corresponding<FileData>]"
- * Returns the array path and filter type
+ * or "../sections[corresponding<FileData>].payload" (with remaining field access)
+ * Returns the array path, filter type, and any remaining path after the selector
  */
-function parseCorrespondingTarget(target: string): { levelsUp: number; arrayPath: string; filterType: string } | null {
-  // Match patterns like ../sections[corresponding<FileData>]
-  const match = target.match(/^((?:\.\.\/)+)([^\[]+)\[corresponding<(\w+)>\]$/);
+function parseCorrespondingTarget(target: string): { levelsUp: number; arrayPath: string; filterType: string; remainingPath: string } | null {
+  // Match patterns like ../sections[corresponding<FileData>] or ../blocks[corresponding<DataBlock>].payload
+  const match = target.match(/^((?:\.\.\/)+)([^\[]+)\[corresponding<(\w+)>\](\..*)?$/);
   if (!match) return null;
 
   const parentPart = match[1];
@@ -154,7 +163,8 @@ function parseCorrespondingTarget(target: string): { levelsUp: number; arrayPath
   return {
     levelsUp,
     arrayPath: match[2],
-    filterType: match[3]
+    filterType: match[3],
+    remainingPath: match[4] || "" // e.g., ".payload" or ""
   };
 }
 
@@ -221,6 +231,35 @@ function detectArraysNeedingCorrespondingTracking(schema: BinarySchema): Map<str
         const existing = result.get(correspondingInfo.arrayPath) || new Set<string>();
         existing.add(correspondingInfo.filterType);
         result.set(correspondingInfo.arrayPath, existing);
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Detect which types use corresponding selectors in their computed fields.
+ * Returns a set of type names that need array iteration context when encoded.
+ */
+function detectTypesUsingCorrespondingSelectors(schema: BinarySchema): Set<string> {
+  const result = new Set<string>();
+
+  for (const typeName in schema.types) {
+    const typeDef = schema.types[typeName];
+    if (!("sequence" in typeDef)) continue;
+
+    for (const field of typeDef.sequence) {
+      const fieldAny = field as any;
+      if (!fieldAny.computed) continue;
+
+      const target = fieldAny.computed.target;
+      if (!target) continue;
+
+      const correspondingInfo = parseCorrespondingTarget(target);
+      if (correspondingInfo) {
+        result.add(typeName);
+        break; // Only need to add once per type
       }
     }
   }
@@ -463,6 +502,18 @@ function generateComputedValue(
       return `runtime.CRC32(m.${goFieldName})`;
     }
 
+    case "sum_of_sizes": {
+      // sum_of_sizes always uses parent references (targets array with ../ paths)
+      // Will be handled by generateComputedFieldEncoding
+      return `__PARENT_REF__`;
+    }
+
+    case "sum_of_type_sizes": {
+      // sum_of_type_sizes always uses parent reference (target with ../ path)
+      // Will be handled by generateComputedFieldEncoding
+      return `__PARENT_REF__`;
+    }
+
     default:
       throw new Error(`Unsupported computed field type: ${computedType}`);
   }
@@ -544,10 +595,15 @@ function generateComputedFieldEncoding(
       } else {
         lines.push(`${indent}${computedVarName}Pos, ${computedVarName}Ok := ctx.GetLastPosition("${positionKey}")`);
       }
-      lines.push(`${indent}if !${computedVarName}Ok {`);
-      lines.push(`${indent}\treturn nil, fmt.Errorf("position not found for ${selector}<${filterType}> in ${arrayPath}")`);
+
+      // Use sentinel value when position not found (empty array case)
+      const sentinel = getSentinelValue(goType);
+      lines.push(`${indent}var ${computedVarName} ${goType}`);
+      lines.push(`${indent}if ${computedVarName}Ok {`);
+      lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}Pos)`);
+      lines.push(`${indent}} else {`);
+      lines.push(`${indent}\t${computedVarName} = ${sentinel} // Sentinel: not found`);
       lines.push(`${indent}}`);
-      lines.push(`${indent}${computedVarName} := ${goType}(${computedVarName}Pos)`);
 
       // Generate the write code
       return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
@@ -595,6 +651,224 @@ function generateComputedFieldEncoding(
       // Generate the write code
       return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
     }
+  }
+
+  // Handle sum_of_sizes early - it has its own parent field lookups
+  if (computedType === "sum_of_sizes") {
+    const targets: string[] = computed.targets || [];
+    lines.push(`${indent}// sum_of_sizes: Sum encoded sizes of ${targets.length} target field(s)`);
+    lines.push(`${indent}var ${computedVarName} ${goType}`);
+
+    for (const targetPath of targets) {
+      const pathParentRef = parseParentPath(targetPath);
+      if (!pathParentRef) {
+        throw new Error(`sum_of_sizes target '${targetPath}' is not a parent reference`);
+      }
+
+      const { levelsUp, fieldName: targetFieldName } = pathParentRef;
+      const targetVar = `${toGoFieldName(field.name)}_${toGoFieldName(targetFieldName)}_raw`;
+      const sizeVar = `${toGoFieldName(field.name)}_${toGoFieldName(targetFieldName)}_size`;
+
+      lines.push(`${indent}// Get size of ${targetPath}`);
+      lines.push(`${indent}${targetVar}, ${targetVar}Ok := ctx.GetParentField(${levelsUp}, "${targetFieldName}")`);
+      lines.push(`${indent}if !${targetVar}Ok {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("parent field '${targetFieldName}' not found for sum_of_sizes")`);
+      lines.push(`${indent}}`);
+
+      // Compute size based on type
+      lines.push(`${indent}var ${sizeVar} int`);
+      lines.push(`${indent}switch v := ${targetVar}.(type) {`);
+      lines.push(`${indent}case []byte:  // []byte and []uint8 are the same type in Go`);
+      lines.push(`${indent}\t${sizeVar} = len(v)`);
+      lines.push(`${indent}case string:`);
+      lines.push(`${indent}\t${sizeVar} = len([]byte(v))`);
+      const rvVar = `${sizeVar}_rv`;
+      lines.push(`${indent}default:`);
+      lines.push(`${indent}\t// For slices and arrays, use reflection`);
+      lines.push(`${indent}\t${rvVar} := reflect.ValueOf(v)`);
+      lines.push(`${indent}\tif ${rvVar}.Kind() == reflect.Slice || ${rvVar}.Kind() == reflect.Array {`);
+      lines.push(`${indent}\t\t// Sum the size of each element`);
+      lines.push(`${indent}\t\tfor ${sizeVar}_i := 0; ${sizeVar}_i < ${rvVar}.Len(); ${sizeVar}_i++ {`);
+      lines.push(`${indent}\t\t\t${sizeVar}_elem := ${rvVar}.Index(${sizeVar}_i).Interface()`);
+      lines.push(`${indent}\t\t\tif sizable, ok := ${sizeVar}_elem.(interface{ CalculateSize() int }); ok {`);
+      lines.push(`${indent}\t\t\t\t${sizeVar} += sizable.CalculateSize()`);
+      lines.push(`${indent}\t\t\t} else {`);
+      lines.push(`${indent}\t\t\t\t// Primitive types - estimate based on type`);
+      lines.push(`${indent}\t\t\t\tswitch ${rvVar}.Index(${sizeVar}_i).Kind() {`);
+      lines.push(`${indent}\t\t\t\tcase reflect.Uint8: ${sizeVar} += 1`);
+      lines.push(`${indent}\t\t\t\tcase reflect.Uint16: ${sizeVar} += 2`);
+      lines.push(`${indent}\t\t\t\tcase reflect.Uint32: ${sizeVar} += 4`);
+      lines.push(`${indent}\t\t\t\tcase reflect.Uint64: ${sizeVar} += 8`);
+      lines.push(`${indent}\t\t\t\tdefault: ${sizeVar} += 1`);
+      lines.push(`${indent}\t\t\t\t}`);
+      lines.push(`${indent}\t\t\t}`);
+      lines.push(`${indent}\t\t}`);
+      lines.push(`${indent}\t} else if sizable, ok := v.(interface{ CalculateSize() int }); ok {`);
+      lines.push(`${indent}\t\t${sizeVar} = sizable.CalculateSize()`);
+      lines.push(`${indent}\t}`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}${computedVarName} += ${goType}(${sizeVar})`);
+    }
+
+    // Generate the write code and return early
+    return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
+  }
+
+  // Handle sum_of_type_sizes early - it has its own parent field lookups
+  if (computedType === "sum_of_type_sizes") {
+    const elementType = computed.element_type || "";
+    const goElementType = toGoTypeName(elementType);
+    lines.push(`${indent}// sum_of_type_sizes: Sum encoded sizes of ${elementType} elements in ${target}`);
+    lines.push(`${indent}var ${computedVarName} ${goType}`);
+
+    // Parse the parent reference to get the array
+    const arrayParentRef = parseParentPath(target);
+    if (!arrayParentRef) {
+      throw new Error(`sum_of_type_sizes target '${target}' is not a parent reference`);
+    }
+
+    const { levelsUp, fieldName: arrayFieldName } = arrayParentRef;
+    const arrayVar = `${toGoFieldName(field.name)}_array_raw`;
+
+    lines.push(`${indent}${arrayVar}, ${arrayVar}Ok := ctx.GetParentField(${levelsUp}, "${arrayFieldName}")`);
+    lines.push(`${indent}if !${arrayVar}Ok {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("parent field '${arrayFieldName}' not found for sum_of_type_sizes")`);
+    lines.push(`${indent}}`);
+
+    // Iterate array and sum sizes of matching elements
+    const rvVar = `${toGoFieldName(field.name)}_rv`;
+    lines.push(`${indent}// Iterate array and sum sizes of ${elementType} elements`);
+    lines.push(`${indent}${rvVar} := reflect.ValueOf(${arrayVar})`);
+    lines.push(`${indent}if ${rvVar}.Kind() == reflect.Slice || ${rvVar}.Kind() == reflect.Array {`);
+    lines.push(`${indent}\tfor ${toGoFieldName(field.name)}_i := 0; ${toGoFieldName(field.name)}_i < ${rvVar}.Len(); ${toGoFieldName(field.name)}_i++ {`);
+    lines.push(`${indent}\t\t${toGoFieldName(field.name)}_elem := ${rvVar}.Index(${toGoFieldName(field.name)}_i).Interface()`);
+    lines.push(`${indent}\t\t// Check if element matches target type`);
+    lines.push(`${indent}\t\tif typed, ok := ${toGoFieldName(field.name)}_elem.(*${goElementType}); ok {`);
+    lines.push(`${indent}\t\t\t${computedVarName} += ${goType}(typed.CalculateSize())`);
+    lines.push(`${indent}\t\t} else if typed, ok := ${toGoFieldName(field.name)}_elem.(${goElementType}); ok {`);
+    lines.push(`${indent}\t\t\t${computedVarName} += ${goType}(typed.CalculateSize())`);
+    lines.push(`${indent}\t\t}`);
+    lines.push(`${indent}\t}`);
+    lines.push(`${indent}}`);
+
+    // Generate the write code and return early
+    return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
+  }
+
+  // Handle corresponding selectors with field access (e.g., ../blocks[corresponding<DataBlock>].payload)
+  const correspondingWithFieldInfo = parseCorrespondingTarget(target);
+  if (correspondingWithFieldInfo && correspondingWithFieldInfo.remainingPath) {
+    const { levelsUp, arrayPath, filterType, remainingPath } = correspondingWithFieldInfo;
+    const goFilterType = toGoTypeName(filterType);
+    // Extract field name from remaining path (e.g., ".payload" -> "Payload")
+    const fieldAccess = remainingPath.slice(1); // Remove leading "."
+    const goFieldAccess = toGoFieldName(fieldAccess);
+
+    lines.push(`${indent}// Corresponding correlation with field access: ${target}`);
+    lines.push(`${indent}// Get the corresponding ${filterType} from ${arrayPath}, then access ${remainingPath}`);
+
+    // Check for same-array vs cross-array correlation
+    lines.push(`${indent}${computedVarName}Iter, ${computedVarName}IterOk := ctx.GetArrayIteration("${arrayPath}")`);
+    lines.push(`${indent}var ${computedVarName}CorrelationIdx int`);
+    lines.push(`${indent}if ${computedVarName}IterOk {`);
+    lines.push(`${indent}\t// Same-array correlation: use type occurrence index`);
+    if (containingTypeName) {
+      lines.push(`${indent}\t${computedVarName}TypeIdx := ctx.GetTypeIndex("${arrayPath}", "${containingTypeName}")`);
+      lines.push(`${indent}\tif ${computedVarName}TypeIdx == 0 {`);
+      lines.push(`${indent}\t\treturn nil, fmt.Errorf("type occurrence index not found for ${containingTypeName} in ${arrayPath}")`);
+      lines.push(`${indent}\t}`);
+      lines.push(`${indent}\t${computedVarName}CorrelationIdx = ${computedVarName}TypeIdx - 1 // Counter was incremented before encoding`);
+    } else {
+      lines.push(`${indent}\t${computedVarName}CorrelationIdx = ${computedVarName}Iter.Index`);
+    }
+    lines.push(`${indent}} else {`);
+    lines.push(`${indent}\t// Cross-array correlation: use current array index from any containing array`);
+    lines.push(`${indent}\t${computedVarName}AnyIter, ${computedVarName}AnyIterOk := ctx.GetAnyArrayIteration()`);
+    lines.push(`${indent}\tif !${computedVarName}AnyIterOk {`);
+    lines.push(`${indent}\t\treturn nil, fmt.Errorf("no array iteration context found for cross-array correlation to ${arrayPath}")`);
+    lines.push(`${indent}\t}`);
+    lines.push(`${indent}\t${computedVarName}CorrelationIdx = ${computedVarName}AnyIter.Index`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}_ = ${computedVarName}Iter // May be nil in cross-array case`)
+
+    // Get the array from parent context by searching all parents (like TypeScript)
+    lines.push(`${indent}// Find the target array in parent context (search through all parents)`);
+    lines.push(`${indent}${computedVarName}ArrayRaw, ${computedVarName}ArrayOk := ctx.FindParentField("${arrayPath}")`);
+    lines.push(`${indent}if !${computedVarName}ArrayOk {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("array '${arrayPath}' not found in parent context")`);
+    lines.push(`${indent}}`);
+
+    // Iterate array to find the nth occurrence of filterType
+    lines.push(`${indent}${computedVarName}Rv := reflect.ValueOf(${computedVarName}ArrayRaw)`);
+    lines.push(`${indent}var ${computedVarName}TargetItem *${goFilterType}`);
+    lines.push(`${indent}${computedVarName}OccurrenceCount := 0`);
+    lines.push(`${indent}for ${computedVarName}i := 0; ${computedVarName}i < ${computedVarName}Rv.Len(); ${computedVarName}i++ {`);
+    lines.push(`${indent}\t${computedVarName}Elem := ${computedVarName}Rv.Index(${computedVarName}i).Interface()`);
+    lines.push(`${indent}\tif typed, ok := ${computedVarName}Elem.(*${goFilterType}); ok {`);
+    lines.push(`${indent}\t\tif ${computedVarName}OccurrenceCount == ${computedVarName}CorrelationIdx {`);
+    lines.push(`${indent}\t\t\t${computedVarName}TargetItem = typed`);
+    lines.push(`${indent}\t\t\tbreak`);
+    lines.push(`${indent}\t\t}`);
+    lines.push(`${indent}\t\t${computedVarName}OccurrenceCount++`);
+    lines.push(`${indent}\t}`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}if ${computedVarName}TargetItem == nil {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("corresponding ${filterType} at index %d not found in ${arrayPath}", ${computedVarName}CorrelationIdx)`);
+    lines.push(`${indent}}`);
+
+    // Access the field and compute based on type
+    lines.push(`${indent}// Access ${remainingPath} from the target item`);
+    const targetFieldAccess = `${computedVarName}TargetItem.${goFieldAccess}`;
+
+    // Generate code based on computed type
+    switch (computedType) {
+      case "length_of":
+        lines.push(`${indent}var ${computedVarName} ${goType}`);
+        lines.push(`${indent}${computedVarName}FieldRv := reflect.ValueOf(${targetFieldAccess})`);
+        lines.push(`${indent}if ${computedVarName}FieldRv.Kind() == reflect.Slice || ${computedVarName}FieldRv.Kind() == reflect.Array {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}FieldRv.Len())`);
+        lines.push(`${indent}} else if ${computedVarName}FieldRv.Kind() == reflect.String {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}FieldRv.Len())`);
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}\t// Handle scalar types`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}FieldRv.Uint())`);
+        lines.push(`${indent}}`);
+        break;
+
+      case "count_of":
+        lines.push(`${indent}var ${computedVarName} ${goType}`);
+        lines.push(`${indent}${computedVarName}FieldRv := reflect.ValueOf(${targetFieldAccess})`);
+        lines.push(`${indent}if ${computedVarName}FieldRv.Kind() == reflect.Slice || ${computedVarName}FieldRv.Kind() == reflect.Array {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}FieldRv.Len())`);
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}FieldRv.Uint())`);
+        lines.push(`${indent}}`);
+        break;
+
+      case "crc32_of":
+        // CRC32 of the field value from the corresponding item
+        lines.push(`${indent}var ${computedVarName} ${goType}`);
+        lines.push(`${indent}${computedVarName}FieldVal := ${targetFieldAccess}`);
+        lines.push(`${indent}if byteSlice, ok := ${computedVarName}FieldVal.([]byte); ok {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(runtime.CRC32(byteSlice))`);
+        lines.push(`${indent}} else if uint8Slice, ok := ${computedVarName}FieldVal.([]uint8); ok {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(runtime.CRC32(uint8Slice))`);
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}\t// For other types, try to encode to bytes first`);
+        lines.push(`${indent}\tif encoder, ok := ${computedVarName}FieldVal.(interface{ Encode() ([]byte, error) }); ok {`);
+        lines.push(`${indent}\t\tif bytes, err := encoder.Encode(); err == nil {`);
+        lines.push(`${indent}\t\t\t${computedVarName} = ${goType}(runtime.CRC32(bytes))`);
+        lines.push(`${indent}\t\t}`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}}`);
+        break;
+
+      default:
+        lines.push(`${indent}// Unsupported computed type '${computedType}' with corresponding field access`);
+        lines.push(`${indent}var ${computedVarName} ${goType} = 0`);
+    }
+
+    return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
   }
 
   // For other cases, use parent field lookup
@@ -747,10 +1021,19 @@ function generateComputedFieldEncoding(
         }
         lines.push(`${indent}${computedVarName} := ${goType}(${computedVarName}Pos)`);
       } else {
-        // Regular parent reference - use current encoder position
-        lines.push(`${indent}// position_of with parent reference - computing from current position`);
-        lines.push(`${indent}_ = ${computedVarName}Raw // Parent field position tracking not yet implemented`);
-        lines.push(`${indent}${computedVarName} := ${goType}(encoder.Position())`);
+        // Regular parent reference - position is current position + size of current field
+        // The target field starts right after this struct in the parent, so we need:
+        // current position + remaining bytes in this struct (which is just this field's size)
+        const fieldSize = getStaticFieldSize(field);
+        lines.push(`${indent}// position_of with parent reference - target starts after this field`);
+        lines.push(`${indent}_ = ${computedVarName}Raw // Target field position computed from current offset`);
+        if (fieldSize > 0) {
+          lines.push(`${indent}${computedVarName} := ${goType}(encoder.Position() + ${fieldSize})`);
+        } else {
+          // Variable-size field - this shouldn't normally happen for position_of, but handle gracefully
+          lines.push(`${indent}// WARNING: position_of with variable-size field - using current position`);
+          lines.push(`${indent}${computedVarName} := ${goType}(encoder.Position())`);
+        }
       }
       break;
     }
@@ -1060,10 +1343,12 @@ export function generateGo(
     // Check if this is a composite type (has sequence) or type alias
     if ("sequence" in typeDef) {
       // Composite type with fields
-      lines.push(...generateStruct(name, typeDef.sequence));
+      const typeDefAny = typeDef as any;
+      const instances = typeDefAny.instances || [];
+      lines.push(...generateStruct(name, typeDef.sequence, instances, schema));
       lines.push(...generateEncodeMethod(name, typeDef.sequence, defaultEndianness, defaultBitOrder, schema));
       lines.push(...generateCalculateSizeMethod(name, typeDef.sequence, schema));
-      lines.push(...generateDecodeFunction(name, typeDef.sequence, defaultEndianness, schema, defaultBitOrder));
+      lines.push(...generateDecodeFunction(name, typeDef.sequence, defaultEndianness, schema, defaultBitOrder, instances));
     } else if ("type" in typeDef) {
       // Type alias or discriminated union
       if ((typeDef as any).type === "discriminated_union") {
@@ -1227,9 +1512,38 @@ function isPrimitiveType(type: string): boolean {
 }
 
 /**
+ * Gets the Go type for an instance field
+ */
+function getInstanceFieldGoType(instance: any, schema: BinarySchema): string {
+  const instanceType = instance.type;
+
+  // Handle inline discriminated union
+  if (typeof instanceType === "object" && instanceType.discriminator && instanceType.variants) {
+    // For inline discriminated unions, we need an interface type or a wrapper struct
+    // For now, use interface{} and let the decoder handle variant resolution
+    return "interface{}";
+  }
+
+  // Simple type reference - look it up in the schema
+  const typeDef = schema.types[instanceType];
+  if (!typeDef) {
+    // Assume it's a valid type reference
+    return `*${instanceType}`;
+  }
+
+  // Check if it's a discriminated union type
+  if ("type" in typeDef && (typeDef as any).type === "discriminated_union") {
+    return instanceType; // Interface type
+  }
+
+  // Regular struct type
+  return `*${instanceType}`;
+}
+
+/**
  * Generates a Go struct definition
  */
-function generateStruct(name: string, fields: Field[]): string[] {
+function generateStruct(name: string, fields: Field[], instances?: any[], schema?: BinarySchema): string[] {
   const lines: string[] = [];
 
   // First, generate any inline bitfield struct types
@@ -1249,6 +1563,38 @@ function generateStruct(name: string, fields: Field[]): string[] {
     const goType = mapFieldToGoType(field, name);
     const fieldName = toGoFieldName(field.name);
     lines.push(`\t${fieldName} ${goType}`);
+  }
+
+  // Add instance fields (position-based lazy fields)
+  if (instances && instances.length > 0) {
+    for (const instance of instances) {
+      const fieldName = toGoFieldName(instance.name);
+      // Instance fields are eagerly loaded in Go (no lazy getters)
+      // The type depends on whether it's a simple type ref or inline union
+      const instanceType = instance.type;
+      let goType: string;
+
+      if (typeof instanceType === "object" && instanceType.discriminator && instanceType.variants) {
+        // Inline discriminated union - use interface{} for now
+        goType = "interface{}";
+      } else {
+        // Check if the type is a discriminated union (interface) in the schema
+        const typeDef = schema?.types[instanceType];
+        const isDiscriminatedUnion =
+          typeDef && ("type" in typeDef && (typeDef as any).type === "discriminated_union") ||
+          (typeDef && "variants" in typeDef && "discriminator" in typeDef);
+
+        if (isDiscriminatedUnion) {
+          // Discriminated unions are Go interfaces, don't use pointer
+          goType = instanceType;
+        } else {
+          // Regular struct type - use pointer
+          goType = `*${instanceType}`;
+        }
+      }
+
+      lines.push(`\t${fieldName} ${goType}`);
+    }
   }
 
   lines.push(`}`);
@@ -1486,7 +1832,8 @@ function generateEncodeMethod(name: string, fields: Field[], defaultEndianness: 
 
   // Add pre-pass for array fields that need position tracking
   if (schema) {
-    for (const field of fields) {
+    for (let fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+      const field = fields[fieldIndex];
       if (field.type !== "array") continue;
       const fieldAny = field as any;
       const items = fieldAny.items;
@@ -1500,8 +1847,34 @@ function generateEncodeMethod(name: string, fields: Field[], defaultEndianness: 
       const goFieldName = toGoFieldName(field.name);
       const isChoiceArray = items.type === "choice";
 
+      // Calculate initial offset as sum of sizes of all fields BEFORE this array field
+      let staticOffset = 0;
+      const dynamicOffsetParts: string[] = [];
+      for (let i = 0; i < fieldIndex; i++) {
+        const precedingField = fields[i];
+        const fieldSize = getStaticFieldSize(precedingField, schema);
+        if (fieldSize > 0) {
+          staticOffset += fieldSize;
+        } else {
+          // Variable-size field - need to compute dynamically
+          const goName = toGoFieldName(precedingField.name);
+          dynamicOffsetParts.push(`m.${goName}.CalculateSize()`);
+        }
+      }
+      // Build the offset expression
+      let initialOffsetCode: string;
+      if (staticOffset === 0 && dynamicOffsetParts.length === 0) {
+        initialOffsetCode = "encoder.Position()";
+      } else if (dynamicOffsetParts.length === 0) {
+        initialOffsetCode = `${staticOffset}`;
+      } else if (staticOffset === 0) {
+        initialOffsetCode = dynamicOffsetParts.join(" + ");
+      } else {
+        initialOffsetCode = `${staticOffset} + ${dynamicOffsetParts.join(" + ")}`;
+      }
+
       lines.push(`\t// Pre-pass: compute positions for ${field.name} array (first/last selectors)`);
-      lines.push(`\t${field.name}_offset := encoder.Position()`);
+      lines.push(`\t${field.name}_offset := ${initialOffsetCode}`);
 
       // Account for length prefix if present
       const kind = fieldAny.kind;
@@ -2003,9 +2376,231 @@ function getPrimitiveSizeForType(typeName: string): number {
 }
 
 /**
+ * Generates code to resolve a position expression for instance fields
+ */
+function generatePositionResolution(position: number | string, indent: string): string[] {
+  const lines: string[] = [];
+
+  if (typeof position === "number") {
+    if (position < 0) {
+      // Negative position - from EOF
+      lines.push(`${indent}position := len(decoder.Bytes()) + (${position})`);
+    } else {
+      // Positive position - absolute
+      lines.push(`${indent}position := ${position}`);
+    }
+  } else {
+    // Field reference - need to resolve the path
+    // Handle dotted paths like "header.offset" or "end_record.dir_offset"
+    const parts = position.split(".");
+
+    if (parts.length === 1) {
+      // Simple field reference like "data_offset"
+      const fieldName = toGoFieldName(parts[0]);
+      lines.push(`${indent}position := int(result.${fieldName})`);
+    } else {
+      // Nested path like "end_record.dir_offset" or "_root.end_record.num_files"
+      // Build the access path
+      let accessPath = "result";
+      for (const part of parts) {
+        if (part === "_root") {
+          // _root refers to the root object, which in this context is still result
+          // since we're in the root decode function
+          accessPath = "result";
+        } else {
+          accessPath += `.${toGoFieldName(part)}`;
+        }
+      }
+      lines.push(`${indent}position := int(${accessPath})`);
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Generates code to decode instance fields using seek
+ * @param rootFields - The sequence fields of the root/containing type (for _root.* references)
+ */
+function generateInstanceFieldDecoding(
+  instances: any[],
+  schema: BinarySchema,
+  defaultEndianness: string,
+  indent: string,
+  rootFields?: Field[]
+): string[] {
+  const lines: string[] = [];
+
+  if (!instances || instances.length === 0) {
+    return lines;
+  }
+
+  lines.push(`${indent}// Decode instance fields (position-based)`);
+  lines.push(`${indent}savedPosition := decoder.Position()`);
+  lines.push(``);
+
+  // Track decoded instance fields so subsequent instances can reference them
+  // Format: { name: string, typeName: string }
+  const decodedInstanceFields: { name: string; typeName: string }[] = [];
+
+  for (const instance of instances) {
+    const fieldName = toGoFieldName(instance.name);
+    const instanceType = instance.type;
+
+    // Use a scoped block for each instance field to allow variable shadowing
+    lines.push(`${indent}// Instance field: ${instance.name}`);
+    lines.push(`${indent}{`);
+
+    // Resolve position (inside block to avoid redeclaration errors)
+    lines.push(...generatePositionResolution(instance.position, indent + "\t"));
+
+    // Validate alignment if specified
+    if (instance.alignment && instance.alignment > 1) {
+      const alignment = instance.alignment;
+      lines.push(`${indent}\tif position % ${alignment} != 0 {`);
+      lines.push(`${indent}\t\treturn nil, fmt.Errorf("Position %d is not aligned to ${alignment} bytes (%d %% ${alignment} = %d)", position, position, position % ${alignment})`);
+      lines.push(`${indent}\t}`);
+    }
+
+    // Seek to position
+    lines.push(`${indent}\tdecoder.Seek(position)`);
+
+    // Decode the type at that position
+    if (typeof instanceType === "object" && instanceType.discriminator && instanceType.variants) {
+      // Inline discriminated union
+      lines.push(...generateInlineDiscriminatedUnionDecode(
+        instanceType,
+        `result.${fieldName}`,
+        schema,
+        defaultEndianness,
+        indent + "\t"
+      ));
+    } else {
+      // Check if the type is a discriminated union (interface) in the schema
+      const typeDef = schema.types[instanceType];
+      const isDiscriminatedUnion =
+        typeDef && ("type" in typeDef && (typeDef as any).type === "discriminated_union") ||
+        (typeDef && "variants" in typeDef && "discriminator" in typeDef);
+
+      // Check if the instance type needs context (for field references)
+      const instanceTypeNeedsCtx = typeNeedsContext(instanceType, schema);
+
+      if (instanceTypeNeedsCtx) {
+        // Build context with _root.* fields from the containing type (sequence fields + already-decoded instance fields)
+        lines.push(`${indent}\tinstanceCtx := map[string]interface{}{`);
+        if (rootFields) {
+          for (const rootField of rootFields) {
+            const goFieldName = toGoFieldName(rootField.name);
+            lines.push(`${indent}\t\t"_root.${rootField.name}": result.${goFieldName},`);
+          }
+        }
+        // Add already-decoded instance fields to context (expanded to include their sub-fields)
+        for (const { name: decodedFieldName, typeName: decodedTypeName } of decodedInstanceFields) {
+          const goDecodedFieldName = toGoFieldName(decodedFieldName);
+          // Add the instance field itself
+          lines.push(`${indent}\t\t"_root.${decodedFieldName}": result.${goDecodedFieldName},`);
+          // Also add nested fields from the instance type
+          const decodedTypeDef = schema.types[decodedTypeName];
+          if (decodedTypeDef && "sequence" in decodedTypeDef) {
+            for (const subField of decodedTypeDef.sequence) {
+              const goSubFieldName = toGoFieldName(subField.name);
+              lines.push(`${indent}\t\t"_root.${decodedFieldName}.${subField.name}": result.${goDecodedFieldName}.${goSubFieldName},`);
+            }
+          }
+        }
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\t${fieldName}Value, err := decode${instanceType}WithDecoderAndContext(decoder, instanceCtx)`);
+      } else {
+        // Simple type reference - no context needed
+        lines.push(`${indent}\t${fieldName}Value, err := decode${instanceType}WithDecoder(decoder)`);
+      }
+      lines.push(`${indent}\tif err != nil {`);
+      lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode instance field ${instance.name}: %w", err)`);
+      lines.push(`${indent}\t}`);
+      lines.push(`${indent}\tresult.${fieldName} = ${fieldName}Value`);
+    }
+
+    lines.push(`${indent}}`);
+    lines.push(``);
+
+    // Track this instance field for subsequent decoding
+    decodedInstanceFields.push({ name: instance.name, typeName: typeof instanceType === 'string' ? instanceType : '' });
+  }
+
+  // Restore position (for sequential parsing after instance fields)
+  lines.push(`${indent}decoder.Seek(savedPosition)`);
+
+  return lines;
+}
+
+/**
+ * Generates code to decode an inline discriminated union for instance fields
+ */
+function generateInlineDiscriminatedUnionDecode(
+  unionDef: any,
+  targetVar: string,
+  schema: BinarySchema,
+  defaultEndianness: string,
+  indent: string
+): string[] {
+  const lines: string[] = [];
+  const discriminator = unionDef.discriminator;
+  const variants = unionDef.variants;
+
+  // Get discriminator value
+  if (discriminator.peek) {
+    const peekType = discriminator.peek;
+    const peekEndianness = discriminator.endianness || defaultEndianness;
+    const runtimeEndianness = mapEndianness(peekEndianness);
+
+    lines.push(`${indent}discriminatorValue, err := decoder.Peek${capitalizeFirst(peekType)}(runtime.${runtimeEndianness})`);
+    lines.push(`${indent}if err != nil {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("failed to peek discriminator: %w", err)`);
+    lines.push(`${indent}}`);
+  } else if (discriminator.field) {
+    // Field-based discriminator
+    const fieldPath = discriminator.field;
+    const fieldName = toGoFieldName(fieldPath);
+    lines.push(`${indent}discriminatorValue := result.${fieldName}`);
+  }
+
+  // Generate switch cases
+  lines.push(`${indent}switch discriminatorValue {`);
+  for (const variant of variants) {
+    // Convert "value == 0x01" to Go condition
+    const condition = variant.when.replace(/\bvalue\b/g, "discriminatorValue")
+      .replace(/===\s*/g, "== ")
+      .replace(/!==\s*/g, "!= ");
+
+    // Extract just the value from "discriminatorValue == 0x01"
+    const match = condition.match(/==\s*(.+)$/);
+    if (match) {
+      lines.push(`${indent}case ${match[1].trim()}:`);
+    } else {
+      // Fallback for other conditions
+      lines.push(`${indent}// ${condition}`);
+      continue;
+    }
+
+    const variantType = variant.type;
+    lines.push(`${indent}\tvariantValue, err := decode${variantType}WithDecoder(decoder)`);
+    lines.push(`${indent}\tif err != nil {`);
+    lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${variantType}: %w", err)`);
+    lines.push(`${indent}\t}`);
+    // For inline unions, store as wrapped value
+    lines.push(`${indent}\t${targetVar} = map[string]interface{}{"type": "${variantType}", "value": variantValue}`);
+  }
+  lines.push(`${indent}default:`);
+  lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value: %v", discriminatorValue)`);
+  lines.push(`${indent}}`);
+
+  return lines;
+}
+
+/**
  * Generates a Decode function for a struct
  */
-function generateDecodeFunction(name: string, fields: Field[], defaultEndianness: string, schema: BinarySchema, defaultBitOrder: string = "msb_first"): string[] {
+function generateDecodeFunction(name: string, fields: Field[], defaultEndianness: string, schema: BinarySchema, defaultBitOrder: string = "msb_first", instances?: any[]): string[] {
   const lines: string[] = [];
   const needsCtx = typeNeedsContext(name, schema);
   const runtimeBitOrder = mapBitOrder(defaultBitOrder);
@@ -2037,6 +2632,12 @@ function generateDecodeFunction(name: string, fields: Field[], defaultEndianness
   // Generate decoding logic for each field
   for (const field of fields) {
     lines.push(...generateDecodeField(field, defaultEndianness, "\t", schema, name));
+  }
+
+  // Generate instance field decoding (position-based)
+  if (instances && instances.length > 0) {
+    lines.push(``);
+    lines.push(...generateInstanceFieldDecoding(instances, schema, defaultEndianness, "\t", fields));
   }
 
   lines.push(``);
@@ -2094,10 +2695,17 @@ function generateEncodeField(
   if (fieldAny.computed) {
     const computed = fieldAny.computed;
 
-    // Check for parent reference (../)
+    // Check for parent reference (../) or sum_of computed types
     const target = computed.target;
-    if (target && target.startsWith("../")) {
-      // Parent reference - use special encoding that accesses context
+    const targets = computed.targets; // For sum_of_sizes
+
+    // sum_of_sizes uses targets array with parent refs
+    // sum_of_type_sizes uses target with parent ref
+    const hasParentRef = (target && target.startsWith("../")) ||
+                         (targets && Array.isArray(targets) && targets.some((t: string) => t.startsWith("../")));
+
+    if (hasParentRef || computed.type === "sum_of_sizes" || computed.type === "sum_of_type_sizes") {
+      // Parent reference or sum_of computed - use special encoding that accesses context
       return generateComputedFieldEncoding(field, computed, endianness, runtimeEndianness, indent, containingTypeName);
     }
 
@@ -2139,6 +2747,13 @@ function generateEncodeField(
       if (correspondingArrays.has(field.name)) {
         return generateEncodeArrayWithCorresponding(field as any, fieldName, endianness, runtimeEndianness, indent);
       }
+    }
+
+    // Also handle non-choice arrays whose items use corresponding selectors (cross-array references)
+    const typesUsingCorresponding = detectTypesUsingCorrespondingSelectors(schema);
+    const itemType = items?.type;
+    if (itemType && !itemType.includes('.') && schema.types[itemType] && typesUsingCorresponding.has(itemType)) {
+      return generateEncodeArrayWithIterationContext(field as any, fieldName, endianness, runtimeEndianness, indent, itemType);
     }
   }
 
@@ -2217,6 +2832,64 @@ function generateEncodeArrayWithCorresponding(
   if (kind === "null_terminated") {
     lines.push(`${indent}encoder.WriteUint8(0)`);
   }
+
+  return lines;
+}
+
+/**
+ * Generates encoding code for non-choice arrays whose items use corresponding selectors.
+ * This sets up iteration context so cross-array correlation can find the current array index.
+ */
+function generateEncodeArrayWithIterationContext(
+  field: any,
+  fieldName: string,
+  endianness: string,
+  runtimeEndianness: string,
+  indent: string,
+  itemType: string
+): string[] {
+  const lines: string[] = [];
+  const kind = field.kind;
+  const arrName = field.name;
+  const itemVar = `${arrName}_item`;
+  const idxVar = `${arrName}_idx`;
+  const goItemType = toGoTypeName(itemType);
+
+  // Write length prefix for length_prefixed arrays
+  if (kind === "length_prefixed" || kind === "length_prefixed_items") {
+    const lengthType = field.length_type || "uint8";
+    switch (lengthType) {
+      case "uint8":
+        lines.push(`${indent}encoder.WriteUint8(uint8(len(${fieldName})))`);
+        break;
+      case "uint16":
+        lines.push(`${indent}encoder.WriteUint16(uint16(len(${fieldName})), runtime.${runtimeEndianness})`);
+        break;
+      case "uint32":
+        lines.push(`${indent}encoder.WriteUint32(uint32(len(${fieldName})), runtime.${runtimeEndianness})`);
+        break;
+      case "uint64":
+        lines.push(`${indent}encoder.WriteUint64(uint64(len(${fieldName})), runtime.${runtimeEndianness})`);
+        break;
+    }
+  }
+
+  lines.push(`${indent}// Encode array with iteration context for cross-array correlation`);
+  lines.push(`${indent}for ${idxVar}, ${itemVar} := range ${fieldName} {`);
+
+  // Extend context with array iteration
+  lines.push(`${indent}\t// Extend context with array iteration state for cross-array references`);
+  lines.push(`${indent}\t${arrName}_iterCtx := childCtx.ExtendWithArrayIteration("${arrName}", ${fieldName}, ${idxVar})`);
+
+  // Encode item with context
+  lines.push(`${indent}\t${itemVar}_bytes, err := ${itemVar}.EncodeWithContext(${arrName}_iterCtx)`);
+  lines.push(`${indent}\tif err != nil {`);
+  lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to encode ${itemType}: %w", err)`);
+  lines.push(`${indent}\t}`);
+  lines.push(`${indent}\tfor _, b := range ${itemVar}_bytes {`);
+  lines.push(`${indent}\t\tencoder.WriteUint8(b)`);
+  lines.push(`${indent}\t}`);
+  lines.push(`${indent}}`);
 
   return lines;
 }
@@ -3875,6 +4548,25 @@ function mapBitOrder(bitOrder: string): string {
     return "LSBFirst";
   }
   return "MSBFirst";
+}
+
+/**
+ * Returns the sentinel value for "not found" based on Go type.
+ * Used for position_of fields when array is empty.
+ */
+function getSentinelValue(goType: string): string {
+  switch (goType) {
+    case "uint8":
+      return "0xFF";
+    case "uint16":
+      return "0xFFFF";
+    case "uint32":
+      return "0xFFFFFFFF";
+    case "uint64":
+      return "0xFFFFFFFFFFFFFFFF";
+    default:
+      return "0xFFFFFFFF"; // Default to uint32 sentinel
+  }
 }
 
 /**

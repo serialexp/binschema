@@ -242,6 +242,10 @@ func prefixTypeNames(code string, typeName string, prefix string) string {
 	// Handle type assertions in case statements: "case *Type:" -> "case *prefix_Type:"
 	code = regexp.MustCompile(`case\s+\*([A-Z][a-zA-Z0-9_]*):`).ReplaceAllString(code, fmt.Sprintf("case *%s_$1:", prefix))
 
+	// Handle type assertions: elem.(*Type) -> elem.(*prefix_Type) and elem.(Type) -> elem.(prefix_Type)
+	code = regexp.MustCompile(`\.\(\*([A-Z][a-zA-Z0-9_]*)\)`).ReplaceAllString(code, fmt.Sprintf(".(*%s_$1)", prefix))
+	code = regexp.MustCompile(`\.\(([A-Z][a-zA-Z0-9_]*)\)`).ReplaceAllString(code, fmt.Sprintf(".(%s_$1)", prefix))
+
 	// Handle bare Type in function return types: ) (Type, error) -> ) (prefix_Type, error)
 	// Only match when preceded by ) to avoid matching function arguments
 	code = regexp.MustCompile(`\)\s*\(([A-Z][a-zA-Z0-9_]*),`).ReplaceAllString(code, fmt.Sprintf(") (%s_$1,", prefix))
@@ -313,6 +317,7 @@ func ptrBool(v bool) *bool { return &v }
 
 func main() {
 	_ = math.Pi
+	_ = bytes.Equal // Ensure bytes import is used even for instance-field-only tests
 	allResults := [][]TestResult{}
 
 `
@@ -322,12 +327,22 @@ func main() {
 		typePrefix := typePrefixes[i]
 		prefixedType := typePrefix + "_" + suite.TestType
 
+		// Check if the test type has instance fields
+		hasInstanceFields := false
+		if types, ok := suite.Schema["types"].(map[string]interface{}); ok {
+			if typeDef, ok := types[suite.TestType].(map[string]interface{}); ok {
+				if instances, ok := typeDef["instances"].([]interface{}); ok && len(instances) > 0 {
+					hasInstanceFields = true
+				}
+			}
+		}
+
 		harness += fmt.Sprintf("\t// Test suite: %s\n", suite.Name)
 		harness += "\t{\n"
 		harness += "\t\tresults := []TestResult{}\n\n"
 
 		for j, tc := range suite.TestCases {
-			// Skip error test cases - Go harness doesn't support error testing
+			// Skip encode-specific or decode-specific error tests (still not supported)
 			if tc.ShouldErrorOnEncode || tc.ShouldErrorOnDecode {
 				continue
 			}
@@ -337,8 +352,19 @@ func main() {
 			harness += fmt.Sprintf("\t\t\tresult := TestResult{Description: %q}\n", tc.Description)
 			harness += "\t\t\tdefer func() { results = append(results, result) }()\n\n"
 
-			// Generate value construction with schema information
-			harness += generateValueConstructionWithSchema(prefixedType, tc.Value, "testValue", suite, typePrefix)
+			// Handle should_error tests (general error expected)
+			if tc.ShouldError {
+				harness += fmt.Sprintf("\t\t\texpectedBytes := []byte{%s}\n", formatByteSlice(tc.Bytes))
+				harness += fmt.Sprintf("\t\t\t_, decErr := Decode%s(expectedBytes)\n", prefixedType)
+				harness += "\t\t\tif decErr == nil {\n"
+				harness += "\t\t\t\tresult.Error = \"expected decode error but got none\"\n"
+				harness += "\t\t\t\tresult.Pass = false\n"
+				harness += "\t\t\t\treturn\n"
+				harness += "\t\t\t}\n"
+				harness += "\t\t\tresult.Pass = true\n"
+				harness += "\t\t}()\n\n"
+				continue
+			}
 
 			// Generate expected decoded value if different from input
 			hasDecodedValue := tc.DecodedValue != nil
@@ -346,29 +372,55 @@ func main() {
 				harness += generateValueConstructionWithSchema(prefixedType, tc.DecodedValue, "expectedDecoded", suite, typePrefix)
 			}
 
-			// Encode
-			harness += "\t\t\tencoded, encErr := testValue.Encode()\n"
-			harness += "\t\t\tif encErr != nil {\n"
-			harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"encode error: %v\", encErr)\n"
-			harness += "\t\t\t\treturn\n"
-			harness += "\t\t\t}\n"
-			harness += "\t\t\tresult.EncodedBytes = encoded\n\n"
+			// Generate value construction with schema information
+			// For types with instance fields AND hasDecodedValue, we only need expectedDecoded
+			// Otherwise we need testValue for either encoding or comparison
+			needsTestValue := !hasInstanceFields || !hasDecodedValue
+			if needsTestValue {
+				harness += generateValueConstructionWithSchema(prefixedType, tc.Value, "testValue", suite, typePrefix)
+			}
 
-			// Compare bytes
+			// Define expectedBytes for types with instance fields (used for decode-only testing)
 			harness += fmt.Sprintf("\t\t\texpectedBytes := []byte{%s}\n", formatByteSlice(tc.Bytes))
-			harness += "\t\t\tif !bytes.Equal(encoded, expectedBytes) {\n"
-			harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"encoded bytes mismatch: got %v, want %v\", encoded, expectedBytes)\n"
-			harness += "\t\t\t\tresult.Pass = false\n"
-			harness += "\t\t\t\treturn\n"
-			harness += "\t\t\t}\n\n"
 
-			// Decode
-			harness += fmt.Sprintf("\t\t\tdecoded, decErr := Decode%s(encoded)\n", prefixedType)
-			harness += "\t\t\tif decErr != nil {\n"
-			harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"decode error: %v\", decErr)\n"
-			harness += "\t\t\t\treturn\n"
-			harness += "\t\t\t}\n"
-			harness += "\t\t\tresult.DecodedValue = decoded\n\n"
+			if hasInstanceFields {
+				// For types with instance fields, only test decoding
+				// Instance fields are decode-only (data is at different positions in the file)
+				harness += "\t\t\t// Instance fields are decode-only - skip encoding comparison\n"
+				harness += "\t\t\tresult.EncodedBytes = expectedBytes\n\n"
+
+				// Decode from expected bytes (which contains all data including instance positions)
+				harness += fmt.Sprintf("\t\t\tdecoded, decErr := Decode%s(expectedBytes)\n", prefixedType)
+				harness += "\t\t\tif decErr != nil {\n"
+				harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"decode error: %v\", decErr)\n"
+				harness += "\t\t\t\treturn\n"
+				harness += "\t\t\t}\n"
+				harness += "\t\t\tresult.DecodedValue = decoded\n\n"
+			} else {
+				// Normal round-trip testing for types without instance fields
+				// Encode
+				harness += "\t\t\tencoded, encErr := testValue.Encode()\n"
+				harness += "\t\t\tif encErr != nil {\n"
+				harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"encode error: %v\", encErr)\n"
+				harness += "\t\t\t\treturn\n"
+				harness += "\t\t\t}\n"
+				harness += "\t\t\tresult.EncodedBytes = encoded\n\n"
+
+				// Compare bytes
+				harness += "\t\t\tif !bytes.Equal(encoded, expectedBytes) {\n"
+				harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"encoded bytes mismatch: got %v, want %v\", encoded, expectedBytes)\n"
+				harness += "\t\t\t\tresult.Pass = false\n"
+				harness += "\t\t\t\treturn\n"
+				harness += "\t\t\t}\n\n"
+
+				// Decode
+				harness += fmt.Sprintf("\t\t\tdecoded, decErr := Decode%s(encoded)\n", prefixedType)
+				harness += "\t\t\tif decErr != nil {\n"
+				harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"decode error: %v\", decErr)\n"
+				harness += "\t\t\t\treturn\n"
+				harness += "\t\t\t}\n"
+				harness += "\t\t\tresult.DecodedValue = decoded\n\n"
+			}
 
 			// Compare values - use expectedDecoded if available, otherwise testValue
 			if hasDecodedValue {
@@ -439,7 +491,7 @@ func generateValueConstructionWithSchema(typeName string, value interface{}, var
 		return fmt.Sprintf("\t\t\t%s := %s{}\n", varName, typeName)
 	}
 
-	// Build field definitions map from schema
+	// Build field definitions map from schema (sequence fields)
 	fieldDefs := make(map[string]map[string]interface{})
 	if sequence, ok := typeDef["sequence"].([]interface{}); ok {
 		for _, fieldRaw := range sequence {
@@ -451,23 +503,117 @@ func generateValueConstructionWithSchema(typeName string, value interface{}, var
 		}
 	}
 
+	// Build instance field definitions map from schema (position-based fields)
+	instanceDefs := make(map[string]map[string]interface{})
+	if instances, ok := typeDef["instances"].([]interface{}); ok {
+		for _, instanceRaw := range instances {
+			if instance, ok := instanceRaw.(map[string]interface{}); ok {
+				if name, ok := instance["name"].(string); ok {
+					instanceDefs[name] = instance
+				}
+			}
+		}
+	}
+
 	// Use the test type as the base name (typePrefix + "_" + baseTypeName = typeName)
 	baseTypeName := suite.TestType
 
 	result := fmt.Sprintf("\t\t\t%s := %s{\n", varName, typeName)
 	for key, val := range valueMap {
 		fieldDef := fieldDefs[key]
-		// Skip fields that don't exist in the schema (e.g., instance fields which Go doesn't support)
-		if fieldDef == nil {
+		instanceDef := instanceDefs[key]
+
+		// Handle sequence fields
+		if fieldDef != nil {
+			fieldName := capitalizeFirst(key)
+			formattedVal := formatValueWithSchema(val, fieldDef, types, typePrefix, baseTypeName, key)
+			result += fmt.Sprintf("\t\t\t\t%s: %s,\n", fieldName, formattedVal)
 			continue
 		}
-		fieldName := capitalizeFirst(key)
-		formattedVal := formatValueWithSchema(val, fieldDef, types, typePrefix, baseTypeName, key)
-		result += fmt.Sprintf("\t\t\t\t%s: %s,\n", fieldName, formattedVal)
+
+		// Handle instance fields (position-based)
+		if instanceDef != nil {
+			fieldName := capitalizeFirst(key)
+			formattedVal := formatInstanceFieldValue(val, instanceDef, types, typePrefix)
+			result += fmt.Sprintf("\t\t\t\t%s: %s,\n", fieldName, formattedVal)
+			continue
+		}
+
+		// Skip fields that don't exist in the schema
 	}
 	result += "\t\t\t}\n"
 
 	return result
+}
+
+// formatInstanceFieldValue formats an instance field value
+// Instance fields are position-based (decoded at specific offsets)
+func formatInstanceFieldValue(val interface{}, instanceDef map[string]interface{}, types map[string]interface{}, typePrefix string) string {
+	if val == nil {
+		return "nil"
+	}
+
+	// Get the instance type
+	instanceType := instanceDef["type"]
+
+	// Handle inline discriminated union type (type is an object with discriminator and variants)
+	if instanceTypeObj, ok := instanceType.(map[string]interface{}); ok {
+		if _, hasDiscriminator := instanceTypeObj["discriminator"]; hasDiscriminator {
+			// Inline discriminated union - value is map with "type" and "value"
+			valMap, ok := val.(map[string]interface{})
+			if !ok {
+				return "nil"
+			}
+			variantType, _ := valMap["type"].(string)
+			variantValue := valMap["value"]
+			goTypeName := typePrefix + "_" + capitalizeFirst(variantType)
+
+			// Format the variant value as a struct
+			if variantValMap, ok := variantValue.(map[string]interface{}); ok {
+				typeDef, _ := types[variantType].(map[string]interface{})
+				return fmt.Sprintf("map[string]interface{}{\"type\": %q, \"value\": &%s}", variantType, formatStructValue(variantValMap, typeDef, types, typePrefix, variantType))
+			}
+			return fmt.Sprintf("map[string]interface{}{\"type\": %q, \"value\": &%s{}}", variantType, goTypeName)
+		}
+	}
+
+	// Simple type reference - instanceType is a string
+	instanceTypeName, ok := instanceType.(string)
+	if !ok {
+		return "nil"
+	}
+
+	// Check if the type exists in the schema
+	typeDef, hasTypeDef := types[instanceTypeName].(map[string]interface{})
+	if hasTypeDef {
+		typeDefType, _ := typeDef["type"].(string)
+
+		// Handle type aliases (e.g., Uint8: { type: 'uint8' })
+		// Go generator wraps these in a struct with a Value field
+		if typeDefType != "" && typeDefType != "discriminated_union" && typeDefType != "array" {
+			// Check if it's a primitive type alias
+			goTypeName := typePrefix + "_" + capitalizeFirst(instanceTypeName)
+			formattedVal := formatValueWithType(val, typeDefType)
+			return fmt.Sprintf("&%s{Value: %s}", goTypeName, formattedVal)
+		}
+
+		// Check for discriminated union type
+		if typeDefType == "discriminated_union" {
+			// Discriminated union value - formatted as wrapped value
+			valMap, ok := val.(map[string]interface{})
+			if !ok {
+				return "nil"
+			}
+			return formatDiscriminatedUnionValue(valMap, typeDef, types, typePrefix)
+		}
+
+		// Regular struct type - value is a map
+		if valMap, ok := val.(map[string]interface{}); ok {
+			return "&" + formatStructValue(valMap, typeDef, types, typePrefix, instanceTypeName)
+		}
+	}
+
+	return "nil"
 }
 
 // formatValueWithSchema formats a value using full field definition and schema context
@@ -1060,6 +1206,20 @@ func formatStructValue(val map[string]interface{}, typeDef map[string]interface{
 					}
 
 					result += fmt.Sprintf("\t\t\t\t\t\t%s: %s,\n", goFieldName, formatValueWithType(fieldVal, fieldType))
+				}
+			}
+		}
+	}
+
+	// Handle instance fields (position-based fields)
+	if instances, ok := typeDef["instances"].([]interface{}); ok {
+		for _, instanceRaw := range instances {
+			if instance, ok := instanceRaw.(map[string]interface{}); ok {
+				instanceName, _ := instance["name"].(string)
+				if instanceVal, hasVal := val[instanceName]; hasVal {
+					goFieldName := capitalizeFirst(instanceName)
+					formattedVal := formatInstanceFieldValue(instanceVal, instance, types, typePrefix)
+					result += fmt.Sprintf("\t\t\t\t\t\t%s: %s,\n", goFieldName, formattedVal)
 				}
 			}
 		}

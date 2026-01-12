@@ -98,6 +98,11 @@ func (d *BitStreamDecoder) Seek(offset int) {
 	d.bitOffset = 0 // Reset bit offset when seeking
 }
 
+// Bytes returns the underlying byte slice (for calculating EOF-relative positions)
+func (d *BitStreamDecoder) Bytes() []byte {
+	return d.bytes
+}
+
 // ReadUint8 reads an 8-bit unsigned integer
 func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 	if d.bitOffset == 0 {

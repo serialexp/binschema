@@ -30,6 +30,7 @@ type TestCase struct {
 	Bits                []int       `json:"bits,omitempty"`
 	ChunkSizes          []int       `json:"chunkSizes,omitempty"`
 	Error               *string     `json:"error,omitempty"`
+	ShouldError         bool        `json:"should_error,omitempty"`         // General error expected (decode or encode)
 	ShouldErrorOnEncode bool        `json:"should_error_on_encode,omitempty"`
 	ShouldErrorOnDecode bool        `json:"should_error_on_decode,omitempty"`
 }

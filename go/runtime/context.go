@@ -110,6 +110,23 @@ func (ctx *EncodingContext) GetParentField(levelsUp int, fieldName string) (inte
 	return val, ok
 }
 
+// FindParentField searches through all parents to find a field by name.
+// Searches from outermost (root) to innermost (immediate parent).
+// Returns the field value and true if found, nil and false otherwise.
+func (ctx *EncodingContext) FindParentField(fieldName string) (interface{}, bool) {
+	if ctx == nil || len(ctx.Parents) == 0 {
+		return nil, false
+	}
+
+	// Search from outermost to innermost (like TypeScript's for-of loop)
+	for _, parent := range ctx.Parents {
+		if val, ok := parent[fieldName]; ok {
+			return val, true
+		}
+	}
+	return nil, false
+}
+
 // GetPosition retrieves tracked positions for an array/type combination.
 // Key format is "arrayName_typeName".
 func (ctx *EncodingContext) GetPosition(key string, index int) (int, bool) {
@@ -174,6 +191,21 @@ func (ctx *EncodingContext) GetArrayIteration(fieldName string) (*ArrayIteration
 
 	iter, ok := ctx.ArrayIterations[fieldName]
 	return iter, ok
+}
+
+// GetAnyArrayIteration retrieves any active array iteration for cross-array correlation.
+// Returns the iteration and true if any iteration is found.
+// This is used when cross-referencing between sibling arrays.
+func (ctx *EncodingContext) GetAnyArrayIteration() (*ArrayIteration, bool) {
+	if ctx == nil || ctx.ArrayIterations == nil || len(ctx.ArrayIterations) == 0 {
+		return nil, false
+	}
+
+	// Return the first (and typically only) active iteration
+	for _, iter := range ctx.ArrayIterations {
+		return iter, true
+	}
+	return nil, false
 }
 
 // GetTypeIndex retrieves the type occurrence index for a discriminated union type.
