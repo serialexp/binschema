@@ -29,6 +29,9 @@ jobs:
 
       - run: pnpm install
 
+      - name: Build packages
+        run: pnpm build
+
       - name: Run TypeScript tests
         run: pnpm test
 
@@ -54,6 +57,12 @@ jobs:
           cache-dependency-path: go/go.sum
 
       - run: pnpm install
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Generate test fixtures
+        run: pnpm test
 
       - name: Run Go tests
         run: make test-go
