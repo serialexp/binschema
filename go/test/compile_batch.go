@@ -978,9 +978,35 @@ func formatDiscriminatedUnionValue(val map[string]interface{}, unionDef map[stri
 
 	// If variant value is a simple type (like string for Label)
 	if variantTypeDef != nil {
-		if typeDefType, _ := variantTypeDef["type"].(string); typeDefType == "string" {
+		typeDefType, _ := variantTypeDef["type"].(string)
+
+		if typeDefType == "string" {
 			if strVal, ok := variantValue.(string); ok {
 				return fmt.Sprintf("&%s{Value: %q}", goTypeName, strVal)
+			}
+		}
+
+		// Handle back_reference types - wrap value in target type struct
+		if typeDefType == "back_reference" {
+			targetType, _ := variantTypeDef["target_type"].(string)
+			if targetType != "" {
+				goTargetTypeName := typePrefix + "_" + capitalizeFirst(targetType)
+				// Look up target type definition
+				targetTypeDef, _ := types[targetType].(map[string]interface{})
+				if targetTypeDef != nil {
+					targetTypeType, _ := targetTypeDef["type"].(string)
+					// If target type is a string, wrap the value appropriately
+					if targetTypeType == "string" {
+						if strVal, ok := variantValue.(string); ok {
+							return fmt.Sprintf("&%s{Value: %s{Value: %q}}", goTypeName, goTargetTypeName, strVal)
+						}
+					}
+					// If target value is a map (struct), format it as nested struct
+					if valMap, ok := variantValue.(map[string]interface{}); ok {
+						innerValue := formatStructValue(valMap, targetTypeDef, types, typePrefix, targetType)
+						return fmt.Sprintf("&%s{Value: %s}", goTypeName, innerValue)
+					}
+				}
 			}
 		}
 	}

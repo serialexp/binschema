@@ -14,11 +14,22 @@ import (
 
 // TestSuite represents a complete test suite loaded from JSON
 type TestSuite struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Schema      map[string]interface{} `json:"schema"`
-	TestType    string                 `json:"test_type"`
-	TestCases   []TestCase             `json:"test_cases"`
+	Name                  string                 `json:"name"`
+	Description           string                 `json:"description"`
+	Schema                map[string]interface{} `json:"schema"`
+	TestType              string                 `json:"test_type"`
+	TestCases             []TestCase             `json:"test_cases"` // Primary field name
+	Tests                 []TestCase             `json:"tests"`      // Alternative field name (both are accepted)
+	SchemaValidationError bool                   `json:"schema_validation_error,omitempty"` // True if this tests schema validation failure
+	ErrorMessage          string                 `json:"error_message,omitempty"`           // Expected error message for validation error tests
+}
+
+// GetTestCases returns the test cases, handling both "test_cases" and "tests" field names
+func (s *TestSuite) GetTestCases() []TestCase {
+	if len(s.TestCases) > 0 {
+		return s.TestCases
+	}
+	return s.Tests
 }
 
 // TestCase represents a single test case within a suite
@@ -48,7 +59,11 @@ func LoadTestSuite(path string) (*TestSuite, error) {
 	}
 
 	// Post-process to handle BigInt strings (e.g., "12345n" -> int64)
-	suite.TestCases = processBigIntInTestCases(suite.TestCases)
+	// Normalize test cases (handle both "test_cases" and "tests" field names)
+	testCases := suite.GetTestCases()
+	testCases = processBigIntInTestCases(testCases)
+	suite.TestCases = testCases
+	suite.Tests = nil // Clear the alternative field after normalization
 
 	// Get schema's bit_order (default to "msb_first")
 	bitOrder := "msb_first"

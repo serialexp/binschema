@@ -51,6 +51,12 @@ func TestBinSchema(t *testing.T) {
 	verbose := os.Getenv("VERBOSE") != ""
 
 	for _, suite := range suites {
+		// Skip schema validation error tests - they test that invalid schemas fail validation
+		// These have no test cases and no generated code
+		if suite.SchemaValidationError {
+			continue
+		}
+
 		results, ok := resultMap[suite.Name]
 		if !ok {
 			t.Errorf("No results for suite %s", suite.Name)

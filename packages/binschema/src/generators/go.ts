@@ -268,6 +268,71 @@ function detectTypesUsingCorrespondingSelectors(schema: BinarySchema): Set<strin
 }
 
 /**
+ * Info about a back_reference variant in a discriminated union.
+ */
+interface BackReferenceVariantInfo {
+  variantTypeName: string;      // e.g., "LabelPointer"
+  storage: string;              // e.g., "uint16"
+  offsetMask: string;           // e.g., "0x3FFF"
+  offsetFrom: string;           // e.g., "message_start"
+  targetType: string;           // e.g., "Label"
+  endianness?: string;          // e.g., "big_endian"
+}
+
+/**
+ * Info about a discriminated union that contains back_reference variants.
+ */
+interface DiscriminatedUnionBackRefInfo {
+  backRefVariants: BackReferenceVariantInfo[];
+  stringVariants: string[];     // Types that are string types (can be referenced by back_references)
+}
+
+/**
+ * Analyze a discriminated union type to find back_reference variants and their target string types.
+ * Returns null if the type is not a discriminated union or has no back_reference variants.
+ */
+function getDiscriminatedUnionBackRefInfo(typeName: string, schema: BinarySchema): DiscriminatedUnionBackRefInfo | null {
+  const typeDef = schema.types[typeName];
+  if (!typeDef) return null;
+
+  // Check if it's a discriminated union
+  const typeDefAny = typeDef as any;
+  if (typeDefAny.type !== "discriminated_union") return null;
+
+  const variants = typeDefAny.variants || [];
+  if (variants.length === 0) return null;
+
+  const backRefVariants: BackReferenceVariantInfo[] = [];
+  const stringVariants: string[] = [];
+
+  for (const variant of variants) {
+    const variantTypeName = variant.type;
+    const variantTypeDef = schema.types[variantTypeName];
+    if (!variantTypeDef) continue;
+
+    const variantTypeDefAny = variantTypeDef as any;
+
+    if (variantTypeDefAny.type === "back_reference") {
+      backRefVariants.push({
+        variantTypeName,
+        storage: variantTypeDefAny.storage || "uint16",
+        offsetMask: variantTypeDefAny.offset_mask || "0x3FFF",
+        offsetFrom: variantTypeDefAny.offset_from || "message_start",
+        targetType: variantTypeDefAny.target_type,
+        endianness: variantTypeDefAny.endianness,
+      });
+    } else if (variantTypeDefAny.type === "string") {
+      stringVariants.push(variantTypeName);
+    }
+  }
+
+  // Only return info if there are back_reference variants
+  if (backRefVariants.length === 0) return null;
+
+  return { backRefVariants, stringVariants };
+}
+
+/**
  * Get the static byte size of a field at code generation time.
  * Returns the size in bytes for fixed-size types, or 0 for variable-length types.
  */
@@ -571,7 +636,8 @@ function generateComputedFieldEncoding(
   endianness: string,
   runtimeEndianness: string,
   indent: string,
-  containingTypeName?: string
+  containingTypeName?: string,
+  schema?: BinarySchema
 ): string[] {
   const lines: string[] = [];
   const target = computed.target;
@@ -847,20 +913,19 @@ function generateComputedFieldEncoding(
 
       case "crc32_of":
         // CRC32 of the field value from the corresponding item
-        lines.push(`${indent}var ${computedVarName} ${goType}`);
-        lines.push(`${indent}${computedVarName}FieldVal := ${targetFieldAccess}`);
-        lines.push(`${indent}if byteSlice, ok := ${computedVarName}FieldVal.([]byte); ok {`);
-        lines.push(`${indent}\t${computedVarName} = ${goType}(runtime.CRC32(byteSlice))`);
-        lines.push(`${indent}} else if uint8Slice, ok := ${computedVarName}FieldVal.([]uint8); ok {`);
-        lines.push(`${indent}\t${computedVarName} = ${goType}(runtime.CRC32(uint8Slice))`);
-        lines.push(`${indent}} else {`);
-        lines.push(`${indent}\t// For other types, try to encode to bytes first`);
-        lines.push(`${indent}\tif encoder, ok := ${computedVarName}FieldVal.(interface{ Encode() ([]byte, error) }); ok {`);
-        lines.push(`${indent}\t\tif bytes, err := encoder.Encode(); err == nil {`);
-        lines.push(`${indent}\t\t\t${computedVarName} = ${goType}(runtime.CRC32(bytes))`);
-        lines.push(`${indent}\t\t}`);
-        lines.push(`${indent}\t}`);
-        lines.push(`${indent}}`);
+        // Check if the field type is known at code-gen time to avoid type assertions
+        if (isFieldByteArray(filterType, fieldAccess, schema)) {
+          // Field is a []uint8 - directly compute CRC32 without type assertions
+          lines.push(`${indent}${computedVarName} := ${goType}(runtime.CRC32(${targetFieldAccess}))`);
+        } else {
+          // Field type is complex - need to encode to bytes first
+          lines.push(`${indent}var ${computedVarName} ${goType}`);
+          lines.push(`${indent}if encoder, ok := ${targetFieldAccess}.(interface{ Encode() ([]byte, error) }); ok {`);
+          lines.push(`${indent}\tif bytes, err := encoder.Encode(); err == nil {`);
+          lines.push(`${indent}\t\t${computedVarName} = ${goType}(runtime.CRC32(bytes))`);
+          lines.push(`${indent}\t}`);
+          lines.push(`${indent}}`);
+        }
         break;
 
       default:
@@ -1505,10 +1570,27 @@ function hasNestedStructs(schema: BinarySchema): boolean {
 }
 
 /**
- * Checks if a type is a primitive
+ * Checks if a field in a type is a byte array ([]uint8 / []byte).
+ * Used to generate simpler code without type assertions for known byte array fields.
  */
-function isPrimitiveType(type: string): boolean {
-  return ["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64"].includes(type);
+function isFieldByteArray(typeName: string, fieldName: string, schema?: BinarySchema): boolean {
+  if (!schema) return false;
+
+  const typeDef = schema.types[typeName];
+  if (!typeDef || !("sequence" in typeDef)) return false;
+
+  for (const field of typeDef.sequence) {
+    if (field.name === fieldName) {
+      const fieldAny = field as any;
+      // Check if it's an array of uint8
+      if (fieldAny.type === "array" && fieldAny.items?.type === "uint8") {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -2553,7 +2635,7 @@ function generateInlineDiscriminatedUnionDecode(
     const peekEndianness = discriminator.endianness || defaultEndianness;
     const runtimeEndianness = mapEndianness(peekEndianness);
 
-    lines.push(`${indent}discriminatorValue, err := decoder.Peek${capitalizeFirst(peekType)}(runtime.${runtimeEndianness})`);
+    lines.push(`${indent}discriminatorValue, err := decoder.Peek${toGoTypeName(peekType)}(runtime.${runtimeEndianness})`);
     lines.push(`${indent}if err != nil {`);
     lines.push(`${indent}\treturn nil, fmt.Errorf("failed to peek discriminator: %w", err)`);
     lines.push(`${indent}}`);
@@ -2706,7 +2788,7 @@ function generateEncodeField(
 
     if (hasParentRef || computed.type === "sum_of_sizes" || computed.type === "sum_of_type_sizes") {
       // Parent reference or sum_of computed - use special encoding that accesses context
-      return generateComputedFieldEncoding(field, computed, endianness, runtimeEndianness, indent, containingTypeName);
+      return generateComputedFieldEncoding(field, computed, endianness, runtimeEndianness, indent, containingTypeName, schema);
     }
 
     const computedValue = generateComputedValue(
@@ -2745,7 +2827,7 @@ function generateEncodeField(
     if (items?.type === "choice") {
       const correspondingArrays = detectArraysNeedingCorrespondingTracking(schema);
       if (correspondingArrays.has(field.name)) {
-        return generateEncodeArrayWithCorresponding(field as any, fieldName, endianness, runtimeEndianness, indent);
+        return generateEncodeArrayWithCorresponding(field as any, fieldName, endianness, runtimeEndianness, indent, schema);
       }
     }
 
@@ -2755,6 +2837,14 @@ function generateEncodeField(
     if (itemType && !itemType.includes('.') && schema.types[itemType] && typesUsingCorresponding.has(itemType)) {
       return generateEncodeArrayWithIterationContext(field as any, fieldName, endianness, runtimeEndianness, indent, itemType);
     }
+
+    // Handle arrays of discriminated unions with back_reference variants (DNS compression style)
+    if (itemType && !itemType.includes('.') && schema.types[itemType]) {
+      const backRefInfo = getDiscriminatedUnionBackRefInfo(itemType, schema);
+      if (backRefInfo) {
+        return generateEncodeArrayWithBackReference(field as any, fieldName, endianness, runtimeEndianness, indent, schema, backRefInfo);
+      }
+    }
   }
 
   return generateEncodeFieldImpl(field, fieldName, endianness, runtimeEndianness, indent);
@@ -2763,13 +2853,15 @@ function generateEncodeField(
 /**
  * Generates encoding code for choice arrays that need corresponding<Type> tracking.
  * This generates special loop code with array iteration context extension and type occurrence tracking.
+ * Also handles compression dictionary recording for string types that can be referenced by back_references.
  */
 function generateEncodeArrayWithCorresponding(
   field: any,
   fieldName: string,
   endianness: string,
   runtimeEndianness: string,
-  indent: string
+  indent: string,
+  schema: BinarySchema
 ): string[] {
   const lines: string[] = [];
   const kind = field.kind;
@@ -2812,8 +2904,20 @@ function generateEncodeArrayWithCorresponding(
 
   for (const choice of choices) {
     const goTypeName = toGoTypeName(choice.type);
+    const choiceTypeDef = schema.types[choice.type];
+    const isBackReference = choiceTypeDef && (choiceTypeDef as any).type === "back_reference";
+    const isStringType = choiceTypeDef && (choiceTypeDef as any).type === "string";
+
     lines.push(`${indent}\tcase *${goTypeName}:`);
     lines.push(`${indent}\t\t${arrName}_iterCtx.IncrementTypeIndex("${arrName}", "${choice.type}")`);
+
+    // For string types (not back_references), record the value in compression dictionary
+    // before encoding so that back_reference types can reference them later
+    if (!isBackReference && isStringType) {
+      lines.push(`${indent}\t\t// Record string value in compression dictionary for back_reference support`);
+      lines.push(`${indent}\t\t${arrName}_iterCtx.SetCompressionOffset(v.Value, ctx.ByteOffset + encoder.Position())`);
+    }
+
     lines.push(`${indent}\t\t${itemVar}_bytes, err := v.EncodeWithContext(${arrName}_iterCtx)`);
     lines.push(`${indent}\t\tif err != nil {`);
     lines.push(`${indent}\t\t\treturn nil, fmt.Errorf("failed to encode ${choice.type}: %w", err)`);
@@ -2890,6 +2994,160 @@ function generateEncodeArrayWithIterationContext(
   lines.push(`${indent}\t\tencoder.WriteUint8(b)`);
   lines.push(`${indent}\t}`);
   lines.push(`${indent}}`);
+
+  return lines;
+}
+
+/**
+ * Generates encoding code for arrays of discriminated unions with back_reference variants.
+ * This handles DNS-style compression where string values are recorded in a compression dictionary,
+ * and back_reference variants write compression pointers instead of re-encoding values.
+ */
+function generateEncodeArrayWithBackReference(
+  field: any,
+  fieldName: string,
+  endianness: string,
+  runtimeEndianness: string,
+  indent: string,
+  schema: BinarySchema,
+  backRefInfo: DiscriminatedUnionBackRefInfo
+): string[] {
+  const lines: string[] = [];
+  const kind = field.kind;
+  const items = field.items;
+  const arrName = field.name;
+  const itemVar = `${arrName}_item`;
+
+  // Get all variants from the discriminated union
+  const itemTypeDef = schema.types[items.type] as any;
+  const variants = itemTypeDef.variants || [];
+
+  // Write length prefix for length_prefixed arrays
+  if (kind === "length_prefixed" || kind === "length_prefixed_items") {
+    const lengthType = field.length_type || "uint8";
+    switch (lengthType) {
+      case "uint8":
+        lines.push(`${indent}encoder.WriteUint8(uint8(len(${fieldName})))`);
+        break;
+      case "uint16":
+        lines.push(`${indent}encoder.WriteUint16(uint16(len(${fieldName})), runtime.${runtimeEndianness})`);
+        break;
+      case "uint32":
+        lines.push(`${indent}encoder.WriteUint32(uint32(len(${fieldName})), runtime.${runtimeEndianness})`);
+        break;
+      case "uint64":
+        lines.push(`${indent}encoder.WriteUint64(uint64(len(${fieldName})), runtime.${runtimeEndianness})`);
+        break;
+    }
+  }
+
+  // Track terminal variants for null_terminated arrays
+  const terminalVariants = field.terminal_variants;
+  const hasTerminalVariants = terminalVariants && Array.isArray(terminalVariants) && terminalVariants.length > 0;
+  const terminatedVarName = `${itemVar}_terminated`;
+  if (kind === "null_terminated" && hasTerminalVariants) {
+    lines.push(`${indent}${terminatedVarName} := false`);
+  }
+
+  // Use a labeled loop if we need to break for terminal variants
+  const loopLabel = `${itemVar}Loop`;
+  if ((kind === "null_terminated" || kind === "variant_terminated") && hasTerminalVariants) {
+    lines.push(`${indent}${loopLabel}:`);
+  }
+
+  lines.push(`${indent}// Encode array with back_reference compression support`);
+  lines.push(`${indent}for _, ${itemVar} := range ${fieldName} {`);
+  lines.push(`${indent}\tswitch v := ${itemVar}.(type) {`);
+
+  for (const variant of variants) {
+    const variantTypeName = variant.type;
+    const goTypeName = toGoTypeName(variantTypeName);
+    const variantTypeDef = schema.types[variantTypeName];
+    const variantTypeDefAny = variantTypeDef as any;
+
+    lines.push(`${indent}\tcase *${goTypeName}:`);
+
+    if (variantTypeDefAny.type === "back_reference") {
+      // Back reference variant - check compression dictionary and write pointer or full value
+      const backRefVariant = backRefInfo.backRefVariants.find(b => b.variantTypeName === variantTypeName);
+      if (backRefVariant) {
+        const storage = backRefVariant.storage;
+        const offsetMask = backRefVariant.offsetMask;
+        const backRefEndianness = backRefVariant.endianness || endianness;
+        const backRefRuntimeEndianness = mapEndianness(backRefEndianness);
+
+        // The value in a back_reference struct is the target type value
+        lines.push(`${indent}\t\t// Check compression dictionary for back_reference`);
+        lines.push(`${indent}\t\tif existingOffset, found := ctx.GetCompressionOffset(v.Value.Value); found {`);
+        lines.push(`${indent}\t\t\t// Write compression pointer`);
+
+        // Generate compression pointer with top bits set
+        if (storage === "uint8") {
+          lines.push(`${indent}\t\t\tencoder.WriteUint8(0xC0 | uint8(existingOffset & ${offsetMask}))`);
+        } else if (storage === "uint16") {
+          lines.push(`${indent}\t\t\tencoder.WriteUint16(0xC000 | uint16(existingOffset & ${offsetMask}), runtime.${backRefRuntimeEndianness})`);
+        } else if (storage === "uint32") {
+          lines.push(`${indent}\t\t\tencoder.WriteUint32(0xC0000000 | uint32(existingOffset & ${offsetMask}), runtime.${backRefRuntimeEndianness})`);
+        }
+
+        lines.push(`${indent}\t\t} else {`);
+        lines.push(`${indent}\t\t\t// First occurrence - record position and encode full value`);
+        lines.push(`${indent}\t\t\tctx.SetCompressionOffset(v.Value.Value, ctx.ByteOffset + encoder.Position())`);
+        lines.push(`${indent}\t\t\t${itemVar}_bytes, err := v.Value.EncodeWithContext(childCtx)`);
+        lines.push(`${indent}\t\t\tif err != nil {`);
+        lines.push(`${indent}\t\t\t\treturn nil, fmt.Errorf("failed to encode ${variantTypeName} target: %w", err)`);
+        lines.push(`${indent}\t\t\t}`);
+        lines.push(`${indent}\t\t\tfor _, b := range ${itemVar}_bytes {`);
+        lines.push(`${indent}\t\t\t\tencoder.WriteUint8(b)`);
+        lines.push(`${indent}\t\t\t}`);
+        lines.push(`${indent}\t\t}`);
+      }
+    } else if (variantTypeDefAny.type === "string") {
+      // String type variant - record in compression dictionary before encoding
+      lines.push(`${indent}\t\t// Record string value in compression dictionary`);
+      lines.push(`${indent}\t\tctx.SetCompressionOffset(v.Value, ctx.ByteOffset + encoder.Position())`);
+      lines.push(`${indent}\t\t${itemVar}_bytes, err := v.EncodeWithContext(childCtx)`);
+      lines.push(`${indent}\t\tif err != nil {`);
+      lines.push(`${indent}\t\t\treturn nil, fmt.Errorf("failed to encode ${variantTypeName}: %w", err)`);
+      lines.push(`${indent}\t\t}`);
+      lines.push(`${indent}\t\tfor _, b := range ${itemVar}_bytes {`);
+      lines.push(`${indent}\t\t\tencoder.WriteUint8(b)`);
+      lines.push(`${indent}\t\t}`);
+    } else {
+      // Other variant types - just encode normally
+      lines.push(`${indent}\t\t${itemVar}_bytes, err := v.EncodeWithContext(childCtx)`);
+      lines.push(`${indent}\t\tif err != nil {`);
+      lines.push(`${indent}\t\t\treturn nil, fmt.Errorf("failed to encode ${variantTypeName}: %w", err)`);
+      lines.push(`${indent}\t\t}`);
+      lines.push(`${indent}\t\tfor _, b := range ${itemVar}_bytes {`);
+      lines.push(`${indent}\t\t\tencoder.WriteUint8(b)`);
+      lines.push(`${indent}\t\t}`);
+    }
+
+    // Check for terminal variants
+    if (hasTerminalVariants && terminalVariants.includes(variantTypeName)) {
+      if (kind === "null_terminated") {
+        lines.push(`${indent}\t\t${terminatedVarName} = true`);
+      }
+      lines.push(`${indent}\t\tbreak ${loopLabel} // Terminal variant - stop encoding`);
+    }
+  }
+
+  lines.push(`${indent}\tdefault:`);
+  lines.push(`${indent}\t\treturn nil, fmt.Errorf("unknown variant type in ${arrName}: %T", ${itemVar})`);
+  lines.push(`${indent}\t}`);
+  lines.push(`${indent}}`);
+
+  // Write null terminator for null_terminated arrays (only if no terminal variant was hit)
+  if (kind === "null_terminated") {
+    if (hasTerminalVariants) {
+      lines.push(`${indent}if !${terminatedVarName} {`);
+      lines.push(`${indent}\tencoder.WriteUint8(0)`);
+      lines.push(`${indent}}`);
+    } else {
+      lines.push(`${indent}encoder.WriteUint8(0)`);
+    }
+  }
 
   return lines;
 }
@@ -3263,8 +3521,10 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
       lines.push(...innerLines);
     } else {
       // For struct types, encode to bytes first
+      // Update context with current absolute position for compression dictionary support
       const itemBytesVar = `${itemVar}_bytes`;
-      lines.push(`${indent}\t${itemBytesVar}, err := ${itemVar}.EncodeWithContext(childCtx)`);
+      lines.push(`${indent}\t${itemVar}_ctx := childCtx.WithByteOffset(ctx.ByteOffset + encoder.Position())`);
+      lines.push(`${indent}\t${itemBytesVar}, err := ${itemVar}.EncodeWithContext(${itemVar}_ctx)`);
       lines.push(`${indent}\tif err != nil {`);
       lines.push(`${indent}\t\treturn nil, err`);
       lines.push(`${indent}\t}`);
@@ -3358,18 +3618,21 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
 /**
  * Generates encoding code for nested struct
  * Uses childCtx (extended with parent fields) instead of ctx
+ * Updates ByteOffset to track absolute position for compression dictionary support
  */
 function generateEncodeNestedStruct(field: Field, fieldName: string, indent: string): string[] {
   const lines: string[] = [];
   // Strip leading * (dereference) for variable naming
   const cleanFieldName = fieldName.replace(/^\*/, "");
   const bytesVar = `${cleanFieldName.replace(/\./g, "_")}_bytes`;
+  const ctxVar = `${cleanFieldName.replace(/\./g, "_")}_ctx`;
 
   // If fieldName starts with * (dereference), wrap in parens for method call
   // e.g., *m.Name.Encode() parses as *(m.Name.Encode()) but we need (*m.Name).Encode()
   const encodeTarget = fieldName.startsWith("*") ? `(${fieldName})` : fieldName;
-  // Use childCtx which includes parent fields for ../ references
-  lines.push(`${indent}${bytesVar}, err := ${encodeTarget}.EncodeWithContext(childCtx)`);
+  // Update context with current absolute position for compression dictionary support
+  lines.push(`${indent}${ctxVar} := childCtx.WithByteOffset(ctx.ByteOffset + encoder.Position())`);
+  lines.push(`${indent}${bytesVar}, err := ${encodeTarget}.EncodeWithContext(${ctxVar})`);
   lines.push(`${indent}if err != nil {`);
   lines.push(`${indent}\treturn nil, err`);
   lines.push(`${indent}}`);
@@ -4072,7 +4335,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     lines.push(...innerItemLines);
 
     // Assign inner item to nested array
-    const isInnerDiscriminatedUnionTypeRef = schema.types[innerItems.type] &&
+    const isInnerDiscriminatedUnionTypeRef = schema && schema.types[innerItems.type] &&
       ((schema.types[innerItems.type] as any).type === "discriminated_union" ||
        (schema.types[innerItems.type] as any).variants !== undefined);
     const isInnerStructItem = !isPrimitiveType(innerItems.type) &&
@@ -4189,7 +4452,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
   // Determine if item is a struct type (decode returns pointer, need to dereference)
   // Note: discriminated_union returns an interface, not a pointer, so don't dereference
   // Also check if the item type references a discriminated_union in the schema
-  const isDiscriminatedUnionTypeRef = schema.types[items.type] &&
+  const isDiscriminatedUnionTypeRef = schema && schema.types[items.type] &&
     ((schema.types[items.type] as any).type === "discriminated_union" ||
      (schema.types[items.type] as any).variants !== undefined);
   const isStructItem = !isPrimitiveType(items.type) &&

@@ -23,6 +23,12 @@ type EncodingContext struct {
 	// ByteOffset tracks absolute byte offset across encoder boundaries.
 	// Used for back-reference support and position calculations.
 	ByteOffset int
+
+	// CompressionDict maps serialized values to their byte offsets for back_reference compression.
+	// When a value is first encoded, its offset is recorded. Subsequent references can use
+	// compression pointers (like DNS name compression) instead of re-encoding the value.
+	// Shared across all contexts to enable cross-encoder compression.
+	CompressionDict map[string]int
 }
 
 // ArrayIteration tracks state of an array being encoded.
@@ -42,12 +48,13 @@ func NewEncodingContext() *EncodingContext {
 		Positions:       make(map[string][]int),
 		TypeIndices:     make(map[string]map[string]int),
 		ByteOffset:      0,
+		CompressionDict: make(map[string]int),
 	}
 }
 
 // ExtendWithParent creates a new context with an additional parent added.
 // The new parent becomes the most recent (innermost) parent.
-// ArrayIterations, Positions, and TypeIndices are shared (not copied) for efficient updates.
+// ArrayIterations, Positions, TypeIndices, and CompressionDict are shared (not copied) for efficient updates.
 func (ctx *EncodingContext) ExtendWithParent(parent map[string]interface{}) *EncodingContext {
 	if ctx == nil {
 		ctx = NewEncodingContext()
@@ -63,11 +70,12 @@ func (ctx *EncodingContext) ExtendWithParent(parent map[string]interface{}) *Enc
 		Positions:       ctx.Positions,       // Shared reference
 		TypeIndices:     ctx.TypeIndices,     // Shared reference
 		ByteOffset:      ctx.ByteOffset,
+		CompressionDict: ctx.CompressionDict, // Shared reference
 	}
 }
 
 // ExtendWithArrayIteration creates a new context with an array iteration added.
-// TypeIndices is shared at the EncodingContext level to persist counters across iterations.
+// TypeIndices and CompressionDict are shared at the EncodingContext level to persist state across iterations.
 func (ctx *EncodingContext) ExtendWithArrayIteration(fieldName string, items interface{}, index int) *EncodingContext {
 	if ctx == nil {
 		ctx = NewEncodingContext()
@@ -88,9 +96,10 @@ func (ctx *EncodingContext) ExtendWithArrayIteration(fieldName string, items int
 	return &EncodingContext{
 		Parents:         ctx.Parents,
 		ArrayIterations: newIterations,
-		Positions:       ctx.Positions,   // Shared reference
-		TypeIndices:     ctx.TypeIndices, // Shared reference (persists across iterations)
+		Positions:       ctx.Positions,       // Shared reference
+		TypeIndices:     ctx.TypeIndices,     // Shared reference (persists across iterations)
 		ByteOffset:      ctx.ByteOffset,
+		CompressionDict: ctx.CompressionDict, // Shared reference (persists across iterations)
 	}
 }
 
@@ -252,6 +261,29 @@ func (ctx *EncodingContext) WithByteOffset(offset int) *EncodingContext {
 		Parents:         ctx.Parents,
 		ArrayIterations: ctx.ArrayIterations,
 		Positions:       ctx.Positions,
+		TypeIndices:     ctx.TypeIndices,
 		ByteOffset:      offset,
+		CompressionDict: ctx.CompressionDict,
 	}
+}
+
+// GetCompressionOffset retrieves the byte offset for a serialized value from the compression dictionary.
+// Returns the offset and true if found, 0 and false otherwise.
+func (ctx *EncodingContext) GetCompressionOffset(valueKey string) (int, bool) {
+	if ctx == nil || ctx.CompressionDict == nil {
+		return 0, false
+	}
+	offset, ok := ctx.CompressionDict[valueKey]
+	return offset, ok
+}
+
+// SetCompressionOffset records a value's byte offset in the compression dictionary.
+func (ctx *EncodingContext) SetCompressionOffset(valueKey string, offset int) {
+	if ctx == nil {
+		return
+	}
+	if ctx.CompressionDict == nil {
+		ctx.CompressionDict = make(map[string]int)
+	}
+	ctx.CompressionDict[valueKey] = offset
 }
