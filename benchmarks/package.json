@@ -1,0 +1,13 @@
+{
+  "name": "binschema-benchmarks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compare": "bun run compare-libraries.ts"
+  },
+  "devDependencies": {
+    "protobufjs": "^7.4.0",
+    "@msgpack/msgpack": "^3.0.0"
+  }
+}

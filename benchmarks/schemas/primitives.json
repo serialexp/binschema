@@ -1,0 +1,64 @@
+{
+  "name": "primitives",
+  "description": "Benchmark for primitive type encoding/decoding",
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "Uint8Value": {
+      "sequence": [
+        { "name": "value", "type": "uint8" }
+      ]
+    },
+    "Uint16Value": {
+      "sequence": [
+        { "name": "value", "type": "uint16" }
+      ]
+    },
+    "Uint32Value": {
+      "sequence": [
+        { "name": "value", "type": "uint32" }
+      ]
+    },
+    "AllPrimitives": {
+      "description": "Struct with common primitive types for comprehensive benchmark",
+      "sequence": [
+        { "name": "u8", "type": "uint8" },
+        { "name": "u16", "type": "uint16" },
+        { "name": "u32", "type": "uint32" },
+        { "name": "i8", "type": "int8" },
+        { "name": "i16", "type": "int16" },
+        { "name": "i32", "type": "int32" }
+      ]
+    }
+  },
+  "benchmarks": {
+    "uint8_encode": {
+      "type": "Uint8Value",
+      "value": { "value": 42 },
+      "iterations": 100000
+    },
+    "uint16_encode": {
+      "type": "Uint16Value",
+      "value": { "value": 1234 },
+      "iterations": 100000
+    },
+    "uint32_encode": {
+      "type": "Uint32Value",
+      "value": { "value": 12345678 },
+      "iterations": 100000
+    },
+    "all_primitives_encode": {
+      "type": "AllPrimitives",
+      "value": {
+        "u8": 255,
+        "u16": 65535,
+        "u32": 4294967295,
+        "i8": -128,
+        "i16": -32768,
+        "i32": -2147483648
+      },
+      "iterations": 100000
+    }
+  }
+}

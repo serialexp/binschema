@@ -1,0 +1,67 @@
+{
+  "name": "dns_header",
+  "description": "Benchmark for DNS header with bitfields - real-world protocol example",
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "DnsHeader": {
+      "description": "DNS message header - fixed 12 bytes with bitfields",
+      "sequence": [
+        { "name": "id", "type": "uint16" },
+        { "name": "qr", "type": "bit", "size": 1 },
+        { "name": "opcode", "type": "bit", "size": 4 },
+        { "name": "aa", "type": "bit", "size": 1 },
+        { "name": "tc", "type": "bit", "size": 1 },
+        { "name": "rd", "type": "bit", "size": 1 },
+        { "name": "ra", "type": "bit", "size": 1 },
+        { "name": "z", "type": "bit", "size": 3 },
+        { "name": "rcode", "type": "bit", "size": 4 },
+        { "name": "qdcount", "type": "uint16" },
+        { "name": "ancount", "type": "uint16" },
+        { "name": "nscount", "type": "uint16" },
+        { "name": "arcount", "type": "uint16" }
+      ]
+    }
+  },
+  "benchmarks": {
+    "dns_header_query": {
+      "type": "DnsHeader",
+      "value": {
+        "id": 4660,
+        "qr": 0,
+        "opcode": 0,
+        "aa": 0,
+        "tc": 0,
+        "rd": 1,
+        "ra": 0,
+        "z": 0,
+        "rcode": 0,
+        "qdcount": 1,
+        "ancount": 0,
+        "nscount": 0,
+        "arcount": 0
+      },
+      "iterations": 100000
+    },
+    "dns_header_response": {
+      "type": "DnsHeader",
+      "value": {
+        "id": 4660,
+        "qr": 1,
+        "opcode": 0,
+        "aa": 1,
+        "tc": 0,
+        "rd": 1,
+        "ra": 1,
+        "z": 0,
+        "rcode": 0,
+        "qdcount": 1,
+        "ancount": 5,
+        "nscount": 2,
+        "arcount": 3
+      },
+      "iterations": 100000
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "name": "nested",
+  "description": "Benchmark for nested struct encoding/decoding",
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "Point": {
+      "sequence": [
+        { "name": "x", "type": "int32" },
+        { "name": "y", "type": "int32" }
+      ]
+    },
+    "DeepNested": {
+      "description": "5 levels of nesting",
+      "sequence": [
+        { "name": "level1", "type": "Level1" }
+      ]
+    },
+    "Level1": {
+      "sequence": [
+        { "name": "value", "type": "uint32" },
+        { "name": "level2", "type": "Level2" }
+      ]
+    },
+    "Level2": {
+      "sequence": [
+        { "name": "value", "type": "uint32" },
+        { "name": "level3", "type": "Level3" }
+      ]
+    },
+    "Level3": {
+      "sequence": [
+        { "name": "value", "type": "uint32" },
+        { "name": "level4", "type": "Level4" }
+      ]
+    },
+    "Level4": {
+      "sequence": [
+        { "name": "value", "type": "uint32" },
+        { "name": "level5", "type": "Level5" }
+      ]
+    },
+    "Level5": {
+      "sequence": [
+        { "name": "value", "type": "uint32" }
+      ]
+    }
+  },
+  "benchmarks": {
+    "point": {
+      "type": "Point",
+      "value": { "x": 100, "y": 200 },
+      "iterations": 100000
+    }
+  }
+}

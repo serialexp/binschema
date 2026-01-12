@@ -23,3 +23,7 @@ rust/target/
 rust/debug-test/
 rust/rust/tmp-*/
 rust/tmp-*/
+
+# Benchmark generated files
+.generated-bench/
+benchmarks/results-*.json

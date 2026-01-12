@@ -1,0 +1,28 @@
+{
+  "name": "arrays",
+  "description": "Benchmark for array encoding/decoding",
+  "config": {
+    "endianness": "big_endian"
+  },
+  "types": {
+    "SmallArray": {
+      "sequence": [
+        { "name": "count", "type": "uint16", "computed": { "type": "count_of", "target": "values" } },
+        {
+          "name": "values",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "count",
+          "items": { "type": "uint32" }
+        }
+      ]
+    }
+  },
+  "benchmarks": {
+    "small_array": {
+      "type": "SmallArray",
+      "value": { "values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+      "iterations": 50000
+    }
+  }
+}

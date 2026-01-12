@@ -1,4 +1,4 @@
-.PHONY: test test-ts test-go test-go-filter test-rust test-rust-debug clean docker-build docker-build-push docker-run docker-stop website
+.PHONY: test test-ts test-go test-go-filter test-rust test-rust-debug clean docker-build docker-build-push docker-run docker-stop website bench bench-ts bench-go bench-compare
 
 # Run all tests (TypeScript and Go)
 test: test-ts test-go
@@ -60,9 +60,38 @@ docker-stop:
 # Clean generated files and build artifacts
 clean:
 	rm -rf .generated/
+	rm -rf .generated-bench/
 	rm -rf tmp-go/
 	rm -rf rust/tmp-rust/
 	rm -f test_output.txt
 	rm -rf go/test/generated/
 	rm -rf dist/
 	rm -rf website/dist/
+	rm -f benchmarks/results-ts.json
+	rm -f benchmarks/results-go.json
+
+# ========== Benchmarks ==========
+
+# Run all benchmarks (TypeScript and Go)
+bench: bench-ts bench-go bench-compare
+
+# Run TypeScript benchmarks
+bench-ts:
+	@echo "Running TypeScript benchmarks..."
+	bun benchmarks/run-ts.ts
+
+# Run Go benchmarks
+bench-go:
+	@echo "Running Go benchmarks..."
+	go run benchmarks/run-go.go -json=benchmarks/results-go.json
+
+# Compare benchmark results
+bench-compare:
+	@echo ""
+	@echo "Comparing benchmark results..."
+	@bun benchmarks/compare.ts
+
+# Compare against other serialization libraries
+bench-libraries:
+	@echo "Comparing BinSchema against other libraries..."
+	@cd benchmarks && bun install --silent && cd .. && bun benchmarks/compare-libraries.ts
