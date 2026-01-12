@@ -27,3 +27,8 @@ rust/tmp-*/
 # Benchmark generated files
 .generated-bench/
 benchmarks/results-*.json
+benchmarks/perf.data
+benchmarks/*.0x/
+
+# Test debug output
+go/test/tmp-go-debug/
