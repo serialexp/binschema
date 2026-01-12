@@ -12,14 +12,15 @@ import (
 
 // TestSummary holds aggregated test results
 type TestSummary struct {
-	TotalSuites      int
-	FullyPassingSuites int
+	TotalSuites            int
+	FullyPassingSuites     int
 	PartiallyPassingSuites int
-	FullyFailingSuites int
-	TotalTests       int
-	PassedTests      int
-	FailedTests      int
-	SuiteResults     map[string]*SuiteSummary
+	FullyFailingSuites     int
+	SchemaErrorSuites      int // Suites that test schema validation errors (intentionally empty)
+	TotalTests             int
+	PassedTests            int
+	FailedTests            int
+	SuiteResults           map[string]*SuiteSummary
 }
 
 // SuiteSummary holds results for a single test suite
@@ -39,17 +40,24 @@ func BuildTestSummary(resultMap map[string][]TestResult, suites []*TestSuite) *T
 	}
 
 	for _, suite := range suites {
+		// Skip schema validation error tests - they're intentionally empty
+		if suite.SchemaValidationError {
+			summary.SchemaErrorSuites++
+			continue
+		}
+
 		results, ok := resultMap[suite.Name]
 		if !ok {
 			// Suite has no results (probably failed to compile)
+			testCases := suite.GetTestCases()
 			summary.SuiteResults[suite.Name] = &SuiteSummary{
 				Name:   suite.Name,
-				Failed: len(suite.TestCases),
-				Total:  len(suite.TestCases),
+				Failed: len(testCases),
+				Total:  len(testCases),
 			}
 			summary.FullyFailingSuites++
-			summary.FailedTests += len(suite.TestCases)
-			summary.TotalTests += len(suite.TestCases)
+			summary.FailedTests += len(testCases)
+			summary.TotalTests += len(testCases)
 			continue
 		}
 

@@ -89,20 +89,18 @@ func TestBinSchema(t *testing.T) {
 		t.Logf("%s %s: %d/%d passed", status, suite.Name, passed, passed+failed)
 	}
 
-	t.Logf("\nSummary: %d/%d tests passed across %d suites",
-		totalPassed, totalPassed+totalFailed, len(suites))
+	// Build summary for reporting
+	summary := BuildTestSummary(resultMap, suites)
 
-	if totalFailed > 0 {
-		t.Logf("Failed tests: %d", totalFailed)
-		// Don't fail the test yet - we're still developing
-		// t.Fail()
-	}
+	// Always print TypeScript-style summary
+	suitesWithFailures := summary.PartiallyPassingSuites + summary.FullyFailingSuites
+	t.Logf("\nTotal: %d passed, %d failed", summary.PassedTests, summary.FailedTests)
+	t.Logf("%d test suites, %d passed, %d failed, %d schema errors, %d suites with failures",
+		summary.TotalSuites, summary.PassedTests, summary.FailedTests, summary.SchemaErrorSuites, suitesWithFailures)
 
 	// Check for TEST_REPORT flag to print additional reports
 	reportType := os.Getenv("TEST_REPORT")
 	if reportType != "" {
-		summary := BuildTestSummary(resultMap, suites)
-
 		switch reportType {
 		case "summary":
 			summary.PrintSummary()

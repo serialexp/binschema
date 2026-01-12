@@ -57,7 +57,7 @@ EOF
 
 ```bash
 # Run all tests (TypeScript and Go)
-make test
+just test
 
 # Run TypeScript/Bun tests only
 npm test                                       # Run all BinSchema tests (~0.15s with bun!)
@@ -72,17 +72,17 @@ npm test -- --filter='uint8|uint16|uint32'     # Tests matching ANY of the patte
 npm test -- --failures                         # Only show test suites with failures
 DEBUG_TEST=1 npm test -- --filter=zip          # Debug zip tests with verbose output
 
-# Go test suite - USE MAKE COMMANDS (not raw go test)
+# Go test suite - USE JUST COMMANDS (not raw go test)
 # Uses batched compilation for efficiency (single compilation, ~5-10s vs one-by-one, ~60s)
-make test-go                                  # Run all Go tests
-make test-go FILTER=primitives                # Run only tests matching 'primitives' (regex)
-make test-go FILTER='^uint8$'                 # Exact match using regex anchors
-make test-go REPORT=summary                   # Print overall statistics
-make test-go REPORT=failing-tests             # Show individual failing test cases
-make test-go FILTER=bit REPORT=summary        # Combine filter and report
-make test-go-debug FILTER=uint8               # Debug mode (saves generated code to go/test/tmp-go-debug/)
+just test-go                                  # Run all Go tests
+just test-go primitives                       # Run only tests matching 'primitives' (regex)
+just test-go '^uint8$'                        # Exact match using regex anchors
+just test-go '' summary                       # Print overall statistics (empty filter)
+just test-go '' failing-tests                 # Show individual failing test cases
+just test-go bit summary                      # Combine filter and report
+just test-go-debug uint8                      # Debug mode (saves generated code to go/test/tmp-go-debug/)
 
-# Available REPORT values:
+# Available REPORT values (second parameter):
 # - summary: Overall pass/fail statistics
 # - failed-suites: List only test suites with failures
 # - passing-suites: List 100% passing test suites
@@ -90,7 +90,17 @@ make test-go-debug FILTER=uint8               # Debug mode (saves generated code
 # - json: JSON output for scripting
 ```
 
-**⚠️ Important**: Always use `make test-go` commands instead of raw `go test` commands. The make targets handle the working directory and environment variables correctly. If you need a new report format, add it to `go/test/test_summary.go` and document it here.
+**⚠️ Important**: Always use `just test-go` commands instead of raw `go test` commands. The just recipes handle the working directory and environment variables correctly. If you need a new report format, add it to `go/test/test_summary.go` and document it here.
+
+```bash
+# Rust test suite - batched compilation (slower, ~60s compile time)
+just test-rust                        # Run all Rust tests
+just test-rust primitives             # Filter tests
+just test-rust-debug                  # Debug mode (saves generated code to rust/tmp-rust-debug/)
+just test-rust-debug uint8            # Debug with filter
+```
+
+**Note**: Rust tests require compilation of all generated code together, which takes ~60 seconds. Filter and report parameters are passed as environment variables but require implementation in `rust/tests/compile_batch.rs` to take effect.
 
 ### TypeScript Test Flags
 
@@ -376,27 +386,34 @@ chore(deps): update zod to 4.1.12
 ## Build Commands
 
 ```bash
+# List all available commands
+just --list
+
 # Run TypeScript tests
-make test-ts
+just test-ts
 
 # Run Go tests
-make test-go
-
-# Run Go tests with filter
-make test-go-filter FILTER=primitives
+just test-go
+just test-go primitives              # With filter
+just test-go dns summary             # With filter and report
 
 # Build website
-make website
+just website
 
 # Run website dev server
-make run-website
+just run-website
 
 # Docker build
-make docker-build
-make docker-build-push
+just docker-build
+just docker-build-push
 
 # Clean generated files
-make clean
+just clean
+
+# Benchmarks
+just bench                           # Run all benchmarks
+just bench-ts                        # TypeScript only
+just bench-go                        # Go only
 ```
 
 ## Directory Structure
@@ -530,7 +547,7 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
 
 If you need to inspect generated Go code:
 ```bash
-make test-go-debug FILTER=uint8
+just test-go-debug uint8
 # Generated code will be in go/test/tmp-go-debug/ directory instead of being deleted
 ```
 
