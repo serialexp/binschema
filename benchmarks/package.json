@@ -4,10 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "compare": "bun run compare-libraries.ts"
+    "compare": "bun run compare-libraries.ts",
+    "compare-kaitai": "bun run compare-kaitai.ts"
   },
   "devDependencies": {
     "protobufjs": "^7.4.0",
-    "@msgpack/msgpack": "^3.0.0"
+    "@msgpack/msgpack": "^3.0.0",
+    "kaitai-struct": "^0.11.0",
+    "kaitai-struct-compiler": "^0.11.0"
+  },
+  "dependencies": {
+    "yaml": "^2.8.2"
   }
 }

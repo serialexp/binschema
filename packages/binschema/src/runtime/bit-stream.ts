@@ -35,24 +35,50 @@ export class BitStreamEncoder {
       throw new Error(`Invalid bit size: ${size} (must be 1-64)`);
     }
 
-    // Convert to bigint for consistent handling
-    let val = typeof value === 'bigint' ? value : BigInt(value);
+    // Optimization: Use Number operations for sizes <= 31 (much faster than BigInt)
+    // Note: size=32 needs special handling because (1 << 32) overflows in JS
+    if (size <= 31 && typeof value !== 'bigint') {
+      let val = (value >>> 0) & ((1 << size) - 1); // Mask to size
 
-    // Mask to size
+      if (this.bitOrder === "lsb_first") {
+        for (let i = 0; i < size; i++) {
+          this.writeBit((val >> i) & 1);
+        }
+      } else {
+        for (let i = size - 1; i >= 0; i--) {
+          this.writeBit((val >> i) & 1);
+        }
+      }
+      return;
+    }
+
+    // Fast path for size=32 with Number input (common case)
+    if (size === 32 && typeof value !== 'bigint') {
+      let val = value >>> 0; // No mask needed, >>> 0 gives us all 32 bits
+
+      if (this.bitOrder === "lsb_first") {
+        for (let i = 0; i < 32; i++) {
+          this.writeBit((val >>> i) & 1);
+        }
+      } else {
+        for (let i = 31; i >= 0; i--) {
+          this.writeBit((val >>> i) & 1);
+        }
+      }
+      return;
+    }
+
+    // BigInt path for sizes > 32 or bigint input
+    let val = typeof value === 'bigint' ? value : BigInt(value);
     const mask = (1n << BigInt(size)) - 1n;
     val = val & mask;
 
-    // Write bits according to bit order configuration
-    // msb_first: Write MSB of value first (video codecs, network protocols)
-    // lsb_first: Write LSB of value first (hardware bitfields)
     if (this.bitOrder === "lsb_first") {
-      // LSB first: bit 0 of value goes to first bit position
       for (let i = 0; i < size; i++) {
         const bit = Number((val >> BigInt(i)) & 1n);
         this.writeBit(bit);
       }
     } else {
-      // MSB first: bit (size-1) of value goes to first bit position
       for (let i = size - 1; i >= 0; i--) {
         const bit = Number((val >> BigInt(i)) & 1n);
         this.writeBit(bit);
@@ -480,17 +506,54 @@ export class BitStreamDecoder {
       throw new Error(`Invalid bit size: ${size} (must be 1-64)`);
     }
 
+    // Optimization: Use Number operations for sizes <= 31 (much faster than BigInt)
+    // Note: size=32 needs special handling because (1 << 32) overflows in JS
+    if (size <= 31) {
+      let result = 0;
+
+      if (this.bitOrder === "lsb_first") {
+        for (let i = 0; i < size; i++) {
+          const bit = this.readBit();
+          result = result | (bit << i);
+        }
+      } else {
+        for (let i = size - 1; i >= 0; i--) {
+          const bit = this.readBit();
+          result = result | (bit << i);
+        }
+      }
+
+      return BigInt(result >>> 0);
+    }
+
+    // Fast path for size=32 (common case)
+    if (size === 32) {
+      let result = 0;
+
+      if (this.bitOrder === "lsb_first") {
+        for (let i = 0; i < 32; i++) {
+          const bit = this.readBit();
+          result = (result | (bit << i)) >>> 0; // >>> 0 keeps it unsigned
+        }
+      } else {
+        for (let i = 31; i >= 0; i--) {
+          const bit = this.readBit();
+          result = (result | (bit << i)) >>> 0;
+        }
+      }
+
+      return BigInt(result >>> 0);
+    }
+
+    // BigInt path for sizes > 32
     let result = 0n;
 
-    // Read bits according to bit order configuration
     if (this.bitOrder === "lsb_first") {
-      // LSB first: bit 0 comes from first bit position
       for (let i = 0; i < size; i++) {
         const bit = this.readBit();
         result = result | (BigInt(bit) << BigInt(i));
       }
     } else {
-      // MSB first: bit (size-1) comes from first bit position
       for (let i = size - 1; i >= 0; i--) {
         const bit = this.readBit();
         result = result | (BigInt(bit) << BigInt(i));

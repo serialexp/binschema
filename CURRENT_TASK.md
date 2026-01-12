@@ -47,9 +47,168 @@ Throwing things at the wall to see what sticks is **wasting time**. The TypeScri
 
 ---
 
-**Status**: In Progress - crc32_of with corresponding selectors
+**Status**: In Progress - Go Performance Optimization (Branch: go-perf-optimization)
 **Date Started**: 2025-01-07
 **Last Updated**: 2025-01-12
+
+## Session Progress (2025-01-12) - Session 25: Go Performance Optimization (WIP)
+
+### Achievement: Benchmark Infrastructure & Optimization Analysis
+
+Created Go benchmarks comparing BinSchema vs Kaitai Struct vs hand-optimized C. Discovered significant optimization opportunities but hit complexity with discriminated union handling.
+
+### Benchmark Results (Before Optimization)
+
+**DNS Query Packet (29 bytes):**
+| Implementation | Time | Memory | Allocations | vs C |
+|---------------|------|--------|-------------|------|
+| **C (hand-optimized)** | 32 ns | 16 B | 1 | 1.0x |
+| BinSchema Go | 304 ns | 376 B | 14 | 9.5x |
+| Kaitai Go | 330 ns | 840 B | 17 | 10.3x |
+
+**Key Finding**: BinSchema Go is already **faster than Kaitai Go** without any optimization.
+
+### Hand-Optimized Go Proof-of-Concept
+
+Created `benchmarks/go-compare/binschema/dns_optimized.go` with manual optimizations:
+
+| Implementation | Query Time | Response Time | Allocations (Query) |
+|---------------|------------|---------------|---------------------|
+| Original | 304 ns | 488 ns | 14 |
+| Hand-Optimized | 92 ns | 152 ns | 3 |
+| C | 32 ns | 35 ns | 1 |
+
+**Achieved 3.3x speedup** with these techniques:
+1. **Value type returns** - Return structs directly, not pointers
+2. **Zero-copy []byte** - Labels slice into input data, no string copy
+3. **No interface{}** - Inline RDATA variants in struct instead of boxing
+4. **Minimal decoder** - Simple inline decoder, no abstraction overhead
+
+### Generator Optimization Attempt (Partial)
+
+**Branch**: `go-perf-optimization`
+
+Attempted to modify `packages/binschema/src/generators/go.ts` to generate value-returning decode functions:
+
+**Changes made:**
+1. Public `Decode${name}` returns pointer (unchanged API)
+2. Internal `decode${name}WithDecoder` returns value type `(${name}, error)`
+3. Changed `result := &${name}{}` to `var result ${name}`
+4. Changed `return nil, err` to `return result, err` in many places
+5. Discriminated union decoders take address: `return &result, nil`
+
+**Issues encountered:**
+1. **Discriminated unions**: Interface methods are on pointer receivers, so variant decoders must return pointers or the caller must take address
+2. **Cascading changes**: ~60+ places generate `return nil,` in different contexts
+3. **Context undefined**: Some generated code paths reference `result` but it's not defined in that scope
+4. **Interface assignment**: Value types can't directly satisfy interfaces with pointer receivers
+
+### Files Created
+
+**Benchmark infrastructure** (`benchmarks/go-compare/`):
+- `go.mod` - Go module for benchmark
+- `benchmark_test.go` - Comprehensive benchmarks
+- `binschema/` - BinSchema generated code + optimized variants
+- `kaitai/` - Kaitai-generated DNS parser
+- `cdns/` - Hand-optimized C DNS parser with CGO wrapper
+
+**Generation scripts** (`benchmarks/`):
+- `generate-go-kaitai.ts` - Generates Kaitai Go code from .ksy
+- `generate-go-binschema.ts` - Generates BinSchema Go code
+
+### Next Steps for Generator Optimization
+
+The value-return optimization needs a more surgical approach:
+
+1. **Track variant types**: Know which struct types are discriminated union variants
+2. **Different codegen paths**:
+   - Union variants: Return pointer (for interface satisfaction)
+   - Regular structs: Return value (for allocation optimization)
+3. **Or simpler**: Just optimize the decoder internals without changing return types
+
+Alternative optimizations that don't require changing return types:
+- **Object pooling**: `sync.Pool` for BitStreamDecoder (minimal impact found)
+- **[]byte for strings**: Zero-copy slice instead of string allocation
+- **Inline decoder**: Skip BitStreamDecoder abstraction for simple reads
+
+### Key Learnings
+
+1. **BinSchema Go is already competitive** - 10% faster than Kaitai Go out of the box
+2. **The gap to C is ~10x** - Mostly due to Go's allocation model
+3. **Value types help significantly** - 3x speedup in hand-optimized code
+4. **Discriminated unions are complex** - Interface semantics complicate value returns
+5. **Correctness matters more** - Test suite ensures we don't break anything
+
+---
+
+## Session Progress (2025-01-12) - Session 24: Performance Benchmarking vs Kaitai Struct
+
+### Achievement: Runtime Optimization - 40% Decode Performance Improvement
+
+Created comprehensive benchmarks comparing BinSchema to Kaitai Struct (a comparable tool for parsing existing binary protocols), identified performance bottlenecks via profiling, and implemented optimizations.
+
+### Benchmarking Infrastructure Created
+
+**Files created in `benchmarks/`:**
+- `compare-kaitai.ts` - Fair comparison benchmark using DNS packet parsing
+- `profile-binschema.ts` - Standalone profiling script
+- `profile-standalone.mjs` - Bundled version for 0x flamegraph profiling
+- `.generated-bench/` - Generated decoders for benchmarking
+
+**Dependencies added:**
+- `kaitai-struct` and `kaitai-struct-compiler` - For generating Kaitai parsers
+- `yaml` - For parsing .ksy schema files
+
+### Profiling Results (via 0x flamegraph)
+
+Top hotspots identified in BinSchema decoder:
+1. `_SeekableBitStreamDecoder` / `_BitStreamDecoder` constructors - object allocation overhead
+2. `readBits` - Using BigInt for ALL bit sizes (even 1-bit reads)
+3. `BigIntShiftLeftNoThrow`, `ToBigInt/ToNumber` - Unnecessary type conversions
+4. `createReader` / `BufferReader` - Factory function overhead
+
+### Runtime Optimization Implemented
+
+**File modified:** `packages/binschema/src/runtime/bit-stream.ts`
+
+**Change:** Optimized `readBits()` and `writeBits()` to use Number operations for sizes ≤ 32 bits:
+- Sizes 1-31: Use fast Number bitwise operations
+- Size 32: Special case (since `1 << 32` overflows in JS)
+- Sizes 33-64: Use BigInt (unchanged)
+
+### Benchmark Results
+
+**DNS Query Packet (29 bytes, no compression):**
+| Library | Before | After | Improvement |
+|---------|--------|-------|-------------|
+| Kaitai Struct | 650ns | 650ns | (baseline) |
+| BinSchema | 1.17-1.33µs | 775ns | ~40% faster |
+| Gap | 1.79-2.05x slower | 1.19x slower | Much closer |
+
+**DNS Response Packet (45 bytes, with compression):**
+| Library | Before | After | Improvement |
+|---------|--------|-------|-------------|
+| Kaitai Struct | 750-860ns | 860ns | (baseline) |
+| BinSchema | 1.41-1.76µs | 981ns | ~40% faster |
+| Gap | 1.75-2.35x slower | 1.14x slower | Much closer |
+
+### Key Findings
+
+1. **BinSchema vs Kaitai is now competitive** - Only ~15% slower for decode-only operations
+2. **BinSchema offers more features** - Full encode+decode, native bitfields, discriminated unions, back_references
+3. **Further optimization opportunities exist:**
+   - Constructor overhead (object pooling/reuse)
+   - `createReader` factory allocation
+   - Generated code could avoid SeekableBitStreamDecoder when not needed
+
+### Next Steps for Performance
+
+1. **Test Go code generation for Kaitai** - Compare Go implementations
+2. **Reduce constructor overhead** - Object pooling or decoder reset methods
+3. **Optimize generated code** - Use simpler decoder class when random access not needed
+4. **Profile encoder path** - Similar BigInt optimization may help encoding
+
+---
 
 ## Session Progress (2025-01-12) - Session 23: crc32_of with Corresponding Selectors (WIP)
 

@@ -1,0 +1,46 @@
+goos: linux
+goarch: amd64
+pkg: github.com/anthropics/binschema/benchmarks/go-compare
+cpu: AMD Ryzen 9 9900X 12-Core Processor            
+BenchmarkKaitaiQueryDecode-24          	 3388111	       357.1 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3576231	       321.2 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3478102	       305.8 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3942808	       328.0 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3597900	       295.3 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 4071882	       337.6 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3528435	       359.4 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3403537	       317.7 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3494030	       340.5 ns/op	     840 B/op	      17 allocs/op
+BenchmarkKaitaiQueryDecode-24          	 3724951	       342.3 ns/op	     840 B/op	      17 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 4054636	       293.9 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 3997760	       288.9 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 4121916	       297.0 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 4143082	       296.9 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 4154836	       297.0 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 3881324	       296.0 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 4159281	       303.4 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 4076804	       302.5 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 3891603	       304.8 ns/op	     376 B/op	      14 allocs/op
+BenchmarkBinSchemaQueryDecode-24       	 3891626	       457.0 ns/op	     376 B/op	      14 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 1351170	       779.8 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 1771879	       636.1 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 1940680	       576.9 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2199644	       538.0 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2155399	       499.1 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2172796	       531.4 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2371694	       529.1 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2235964	       517.4 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2561568	       512.7 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkKaitaiResponseDecode-24       	 2214213	       501.7 ns/op	    1280 B/op	      28 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2405325	       479.4 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2476459	       482.4 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2684395	       448.2 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2496218	       453.7 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2651220	       454.9 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2613340	       461.9 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2551862	       450.3 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2603390	       482.3 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2555025	       471.9 ns/op	     640 B/op	      24 allocs/op
+BenchmarkBinSchemaResponseDecode-24    	 2482856	       468.0 ns/op	     640 B/op	      24 allocs/op
+PASS
+ok  	github.com/anthropics/binschema/benchmarks/go-compare	65.169s
