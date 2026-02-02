@@ -124,6 +124,8 @@ pub struct TestCase {
     pub description: String,
     pub value: serde_json::Value,
     #[serde(default)]
+    pub decoded_value: Option<serde_json::Value>,  // For decode comparison (includes computed fields)
+    #[serde(default)]
     pub bytes: Option<Vec<u8>>,  // Optional - some tests only validate bits
     #[serde(default)]
     pub bits: Option<Vec<u8>>,

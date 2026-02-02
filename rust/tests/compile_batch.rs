@@ -228,7 +228,19 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
             &format!(": {} =", prefixed),
         );
 
-        // 9. Result/Option wrapped types: `Result<Foo>` or `Option<Foo>`
+        // 9. From trait target type: `for TypeName {`
+        result = result.replace(
+            &format!("for {} {{", type_name),
+            &format!("for {} {{", prefixed),
+        );
+
+        // 10. Function parameter type: `o: TypeName)`
+        result = result.replace(
+            &format!(": {})", type_name),
+            &format!(": {})", prefixed),
+        );
+
+        // 11. Result/Option wrapped types: `Result<Foo>` or `Option<Foo>`
         result = result.replace(
             &format!("Result<{}>", type_name),
             &format!("Result<{}>", prefixed),
@@ -452,13 +464,21 @@ fn generate_value_construction(
             continue;
         }
 
+        let rust_field_name = escape_rust_keyword(&to_snake_case(field_name_lower));
+
         // Check if there's a value for this field in the JSON
         let field_value = match value_map.get(field_name_lower) {
             Some(val) => val,
-            None => continue, // Field not present in test value
+            None => {
+                // Field not present in test value
+                if field.field_type == "optional" || field.conditional.is_some() {
+                    // Optional and conditional fields get None (both are Option<T> in Rust)
+                    result.push_str(&format!("                {}: None,\n", rust_field_name));
+                }
+                continue;
+            }
         };
 
-        let rust_field_name = escape_rust_keyword(&to_snake_case(field_name_lower));
         // Pass the current type name as containing type for bitfield struct naming
         let formatted_value = format_value_with_field_and_context(field_value, field, schema, prefix, current_type_name);
         result.push_str(&format!("                {}: {},\n", rust_field_name, formatted_value));
@@ -506,6 +526,19 @@ fn format_value_with_field_and_context(
     prefix: &str,
     containing_type_name: &str,
 ) -> String {
+    // Default to Input suffix for regular struct fields
+    format_value_with_field_and_suffix(value, field, schema, prefix, containing_type_name, "Input")
+}
+
+/// Format a field value with explicit suffix propagation
+fn format_value_with_field_and_suffix(
+    value: &serde_json::Value,
+    field: &Field,
+    schema: &Schema,
+    prefix: &str,
+    containing_type_name: &str,
+    suffix: &str,
+) -> String {
     let field_type = &field.field_type;
 
     // Handle optional fields - look at value_type and wrap in Some(...)
@@ -515,12 +548,12 @@ fn format_value_with_field_and_context(
             if let Some(type_def) = schema.types.get(value_type) {
                 match type_def {
                     TypeDef::Sequence { .. } => {
-                        let inner = format_nested_struct(value, value_type, schema, prefix);
+                        let inner = format_nested_struct_with_suffix(value, value_type, schema, prefix, suffix);
                         return format!("Some({})", inner);
                     }
                     TypeDef::Direct { .. } => {
                         // Direct type reference (newtype wrapper)
-                        let inner = format_value_as_newtype(value, value_type, prefix);
+                        let inner = format_value_as_newtype(value, value_type, prefix, schema);
                         return format!("Some({})", inner);
                     }
                     _ => {}
@@ -529,6 +562,13 @@ fn format_value_with_field_and_context(
         }
         // Primitive optional - wrap in Some(...)
         let inner = format_value_simple(value);
+        return format!("Some({})", inner);
+    }
+
+    // Handle conditional fields - they are also Option<T> in Rust
+    if field.conditional.is_some() {
+        // Format the inner value based on field type, then wrap in Some(...)
+        let inner = format_conditional_inner_value(value, field_type, schema, prefix, suffix, containing_type_name);
         return format!("Some({})", inner);
     }
 
@@ -546,10 +586,10 @@ fn format_value_with_field_and_context(
         }
     }
 
-    // Handle array fields
+    // Handle array fields - propagate suffix for choice types inside arrays
     if field_type == "array" {
         if let serde_json::Value::Array(arr) = value {
-            return format_array_with_field(arr, field, schema, prefix);
+            return format_array_with_field_and_suffix(arr, field, schema, prefix, suffix);
         }
         return "vec![]".to_string();
     }
@@ -558,14 +598,14 @@ fn format_value_with_field_and_context(
     if let Some(type_def) = schema.types.get(field_type) {
         match type_def {
             TypeDef::Sequence { .. } => {
-                return format_nested_struct(value, field_type, schema, prefix);
+                return format_nested_struct_with_suffix(value, field_type, schema, prefix, suffix);
             }
             TypeDef::DiscriminatedUnion { .. } => {
                 return format_discriminated_union_value(value, field_type, schema, prefix);
             }
             TypeDef::Direct { .. } => {
                 // Direct type reference (newtype wrapper like String, InlineString)
-                return format_value_as_newtype(value, field_type, prefix);
+                return format_value_as_newtype(value, field_type, prefix, schema);
             }
         }
     }
@@ -619,13 +659,102 @@ fn format_value_with_field_and_context(
     format_value_simple(value)
 }
 
-/// Format a value as a newtype wrapper (e.g., MyString("hello".to_string()))
+/// Format the inner value for a conditional field
+/// This handles the value formatting without the Some() wrapper
+fn format_conditional_inner_value(
+    value: &serde_json::Value,
+    field_type: &str,
+    schema: &Schema,
+    prefix: &str,
+    suffix: &str,
+    containing_type_name: &str,
+) -> String {
+    // Check if it's a named type (struct, discriminated union, or direct type reference)
+    if let Some(type_def) = schema.types.get(field_type) {
+        match type_def {
+            TypeDef::Sequence { .. } => {
+                return format_nested_struct_with_suffix(value, field_type, schema, prefix, suffix);
+            }
+            TypeDef::DiscriminatedUnion { .. } => {
+                return format_discriminated_union_value(value, field_type, schema, prefix);
+            }
+            TypeDef::Direct { .. } => {
+                return format_value_as_newtype(value, field_type, prefix, schema);
+            }
+        }
+    }
+
+    // Handle array types
+    if field_type == "array" {
+        if let serde_json::Value::Array(arr) = value {
+            let items: Vec<String> = arr.iter().map(|v| format_value_simple(v)).collect();
+            return format!("vec![{}]", items.join(", "));
+        }
+        return "vec![]".to_string();
+    }
+
+    // Handle numeric types with proper casting
+    if let serde_json::Value::Number(n) = value {
+        if field_type == "float32" {
+            if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 {
+                    return format!("{}.0_f32", f as i64);
+                } else {
+                    return format!("{}_f32", f);
+                }
+            }
+        }
+        if field_type == "float64" {
+            if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 {
+                    return format!("{}.0_f64", f as i64);
+                } else {
+                    return format!("{}_f64", f);
+                }
+            }
+        }
+    }
+
+    // Primitive or string - use simple formatting
+    format_value_simple(value)
+}
+
+/// Format a value as a newtype wrapper
+/// For string type aliases: TypeName("value") - tuple constructor
+/// For composite type aliases: TypeNameOutput { value: ... } - struct literal
 fn format_value_as_newtype(
     value: &serde_json::Value,
     type_name: &str,
     prefix: &str,
+    schema: &Schema,
 ) -> String {
     let rust_type = format!("{}_{}", prefix, to_pascal_case(type_name));
+
+    // Look up the type definition to see what it wraps
+    if let Some(type_def) = schema.types.get(type_name) {
+        if let TypeDef::Direct { type_name: wrapped_type, .. } = type_def {
+            // Check if the wrapped type is "string" - use tuple constructor
+            if wrapped_type == "string" {
+                let inner_value = format_value_simple(value);
+                return format!("{}({})", rust_type, inner_value);
+            }
+
+            // Check if the wrapped type is a composite (Sequence) type
+            if let Some(wrapped_def) = schema.types.get(wrapped_type) {
+                if let TypeDef::Sequence { .. } = wrapped_def {
+                    // Composite wrapper - use struct literal with Output suffix
+                    let inner = format_nested_struct_with_suffix(value, wrapped_type, schema, prefix, "Output");
+                    return format!("{}Output {{ value: {} }}", rust_type, inner);
+                }
+            }
+
+            // Non-composite wrapper - recursively format the inner value
+            let inner = format_value_as_newtype(value, wrapped_type, prefix, schema);
+            return format!("{} {{ value: {} }}", rust_type, inner);
+        }
+    }
+
+    // Fallback: use simple formatting
     let inner_value = format_value_simple(value);
     format!("{}({})", rust_type, inner_value)
 }
@@ -636,6 +765,27 @@ fn format_nested_struct(
     type_name: &str,
     schema: &Schema,
     prefix: &str,
+) -> String {
+    format_nested_struct_with_suffix(value, type_name, schema, prefix, "Input")
+}
+
+/// Format a nested struct value for enum variant payloads (uses Output suffix)
+fn format_nested_struct_for_enum(
+    value: &serde_json::Value,
+    type_name: &str,
+    schema: &Schema,
+    prefix: &str,
+) -> String {
+    format_nested_struct_with_suffix(value, type_name, schema, prefix, "Output")
+}
+
+/// Format a nested struct value with configurable suffix
+fn format_nested_struct_with_suffix(
+    value: &serde_json::Value,
+    type_name: &str,
+    schema: &Schema,
+    prefix: &str,
+    suffix: &str,
 ) -> String {
     let value_map = match value {
         serde_json::Value::Object(map) => map,
@@ -658,9 +808,9 @@ fn format_nested_struct(
         }
     };
 
-    // Composite types use Input suffix for encoding
+    // Composite types use the specified suffix (Input for encoding, Output for enum variants)
     let rust_type_name = format!("{}_{}", prefix, to_pascal_case(type_name));
-    let rust_type_name = format!("{}Input", rust_type_name);
+    let rust_type_name = format!("{}{}", rust_type_name, suffix);
     let mut result = format!("{} {{ ", rust_type_name);
 
     for field in sequence {
@@ -669,19 +819,55 @@ fn format_nested_struct(
             None => continue,
         };
 
-        // Skip computed and const fields - they're not in the Input struct
-        if field.computed.is_some() || field.r#const.is_some() {
+        let rust_field_name = escape_rust_keyword(&to_snake_case(field_name_lower));
+
+        // Handle const fields - for Output types, include them with their constant values
+        if let Some(ref const_val) = field.r#const {
+            if suffix == "Output" {
+                // Include const field with its constant value
+                let formatted_value = format_value_simple(const_val);
+                result.push_str(&format!("{}: {}, ", rust_field_name, formatted_value));
+            }
+            // For Input types (suffix != "Output"), skip const fields
+            continue;
+        }
+
+        // Handle computed fields - for Output types, include them with default values
+        // This is a workaround to allow compilation; actual values would need decoded_value
+        if field.computed.is_some() {
+            if suffix == "Output" {
+                // Infer default value based on field type
+                let default_val = match field.field_type.as_str() {
+                    "uint8" | "uint16" | "uint32" | "uint64" | "int8" | "int16" | "int32" | "int64" => "0",
+                    "float32" => "0.0f32",
+                    "float64" => "0.0f64",
+                    _ => "0",  // Default for unknown types
+                };
+                result.push_str(&format!("{}: {}, ", rust_field_name, default_val));
+            }
+            // For Input types (suffix != "Output"), skip computed fields
             continue;
         }
 
         let field_value = match value_map.get(field_name_lower) {
             Some(val) => val,
-            None => continue, // Skip fields not in test value
+            None => {
+                // Field not in test value - handle optional fields and conditionals
+                if field.field_type == "optional" {
+                    // Optional field - use None
+                    result.push_str(&format!("{}: None, ", rust_field_name));
+                } else if field.conditional.is_some() {
+                    // Conditional field - use default value
+                    let default_val = get_default_value_for_type(&field.field_type, schema, prefix);
+                    result.push_str(&format!("{}: {}, ", rust_field_name, default_val));
+                }
+                // Other fields are just skipped (they might be optional in the test)
+                continue;
+            }
         };
 
-        let rust_field_name = escape_rust_keyword(&to_snake_case(field_name_lower));
-        // Pass the type_name as containing type for bitfield struct naming
-        let formatted_value = format_value_with_field_and_context(field_value, field, schema, prefix, type_name);
+        // Pass the type_name as containing type and propagate suffix for nested types
+        let formatted_value = format_value_with_field_and_suffix(field_value, field, schema, prefix, type_name, suffix);
         result.push_str(&format!("{}: {}, ", rust_field_name, formatted_value));
     }
 
@@ -750,6 +936,67 @@ fn format_array_with_field(
             TypeDef::Sequence { .. } => {
                 let formatted: Vec<String> = arr.iter()
                     .map(|v| format_nested_struct(v, item_type, schema, prefix))
+                    .collect();
+                return format!("vec![{}]", formatted.join(", "));
+            }
+            TypeDef::DiscriminatedUnion { .. } => {
+                let formatted: Vec<String> = arr.iter()
+                    .map(|v| format_discriminated_union_value(v, item_type, schema, prefix))
+                    .collect();
+                return format!("vec![{}]", formatted.join(", "));
+            }
+            _ => {}
+        }
+    }
+
+    // Primitive array
+    let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+    format!("vec![{}]", items.join(", "))
+}
+
+/// Format an array using field definition with suffix propagation
+fn format_array_with_field_and_suffix(
+    arr: &[serde_json::Value],
+    field: &Field,
+    schema: &Schema,
+    prefix: &str,
+    suffix: &str,
+) -> String {
+    if arr.is_empty() {
+        return "vec![]".to_string();
+    }
+
+    // Get item type from field definition
+    let items = match &field.items {
+        Some(items) => items,
+        None => {
+            // No items definition - format as simple array
+            let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+            return format!("vec![{}]", items.join(", "));
+        }
+    };
+
+    let item_type = &items.field_type;
+
+    // Check if it's a choice type - choice items always use Output suffix
+    if item_type == "choice" {
+        if let Some(ref choices) = items.choices {
+            let variant_types: Vec<String> = choices.iter()
+                .map(|c| c.type_name.clone())
+                .collect();
+            let formatted: Vec<String> = arr.iter()
+                .map(|v| format_choice_value(v, &variant_types, schema, prefix))
+                .collect();
+            return format!("vec![{}]", formatted.join(", "));
+        }
+    }
+
+    // Check if items are a named type in the schema - propagate suffix
+    if let Some(type_def) = schema.types.get(item_type) {
+        match type_def {
+            TypeDef::Sequence { .. } => {
+                let formatted: Vec<String> = arr.iter()
+                    .map(|v| format_nested_struct_with_suffix(v, item_type, schema, prefix, suffix))
                     .collect();
                 return format!("vec![{}]", formatted.join(", "));
             }
@@ -1004,7 +1251,8 @@ fn format_discriminated_union_value(
             let variant_pascal = to_pascal_case(variant_type);
 
             if let Some(payload_val) = payload {
-                let payload_str = format_nested_struct(payload_val, variant_type, schema, prefix);
+                // Enum variants use Output types (with const fields)
+                let payload_str = format_nested_struct_for_enum(payload_val, variant_type, schema, prefix);
                 return format!("{}::{}({})", prefixed_enum, variant_pascal, payload_str);
             } else {
                 // No payload - unit variant (shouldn't happen for discriminated unions but handle it)
@@ -1014,6 +1262,72 @@ fn format_discriminated_union_value(
     }
     // Fallback
     "/* unknown discriminated union */".to_string()
+}
+
+/// Get a default value for a given field type (for conditional fields)
+fn get_default_value_for_type(field_type: &str, schema: &Schema, prefix: &str) -> String {
+    match field_type {
+        // Primitive types
+        "uint8" | "uint16" | "uint32" | "uint64" |
+        "int8" | "int16" | "int32" | "int64" => "0".to_string(),
+        "float32" => "0.0f32".to_string(),
+        "float64" => "0.0f64".to_string(),
+        "bool" => "false".to_string(),
+        "string" => "String::new()".to_string(),
+        // Array types
+        "array" => "vec![]".to_string(),
+        // Check if it's a named type in the schema
+        _ => {
+            if let Some(type_def) = schema.types.get(field_type) {
+                match type_def {
+                    TypeDef::Sequence { sequence } => {
+                        // Create a struct with default values for all fields
+                        let rust_type_name = format!("{}_{}", prefix, to_pascal_case(field_type));
+                        let mut fields = Vec::new();
+                        for field in sequence {
+                            if let Some(ref name) = field.name {
+                                // Skip computed and const fields
+                                if field.computed.is_some() || field.r#const.is_some() {
+                                    continue;
+                                }
+                                // Skip padding fields
+                                if field.field_type == "padding" {
+                                    continue;
+                                }
+                                let field_name = escape_rust_keyword(&to_snake_case(name));
+                                let default_val = get_default_value_for_type(&field.field_type, schema, prefix);
+                                fields.push(format!("{}: {}", field_name, default_val));
+                            }
+                        }
+                        format!("{}Input {{ {} }}", rust_type_name, fields.join(", "))
+                    }
+                    TypeDef::Direct { type_name: wrapped_type, .. } => {
+                        // Type alias - generate proper default based on wrapped type
+                        let rust_type_name = format!("{}_{}", prefix, to_pascal_case(field_type));
+                        // Check what the wrapped type is
+                        if wrapped_type == "string" {
+                            // String wrapper - use tuple struct constructor
+                            format!("{}(String::new())", rust_type_name)
+                        } else if let Some(wrapped_def) = schema.types.get(wrapped_type) {
+                            match wrapped_def {
+                                TypeDef::Sequence { .. } => {
+                                    // Wrapped composite - create struct with value field
+                                    let inner_default = get_default_value_for_type(wrapped_type, schema, prefix);
+                                    format!("{} {{ value: {} }}", rust_type_name, inner_default)
+                                }
+                                _ => format!("{} {{ value: Default::default() }}", rust_type_name)
+                            }
+                        } else {
+                            format!("{} {{ value: Default::default() }}", rust_type_name)
+                        }
+                    }
+                    _ => "Default::default()".to_string()
+                }
+            } else {
+                "Default::default()".to_string()
+            }
+        }
+    }
 }
 
 /// Format a choice type value (inline enum)
@@ -1054,8 +1368,8 @@ fn format_choice_value(
         .collect();
     let payload_value = serde_json::Value::Object(payload_map);
 
-    // Format the payload struct
-    let payload_str = format_nested_struct(&payload_value, variant_type, schema, prefix);
+    // Format the payload struct - enum variants use Output types (with const fields)
+    let payload_str = format_nested_struct_for_enum(&payload_value, variant_type, schema, prefix);
 
     format!("{}::{}({})", prefixed_enum, variant_pascal, payload_str)
 }
@@ -1266,8 +1580,8 @@ regex = "1.10"
     if !output.status.success() {
         println!("Cargo build FAILED:");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Show first 2000 chars of error
-        let truncated = if stderr.len() > 2000 { &stderr[..2000] } else { &stderr };
+        // Show all errors (up to 200000 chars)
+        let truncated = if stderr.len() > 200000 { &stderr[..200000] } else { &stderr };
         println!("{}", truncated);
 
         println!("\n=== SUMMARY ===");
