@@ -76,7 +76,18 @@ impl BitStreamEncoder {
     }
 
     pub fn write_uint8(&mut self, value: u8) {
-        self.write_bits(value as u64, 8);
+        if self.bit_position == 0 {
+            // Byte-aligned: write directly (same as TypeScript fast path)
+            self.buffer.push(value);
+        } else {
+            // Not byte-aligned: write LSB-first to match TypeScript behavior.
+            // When a byte value crosses a bit boundary, the bits are written
+            // starting from the LSB of the value.
+            for i in 0..8u8 {
+                let bit = ((value >> i) & 1) as u8;
+                self.write_single_bit(bit);
+            }
+        }
     }
 
     pub fn write_uint16(&mut self, value: u16, endianness: Endianness) {
@@ -255,6 +266,11 @@ impl BitStreamEncoder {
         Ok(())
     }
 
+    /// Get the current byte offset (number of complete bytes written)
+    pub fn byte_offset(&self) -> usize {
+        self.buffer.len()
+    }
+
     pub fn finish(mut self) -> Vec<u8> {
         if self.bit_position > 0 {
             self.flush_byte();
@@ -323,7 +339,25 @@ impl BitStreamDecoder {
     }
 
     pub fn read_uint8(&mut self) -> Result<u8> {
-        Ok(self.read_bits(8)? as u8)
+        if self.bit_offset == 0 {
+            // Byte-aligned: read directly (same as TypeScript fast path)
+            if self.byte_offset >= self.bytes.len() {
+                return Err(BinSchemaError::UnexpectedEof);
+            }
+            let value = self.bytes[self.byte_offset];
+            self.byte_offset += 1;
+            Ok(value)
+        } else {
+            // Not byte-aligned: read LSB-first to match TypeScript behavior.
+            // When a byte value crosses a bit boundary, the bits are read
+            // starting from the LSB of the value.
+            let mut value = 0u8;
+            for i in 0..8u8 {
+                let bit = self.read_single_bit()?;
+                value |= bit << i;
+            }
+            Ok(value)
+        }
     }
 
     pub fn read_uint16(&mut self, endianness: Endianness) -> Result<u16> {
@@ -506,6 +540,11 @@ impl BitStreamDecoder {
     /// Returns the current byte position in the stream
     pub fn position(&self) -> usize {
         self.byte_offset
+    }
+
+    /// Returns the total number of bytes in the stream
+    pub fn bytes_len(&self) -> usize {
+        self.bytes.len()
     }
 
     /// Seeks to a specific byte position in the stream

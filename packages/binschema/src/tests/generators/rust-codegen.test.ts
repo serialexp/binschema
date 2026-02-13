@@ -81,7 +81,7 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     const hasFileStruct = result.code.includes("pub struct File");
     const hasNestedField = result.code.includes("pub header: Header");
     const callsNestedEncode = result.code.includes("self.header.encode()");
-    const callsNestedDecode = result.code.includes("Header::decode_with_decoder(decoder)");
+    const callsNestedDecode = result.code.includes("HeaderOutput::decode_with_decoder(decoder)");
 
     if (hasHeaderStruct && hasFileStruct && hasNestedField && callsNestedEncode && callsNestedDecode) {
       passed++;
@@ -200,7 +200,7 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
 
     const result = generateRust(schema, "Message");
 
-    const hasStringType = result.code.includes("pub text: String");
+    const hasStringType = result.code.includes("pub text: std::string::String");
     const writesLength = result.code.includes("encoder.write_uint8(self.text.len() as u8)");
     const readsLength = result.code.includes("let length = decoder.read_uint8()? as usize");
     const handlesUtf8 = result.code.includes("String::from_utf8");

@@ -31,12 +31,42 @@ pub struct SchemaConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum TypeDef {
-    Sequence { sequence: Vec<Field> },
+    Sequence {
+        sequence: Vec<Field>,
+        #[serde(default)]
+        instances: Option<Vec<Instance>>,
+        #[serde(default)]
+        description: Option<String>,
+    },
     DiscriminatedUnion {
         #[serde(rename = "type")]
         type_name: String,  // Should be "discriminated_union"
         discriminator: serde_json::Value,
         variants: Vec<UnionVariant>,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    BackReference {
+        #[serde(rename = "type")]
+        type_name: String,  // Should be "back_reference"
+        storage: String,
+        #[serde(default)]
+        offset_mask: Option<String>,
+        #[serde(default)]
+        offset_from: Option<String>,
+        target_type: String,
+        #[serde(default)]
+        endianness: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    Array {
+        #[serde(rename = "type")]
+        type_name: String,  // Should be "array"
+        kind: String,
+        items: Box<Field>,
+        #[serde(default)]
+        terminal_variants: Option<Vec<String>>,
         #[serde(default)]
         description: Option<String>,
     },
@@ -47,6 +77,8 @@ pub enum TypeDef {
         kind: Option<String>,
         #[serde(default)]
         encoding: Option<String>,
+        #[serde(default)]
+        length: Option<u32>,
         #[serde(default)]
         length_type: Option<String>,
         #[serde(default)]
@@ -67,6 +99,8 @@ pub struct Field {
     #[serde(default)]
     pub length_type: Option<String>,
     #[serde(default)]
+    pub item_length_type: Option<String>,  // For length_prefixed_items arrays
+    #[serde(default)]
     pub length_field: Option<String>,  // For field_referenced arrays
     #[serde(default)]
     pub items: Option<Box<Field>>,
@@ -78,6 +112,8 @@ pub struct Field {
     pub endianness: Option<String>,
     #[serde(default)]
     pub value_type: Option<String>,  // For optional fields
+    #[serde(default)]
+    pub presence_type: Option<String>,  // For optional fields: "uint8" or "bit"
     #[serde(default)]
     pub align_to: Option<u32>,  // For padding fields
     #[serde(default)]
@@ -96,6 +132,29 @@ pub struct Field {
     pub computed: Option<serde_json::Value>,  // For computed fields
     #[serde(default)]
     pub length_encoding: Option<String>,  // For byte_length_prefixed arrays
+    #[serde(default)]
+    pub terminator_value: Option<serde_json::Value>,  // For signature_terminated arrays
+    #[serde(default)]
+    pub terminator_type: Option<String>,  // For signature_terminated arrays
+    #[serde(default)]
+    pub terminator_endianness: Option<String>,  // For signature_terminated arrays
+    #[serde(default)]
+    pub terminal_variants: Option<Vec<String>>,  // For variant_terminated arrays
+    #[serde(default)]
+    pub count_expr: Option<String>,  // For computed_count arrays
+    #[serde(default)]
+    pub bit_order: Option<String>,  // For bit fields
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Instance {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub instance_type: serde_json::Value,  // Can be a string or inline union definition
+    #[serde(default)]
+    pub position: Option<String>,
+    #[serde(default)]
+    pub size: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -131,4 +190,8 @@ pub struct TestCase {
     pub bits: Option<Vec<u8>>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub should_error_on_encode: Option<bool>,
+    #[serde(default)]
+    pub should_error_on_decode: Option<bool>,
 }

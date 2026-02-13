@@ -1,3 +1,7 @@
+#![allow(non_camel_case_types)]
+#![allow(dead_code)]
+#![allow(unreachable_code)]
+
 use binschema_runtime::{BitStreamEncoder, BitStreamDecoder, Endianness, BitOrder, Result};
 
 #[derive(Debug, Clone, PartialEq)]

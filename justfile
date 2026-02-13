@@ -29,13 +29,19 @@ test-go-summary:
 test-go-debug filter="" report="":
     cd go && DEBUG_GENERATED=tmp-go-debug TEST_FILTER="{{filter}}" TEST_REPORT="{{report}}" go test -v ./test
 
-# Run Rust tests with batched compilation
+# Run Rust tests with batched compilation (saves full output to rust/test-output.txt)
 # Examples:
 #   just test-rust
 #   just test-rust primitives
 #   just test-rust primitives summary
 test-rust filter="" report="":
-    cd rust && rm -rf tmp-rust && RUST_TESTS=1 RUST_TEST_FILTER="{{filter}}" RUST_TEST_REPORT="{{report}}" cargo test test_compile_and_run_all -- --nocapture
+    #!/usr/bin/env bash
+    cd rust && rm -rf tmp-rust
+    RUST_TESTS=1 RUST_TEST_FILTER="{{filter}}" RUST_TEST_REPORT="{{report}}" \
+        cargo test test_compile_and_run_all -- --nocapture 2>&1 | tee test-output.txt
+    echo ""
+    echo "Full test output saved to rust/test-output.txt"
+    echo "Run 'just test-rust-categorize' to analyze failures (no recompilation needed)"
 
 # Run Rust tests with summary report
 test-rust-summary:
@@ -44,6 +50,15 @@ test-rust-summary:
 # Run Rust tests with debug output (saves generated code to rust/tmp-rust-debug/)
 test-rust-debug filter="" report="":
     cd rust && rm -rf tmp-rust-debug && DEBUG_GENERATED=tmp-rust-debug RUST_TESTS=1 RUST_TEST_FILTER="{{filter}}" RUST_TEST_REPORT="{{report}}" cargo test test_compile_and_run_all -- --nocapture
+
+# Show only errors from the last test-rust run (no recompilation!)
+test-rust-errors:
+    grep -E "^error|SUMMARY|Code gen|Compilation|Tests passed" rust/test-output.txt
+
+# Categorize failures from the last test-rust run (no recompilation!)
+# Run `just test-rust` first to generate rust/test-output.txt
+test-rust-categorize:
+    python3 rust/categorize-failures.py < rust/test-output.txt
 
 # ========== Website ==========
 

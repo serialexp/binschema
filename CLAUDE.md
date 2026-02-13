@@ -94,11 +94,15 @@ just test-go-debug uint8                      # Debug mode (saves generated code
 
 ```bash
 # Rust test suite - batched compilation (slower, ~60s compile time)
-just test-rust                        # Run all Rust tests
+just test-rust                        # Run all Rust tests (saves output to rust/test-output.txt)
 just test-rust primitives             # Filter tests
 just test-rust-debug                  # Debug mode (saves generated code to rust/tmp-rust-debug/)
 just test-rust-debug uint8            # Debug with filter
+just test-rust-categorize             # Categorize failures from last run (instant, no recompilation!)
+just test-rust-errors                 # Show errors from last run (instant, no recompilation!)
 ```
+
+**⚠️ Important**: Always use `just test-rust` commands instead of raw `cargo test` commands. The just recipes handle temporary directory cleanup (`rm -rf tmp-rust`) and environment variables correctly. NEVER use raw shell commands with `rm -rf` for running tests - always use the just commands.
 
 **Note**: Rust tests require compilation of all generated code together, which takes ~60 seconds. Filter and report parameters are passed as environment variables but require implementation in `rust/tests/compile_batch.rs` to take effect.
 
@@ -414,6 +418,36 @@ just clean
 just bench                           # Run all benchmarks
 just bench-ts                        # TypeScript only
 just bench-go                        # Go only
+```
+
+## Development Workflow Guidelines
+
+### Use Just Commands for Repeated Operations
+
+**If you find yourself running the same command multiple times, create a Just recipe for it.**
+
+- Check `justfile` for existing commands before writing raw shell commands
+- Add new recipes for any multi-step or frequently-used operations
+- This ensures consistency and documents the canonical way to perform tasks
+- Example: Instead of manually running `cd rust && rm -rf tmp-rust && RUST_TESTS=1 cargo test...`, use `just test-rust`
+
+### Never Use Manual `rm -rf` in Test Commands
+
+**NEVER use raw `rm -rf` commands as part of running tests or build operations.**
+
+- All cleanup operations should be encapsulated in Just recipes
+- The Just recipes handle directory cleanup safely and consistently
+- Manual `rm -rf` commands are error-prone and can accidentally delete important files
+- If a test needs cleanup, add it to the appropriate Just recipe
+
+**Bad:**
+```bash
+rm -rf tmp-rust-debug && cargo test ...  # NEVER do this
+```
+
+**Good:**
+```bash
+just test-rust-debug  # Recipe handles cleanup internally
 ```
 
 ## Directory Structure
