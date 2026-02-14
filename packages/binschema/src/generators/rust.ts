@@ -2756,7 +2756,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
           const anyChoiceVariantNeedsCtx = choiceTypes.some(t => variantTypeNeedsEncodeContext(t, schema));
           if (anyChoiceVariantNeedsCtx) {
             const trackingTypes = detectArraysNeedingPositionTracking(schema);
-            const hasTracking = trackingTypes.get(field.name!)?.size > 0;
+            const hasTracking = (trackingTypes.get(field.name!)?.size ?? 0) > 0;
             if (hasTracking || hasNestedStructs) {
               choiceCtxVarForField = hasNestedStructs ? "child_ctx" : "prepass_ctx";
             }
@@ -5490,11 +5490,8 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
           lines.push(`${indent}let length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
           break;
       }
-      // Read bytes
-      lines.push(`${indent}let mut bytes = Vec::with_capacity(length);`);
-      lines.push(`${indent}for _ in 0..length {`);
-      lines.push(`${indent}    bytes.push(decoder.read_uint8()?);`);
-      lines.push(`${indent}}`);
+      // Read bytes (bulk read)
+      lines.push(`${indent}let bytes = decoder.read_bytes_vec(length)?;`);
       lines.push(generateBytesToString(varName, "bytes", encoding, indent));
       break;
     }
@@ -5513,13 +5510,9 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
 
     case "fixed": {
       const length = field.length || 0;
-      lines.push(`${indent}let mut bytes = Vec::new();`);
-      lines.push(`${indent}for _ in 0..${length} {`);
-      lines.push(`${indent}    let b = decoder.read_uint8()?;`);
-      lines.push(`${indent}    if b != 0 {`);
-      lines.push(`${indent}        bytes.push(b);`);
-      lines.push(`${indent}    }`);
-      lines.push(`${indent}}`);
+      // Bulk read, then filter null bytes
+      lines.push(`${indent}let raw_bytes = decoder.read_bytes_vec(${length})?;`);
+      lines.push(`${indent}let bytes: Vec<u8> = raw_bytes.into_iter().filter(|&b| b != 0).collect();`);
       lines.push(generateBytesToString(varName, "bytes", encoding, indent));
       break;
     }
@@ -5528,10 +5521,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       // Length is determined by another field that was already decoded
       const lengthField = field.length_field;
       const lengthFieldRust = toRustFieldName(lengthField);
-      lines.push(`${indent}let mut bytes = Vec::with_capacity(${lengthFieldRust} as usize);`);
-      lines.push(`${indent}for _ in 0..${lengthFieldRust} {`);
-      lines.push(`${indent}    bytes.push(decoder.read_uint8()?);`);
-      lines.push(`${indent}}`);
+      lines.push(`${indent}let bytes = decoder.read_bytes_vec(${lengthFieldRust} as usize)?;`);
       lines.push(generateBytesToString(varName, "bytes", encoding, indent));
       break;
     }
@@ -5867,10 +5857,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
               lines.push(`${indent}let str_len = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
               break;
           }
-          lines.push(`${indent}let mut str_bytes = Vec::with_capacity(str_len);`);
-          lines.push(`${indent}for _ in 0..str_len {`);
-          lines.push(`${indent}    str_bytes.push(decoder.read_uint8()?);`);
-          lines.push(`${indent}}`);
+          lines.push(`${indent}let str_bytes = decoder.read_bytes_vec(str_len)?;`);
           lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
           break;
         }
@@ -5885,13 +5872,8 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
           break;
         case "fixed": {
           const length = items.length || 0;
-          lines.push(`${indent}let mut str_bytes = Vec::new();`);
-          lines.push(`${indent}for _ in 0..${length} {`);
-          lines.push(`${indent}    let b = decoder.read_uint8()?;`);
-          lines.push(`${indent}    if b != 0 {`);
-          lines.push(`${indent}        str_bytes.push(b);`);
-          lines.push(`${indent}    }`);
-          lines.push(`${indent}}`);
+          lines.push(`${indent}let raw_bytes = decoder.read_bytes_vec(${length})?;`);
+          lines.push(`${indent}let str_bytes: Vec<u8> = raw_bytes.into_iter().filter(|&b| b != 0).collect();`);
           lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
           break;
         }

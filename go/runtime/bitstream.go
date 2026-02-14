@@ -152,6 +152,24 @@ func (d *BitStreamDecoder) Bytes() []byte {
 	return d.bytes
 }
 
+// ReadBytesSlice returns a slice of the input buffer without copying.
+// Only valid when byte-aligned. The returned slice references the decoder's
+// input data and is only valid as long as that data is alive.
+func (d *BitStreamDecoder) ReadBytesSlice(n int) ([]byte, error) {
+	if d.bitOffset != 0 {
+		return nil, errors.New("ReadBytesSlice requires byte alignment")
+	}
+	if d.byteOffset+n > len(d.bytes) {
+		errCode := "INCOMPLETE_DATA"
+		d.LastErrorCode = &errCode
+		return nil, errors.New("unexpected end of stream")
+	}
+	slice := d.bytes[d.byteOffset : d.byteOffset+n]
+	d.byteOffset += n
+	d.LastErrorCode = nil
+	return slice, nil
+}
+
 // ReadUint8 reads an 8-bit unsigned integer
 func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 	if d.bitOffset == 0 {
@@ -213,6 +231,52 @@ func (d *BitStreamDecoder) ReadBit() (uint8, error) {
 // MSB first: First bit read is the MSB of the value
 // LSB first: First bit read is the LSB of the value
 func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
+	// Fast path: MSB-first reads of <=8 bits
+	if d.bitOrder == MSBFirst && numBits <= 8 && numBits > 0 {
+		if d.byteOffset >= len(d.bytes) {
+			errCode := "INCOMPLETE_DATA"
+			d.LastErrorCode = &errCode
+			return 0, errors.New("unexpected end of stream")
+		}
+		bitsAvailable := 8 - d.bitOffset
+		if numBits <= bitsAvailable {
+			// All bits from current byte — single shift+mask
+			shift := bitsAvailable - numBits
+			mask := uint8((1 << numBits) - 1)
+			result := uint64((d.bytes[d.byteOffset] >> shift) & mask)
+			d.bitOffset += numBits
+			if d.bitOffset == 8 {
+				d.bitOffset = 0
+				d.byteOffset++
+			}
+			d.LastErrorCode = nil
+			return result, nil
+		}
+		// Cross byte boundary — read from two bytes
+		if d.byteOffset+1 >= len(d.bytes) {
+			errCode := "INCOMPLETE_DATA"
+			d.LastErrorCode = &errCode
+			return 0, errors.New("unexpected end of stream")
+		}
+		// Bits from current byte (high bits of result)
+		bitsFromFirst := bitsAvailable
+		bitsFromSecond := numBits - bitsFromFirst
+		maskFirst := uint8((1 << bitsFromFirst) - 1)
+		highPart := uint64(d.bytes[d.byteOffset]&maskFirst) << bitsFromSecond
+		// Bits from next byte (low bits of result)
+		shift := 8 - bitsFromSecond
+		maskSecond := uint8((1 << bitsFromSecond) - 1)
+		lowPart := uint64((d.bytes[d.byteOffset+1] >> shift) & maskSecond)
+		d.byteOffset++
+		d.bitOffset = bitsFromSecond
+		if d.bitOffset == 8 {
+			d.bitOffset = 0
+			d.byteOffset++
+		}
+		d.LastErrorCode = nil
+		return highPart | lowPart, nil
+	}
+
 	var result uint64
 	if d.bitOrder == LSBFirst {
 		// LSB first: first bit read is bit 0 of result
@@ -288,14 +352,31 @@ func (e *BitStreamEncoder) WriteBit(bit uint8) {
 // MSB first: Write MSB of value first (video codecs, network protocols)
 // LSB first: Write LSB of value first (hardware bitfields)
 func (e *BitStreamEncoder) WriteBits(value uint64, numBits int) {
+	// Fast path: MSB-first writes of <=8 bits that fit in current byte
+	if e.bitOrder == MSBFirst && numBits <= 8 && numBits > 0 {
+		bitsAvailable := 8 - e.bitOffset
+		if numBits <= bitsAvailable {
+			// All bits fit in current byte
+			shift := bitsAvailable - numBits
+			mask := uint8((1 << numBits) - 1)
+			e.currentByte |= (uint8(value) & mask) << shift
+			e.bitOffset += numBits
+			e.totalBitsWritten += numBits
+			if e.bitOffset == 8 {
+				e.bytes = append(e.bytes, e.currentByte)
+				e.currentByte = 0
+				e.bitOffset = 0
+			}
+			return
+		}
+	}
+
 	if e.bitOrder == LSBFirst {
-		// LSB first: bit 0 of value goes to first bit position
 		for i := 0; i < numBits; i++ {
 			bit := uint8((value >> i) & 1)
 			e.WriteBit(bit)
 		}
 	} else {
-		// MSB first: bit (numBits-1) of value goes to first bit position
 		for i := numBits - 1; i >= 0; i-- {
 			bit := uint8((value >> i) & 1)
 			e.WriteBit(bit)
@@ -305,6 +386,24 @@ func (e *BitStreamEncoder) WriteBits(value uint64, numBits int) {
 
 // ReadUint16 reads a 16-bit unsigned integer
 func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
+	if d.bitOffset == 0 {
+		if d.byteOffset+2 > len(d.bytes) {
+			errCode := "INCOMPLETE_DATA"
+			d.LastErrorCode = &errCode
+			return 0, errors.New("unexpected end of stream")
+		}
+		var v uint16
+		if endianness == BigEndian {
+			v = binary.BigEndian.Uint16(d.bytes[d.byteOffset:])
+		} else {
+			v = binary.LittleEndian.Uint16(d.bytes[d.byteOffset:])
+		}
+		d.byteOffset += 2
+		d.LastErrorCode = nil
+		return v, nil
+	}
+
+	// Not byte-aligned: fallback to byte-at-a-time
 	if endianness == BigEndian {
 		high, err := d.ReadUint8()
 		if err != nil {
@@ -318,7 +417,6 @@ func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 		return (uint16(high) << 8) | uint16(low), nil
 	}
 
-	// Little endian
 	low, err := d.ReadUint8()
 	if err != nil {
 		return 0, err
@@ -333,6 +431,24 @@ func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 
 // ReadUint32 reads a 32-bit unsigned integer
 func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
+	if d.bitOffset == 0 {
+		if d.byteOffset+4 > len(d.bytes) {
+			errCode := "INCOMPLETE_DATA"
+			d.LastErrorCode = &errCode
+			return 0, errors.New("unexpected end of stream")
+		}
+		var v uint32
+		if endianness == BigEndian {
+			v = binary.BigEndian.Uint32(d.bytes[d.byteOffset:])
+		} else {
+			v = binary.LittleEndian.Uint32(d.bytes[d.byteOffset:])
+		}
+		d.byteOffset += 4
+		d.LastErrorCode = nil
+		return v, nil
+	}
+
+	// Not byte-aligned: fallback to byte-at-a-time
 	if endianness == BigEndian {
 		b0, err := d.ReadUint8()
 		if err != nil {
@@ -354,7 +470,6 @@ func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 		return (uint32(b0) << 24) | (uint32(b1) << 16) | (uint32(b2) << 8) | uint32(b3), nil
 	}
 
-	// Little endian
 	b0, err := d.ReadUint8()
 	if err != nil {
 		return 0, err
@@ -377,6 +492,24 @@ func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 
 // ReadUint64 reads a 64-bit unsigned integer
 func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
+	if d.bitOffset == 0 {
+		if d.byteOffset+8 > len(d.bytes) {
+			errCode := "INCOMPLETE_DATA"
+			d.LastErrorCode = &errCode
+			return 0, errors.New("unexpected end of stream")
+		}
+		var v uint64
+		if endianness == BigEndian {
+			v = binary.BigEndian.Uint64(d.bytes[d.byteOffset:])
+		} else {
+			v = binary.LittleEndian.Uint64(d.bytes[d.byteOffset:])
+		}
+		d.byteOffset += 8
+		d.LastErrorCode = nil
+		return v, nil
+	}
+
+	// Not byte-aligned: fallback to byte-at-a-time
 	if endianness == BigEndian {
 		var result uint64
 		for i := 0; i < 8; i++ {
@@ -390,7 +523,6 @@ func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
 		return result, nil
 	}
 
-	// Little endian
 	var result uint64
 	for i := 0; i < 8; i++ {
 		b, err := d.ReadUint8()
@@ -513,6 +645,16 @@ func (d *BitStreamDecoder) ReadInt64(endianness Endianness) (int64, error) {
 
 // WriteUint16 writes a 16-bit unsigned integer
 func (e *BitStreamEncoder) WriteUint16(value uint16, endianness Endianness) {
+	if e.bitOffset == 0 {
+		var buf [2]byte
+		if endianness == BigEndian {
+			binary.BigEndian.PutUint16(buf[:], value)
+		} else {
+			binary.LittleEndian.PutUint16(buf[:], value)
+		}
+		e.bytes = append(e.bytes, buf[:]...)
+		return
+	}
 	if endianness == BigEndian {
 		e.WriteUint8(uint8((value >> 8) & 0xFF))
 		e.WriteUint8(uint8(value & 0xFF))
@@ -524,6 +666,16 @@ func (e *BitStreamEncoder) WriteUint16(value uint16, endianness Endianness) {
 
 // WriteUint32 writes a 32-bit unsigned integer
 func (e *BitStreamEncoder) WriteUint32(value uint32, endianness Endianness) {
+	if e.bitOffset == 0 {
+		var buf [4]byte
+		if endianness == BigEndian {
+			binary.BigEndian.PutUint32(buf[:], value)
+		} else {
+			binary.LittleEndian.PutUint32(buf[:], value)
+		}
+		e.bytes = append(e.bytes, buf[:]...)
+		return
+	}
 	if endianness == BigEndian {
 		e.WriteUint8(uint8((value >> 24) & 0xFF))
 		e.WriteUint8(uint8((value >> 16) & 0xFF))
@@ -539,6 +691,16 @@ func (e *BitStreamEncoder) WriteUint32(value uint32, endianness Endianness) {
 
 // WriteUint64 writes a 64-bit unsigned integer
 func (e *BitStreamEncoder) WriteUint64(value uint64, endianness Endianness) {
+	if e.bitOffset == 0 {
+		var buf [8]byte
+		if endianness == BigEndian {
+			binary.BigEndian.PutUint64(buf[:], value)
+		} else {
+			binary.LittleEndian.PutUint64(buf[:], value)
+		}
+		e.bytes = append(e.bytes, buf[:]...)
+		return
+	}
 	if endianness == BigEndian {
 		e.WriteUint8(uint8((value >> 56) & 0xFF))
 		e.WriteUint8(uint8((value >> 48) & 0xFF))
@@ -586,76 +748,30 @@ func (e *BitStreamEncoder) WriteInt64(value int64, endianness Endianness) {
 
 // ReadFloat32 reads a 32-bit IEEE 754 float
 func (d *BitStreamDecoder) ReadFloat32(endianness Endianness) (float32, error) {
-	var buf [4]byte
-	for i := 0; i < 4; i++ {
-		b, err := d.ReadUint8()
-		if err != nil {
-			return 0, err
-		}
-		buf[i] = b
-	}
-
-	d.LastErrorCode = nil
-	var bits uint32
-	if endianness == LittleEndian {
-		bits = binary.LittleEndian.Uint32(buf[:])
-	} else {
-		bits = binary.BigEndian.Uint32(buf[:])
+	bits, err := d.ReadUint32(endianness)
+	if err != nil {
+		return 0, err
 	}
 	return math.Float32frombits(bits), nil
 }
 
 // ReadFloat64 reads a 64-bit IEEE 754 float
 func (d *BitStreamDecoder) ReadFloat64(endianness Endianness) (float64, error) {
-	var buf [8]byte
-	for i := 0; i < 8; i++ {
-		b, err := d.ReadUint8()
-		if err != nil {
-			return 0, err
-		}
-		buf[i] = b
-	}
-
-	d.LastErrorCode = nil
-	var bits uint64
-	if endianness == LittleEndian {
-		bits = binary.LittleEndian.Uint64(buf[:])
-	} else {
-		bits = binary.BigEndian.Uint64(buf[:])
+	bits, err := d.ReadUint64(endianness)
+	if err != nil {
+		return 0, err
 	}
 	return math.Float64frombits(bits), nil
 }
 
 // WriteFloat32 writes a 32-bit IEEE 754 float
 func (e *BitStreamEncoder) WriteFloat32(value float32, endianness Endianness) {
-	bits := math.Float32bits(value)
-	var buf [4]byte
-
-	if endianness == LittleEndian {
-		binary.LittleEndian.PutUint32(buf[:], bits)
-	} else {
-		binary.BigEndian.PutUint32(buf[:], bits)
-	}
-
-	for i := 0; i < 4; i++ {
-		e.WriteUint8(buf[i])
-	}
+	e.WriteUint32(math.Float32bits(value), endianness)
 }
 
 // WriteFloat64 writes a 64-bit IEEE 754 float
 func (e *BitStreamEncoder) WriteFloat64(value float64, endianness Endianness) {
-	bits := math.Float64bits(value)
-	var buf [8]byte
-
-	if endianness == LittleEndian {
-		binary.LittleEndian.PutUint64(buf[:], bits)
-	} else {
-		binary.BigEndian.PutUint64(buf[:], bits)
-	}
-
-	for i := 0; i < 8; i++ {
-		e.WriteUint8(buf[i])
-	}
+	e.WriteUint64(math.Float64bits(value), endianness)
 }
 
 // WriteVarlengthDER writes a variable-length integer using DER encoding

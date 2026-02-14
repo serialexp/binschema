@@ -3968,14 +3968,10 @@ function generateDecodeString(field: any, fieldName: string, varName: string, en
       lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name} length: %w", err)`);
       lines.push(`${indent}}`);
 
-      // Read bytes
-      lines.push(`${indent}${bytesVar} := make([]byte, ${lengthVarName})`);
-      lines.push(`${indent}for i := range ${bytesVar} {`);
-      lines.push(`${indent}\tb, err := decoder.ReadUint8()`);
-      lines.push(`${indent}\tif err != nil {`);
-      lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
-      lines.push(`${indent}\t}`);
-      lines.push(`${indent}\t${bytesVar}[i] = b`);
+      // Read bytes (bulk read)
+      lines.push(`${indent}${bytesVar}, err := decoder.ReadBytesSlice(int(${lengthVarName}))`);
+      lines.push(`${indent}if err != nil {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
       lines.push(`${indent}}`);
       break;
     }
@@ -3997,13 +3993,14 @@ function generateDecodeString(field: any, fieldName: string, varName: string, en
 
     case "fixed": {
       const length = field.length || 0;
-      // Read fixed number of bytes, trimming nulls
-      lines.push(`${indent}${bytesVar} := make([]byte, 0)`);
-      lines.push(`${indent}for i := 0; i < ${length}; i++ {`);
-      lines.push(`${indent}\tb, err := decoder.ReadUint8()`);
-      lines.push(`${indent}\tif err != nil {`);
-      lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
-      lines.push(`${indent}\t}`);
+      // Read fixed number of bytes (bulk read), then trim trailing nulls
+      lines.push(`${indent}${bytesVar}Raw, err := decoder.ReadBytesSlice(${length})`);
+      lines.push(`${indent}if err != nil {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
+      lines.push(`${indent}}`);
+      // Trim null bytes (fixed strings pad with nulls)
+      lines.push(`${indent}${bytesVar} := make([]byte, 0, len(${bytesVar}Raw))`);
+      lines.push(`${indent}for _, b := range ${bytesVar}Raw {`);
       lines.push(`${indent}\tif b != 0 {`);
       lines.push(`${indent}\t\t${bytesVar} = append(${bytesVar}, b)`);
       lines.push(`${indent}\t}`);
@@ -4015,13 +4012,9 @@ function generateDecodeString(field: any, fieldName: string, varName: string, en
       // Length is determined by a separate field (already read into result struct)
       const lengthField = field.length_field;
       const lengthFieldGoName = toGoFieldPath(lengthField);  // Use toGoFieldPath for dotted paths
-      lines.push(`${indent}${bytesVar} := make([]byte, result.${lengthFieldGoName})`);
-      lines.push(`${indent}for i := range ${bytesVar} {`);
-      lines.push(`${indent}\tb, err := decoder.ReadUint8()`);
-      lines.push(`${indent}\tif err != nil {`);
-      lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
-      lines.push(`${indent}\t}`);
-      lines.push(`${indent}\t${bytesVar}[i] = b`);
+      lines.push(`${indent}${bytesVar}, err := decoder.ReadBytesSlice(int(result.${lengthFieldGoName}))`);
+      lines.push(`${indent}if err != nil {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
       lines.push(`${indent}}`);
       break;
     }
@@ -4565,14 +4558,10 @@ function generateDecodeLengthPrefixedItems(field: any, fieldName: string, endian
     lines.push(`${indent}\t}`);
     lines.push(`${indent}\tresult.${fieldName}[i] = item`);
   } else {
-    // For struct types, read item bytes and decode
-    lines.push(`${indent}\titemBytes := make([]byte, itemLength)`);
-    lines.push(`${indent}\tfor j := range itemBytes {`);
-    lines.push(`${indent}\t\tb, err := decoder.ReadUint8()`);
-    lines.push(`${indent}\t\tif err != nil {`);
-    lines.push(`${indent}\t\t\treturn nil, fmt.Errorf("failed to decode item bytes: %w", err)`);
-    lines.push(`${indent}\t\t}`);
-    lines.push(`${indent}\t\titemBytes[j] = b`);
+    // For struct types, read item bytes and decode (bulk read)
+    lines.push(`${indent}\titemBytes, err := decoder.ReadBytesSlice(int(itemLength))`);
+    lines.push(`${indent}\tif err != nil {`);
+    lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode item bytes: %w", err)`);
     lines.push(`${indent}\t}`);
 
     // Decode item from bytes

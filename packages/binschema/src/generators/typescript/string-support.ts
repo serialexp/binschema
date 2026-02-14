@@ -131,16 +131,13 @@ export function generateDecodeString(
     const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
     code += `${indent}const ${lengthVarName} = ${lengthRead};\n`;
 
-    // Read bytes
+    // Read bytes (bulk read)
     const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
-    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
-    code += `${indent}}\n`;
+    code += `${indent}const ${bytesVarName} = this.readBytesSlice(${lengthVarName});\n`;
 
     // Convert bytes to string
     if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+      code += `${indent}${target} = new TextDecoder().decode(${bytesVarName});\n`;
     } else if (encoding === "ascii" || encoding === "latin1") {
       code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
     }
@@ -163,12 +160,9 @@ export function generateDecodeString(
   } else if (kind === "fixed") {
     const fixedLength = field.length || 0;
 
-    // Read fixed number of bytes
+    // Read fixed number of bytes (bulk read)
     const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${fixedLength}; i++) {\n`;
-    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
-    code += `${indent}}\n`;
+    code += `${indent}const ${bytesVarName} = this.readBytesSlice(${fixedLength});\n`;
 
     // Find actual string length (before first null byte)
     code += `${indent}let actualLength = ${bytesVarName}.indexOf(0);\n`;
@@ -176,9 +170,9 @@ export function generateDecodeString(
 
     // Convert bytes to string (only up to first null)
     if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}.slice(0, actualLength)));\n`;
+      code += `${indent}${target} = new TextDecoder().decode(${bytesVarName}.subarray(0, actualLength));\n`;
     } else if (encoding === "ascii" || encoding === "latin1") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.slice(0, actualLength));\n`;
+      code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.subarray(0, actualLength));\n`;
     }
   } else if (kind === "field_referenced") {
     // Length comes from a previously-decoded field
@@ -213,16 +207,13 @@ export function generateDecodeString(
       code += `${indent}}\n`;
     }
 
-    // Read bytes
+    // Read bytes (bulk read)
     const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
-    code += `${indent}  ${bytesVarName}.push(this.readUint8());\n`;
-    code += `${indent}}\n`;
+    code += `${indent}const ${bytesVarName} = this.readBytesSlice(${lengthVarName});\n`;
 
     // Convert bytes to string
     if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+      code += `${indent}${target} = new TextDecoder().decode(${bytesVarName});\n`;
     } else if (encoding === "ascii" || encoding === "latin1") {
       code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
     }

@@ -41,6 +41,22 @@ impl BitStreamEncoder {
         let mask = if num_bits == 64 { u64::MAX } else { (1u64 << num_bits) - 1 };
         let value = value & mask;
 
+        // Fast path: MSB-first writes of <=8 bits that fit in current byte
+        if self.bit_order == BitOrder::MsbFirst && num_bits <= 8 {
+            let bits_available = 8 - self.bit_position;
+            if num_bits <= bits_available {
+                let shift = bits_available - num_bits;
+                // Use u16 to avoid overflow when num_bits == 8
+                let byte_mask = ((1u16 << num_bits) - 1) as u8;
+                self.current_byte |= ((value as u8) & byte_mask) << shift;
+                self.bit_position += num_bits;
+                if self.bit_position == 8 {
+                    self.flush_byte();
+                }
+                return;
+            }
+        }
+
         for i in 0..num_bits {
             let bit_index = match self.bit_order {
                 BitOrder::MsbFirst => num_bits - 1 - i,
@@ -91,6 +107,14 @@ impl BitStreamEncoder {
     }
 
     pub fn write_uint16(&mut self, value: u16, endianness: Endianness) {
+        if self.bit_position == 0 {
+            let bytes = match endianness {
+                Endianness::BigEndian => value.to_be_bytes(),
+                Endianness::LittleEndian => value.to_le_bytes(),
+            };
+            self.buffer.extend_from_slice(&bytes);
+            return;
+        }
         match endianness {
             Endianness::BigEndian => {
                 self.write_uint8((value >> 8) as u8);
@@ -104,6 +128,14 @@ impl BitStreamEncoder {
     }
 
     pub fn write_uint32(&mut self, value: u32, endianness: Endianness) {
+        if self.bit_position == 0 {
+            let bytes = match endianness {
+                Endianness::BigEndian => value.to_be_bytes(),
+                Endianness::LittleEndian => value.to_le_bytes(),
+            };
+            self.buffer.extend_from_slice(&bytes);
+            return;
+        }
         match endianness {
             Endianness::BigEndian => {
                 self.write_uint8((value >> 24) as u8);
@@ -121,6 +153,14 @@ impl BitStreamEncoder {
     }
 
     pub fn write_uint64(&mut self, value: u64, endianness: Endianness) {
+        if self.bit_position == 0 {
+            let bytes = match endianness {
+                Endianness::BigEndian => value.to_be_bytes(),
+                Endianness::LittleEndian => value.to_le_bytes(),
+            };
+            self.buffer.extend_from_slice(&bytes);
+            return;
+        }
         match endianness {
             Endianness::BigEndian => {
                 self.write_uint32((value >> 32) as u32, endianness);
@@ -302,6 +342,45 @@ impl BitStreamDecoder {
             return Err(BinSchemaError::InvalidValue("Invalid number of bits".to_string()));
         }
 
+        // Fast path: MSB-first reads of <=8 bits
+        if self.bit_order == BitOrder::MsbFirst && num_bits <= 8 {
+            if self.byte_offset >= self.bytes.len() {
+                return Err(BinSchemaError::UnexpectedEof);
+            }
+            let bits_available = 8 - self.bit_offset;
+            if num_bits <= bits_available {
+                // All bits from current byte — single shift+mask
+                let shift = bits_available - num_bits;
+                // Use u16 to avoid overflow when num_bits == 8
+                let mask = ((1u16 << num_bits) - 1) as u8;
+                let result = ((self.bytes[self.byte_offset] >> shift) & mask) as u64;
+                self.bit_offset += num_bits;
+                if self.bit_offset == 8 {
+                    self.bit_offset = 0;
+                    self.byte_offset += 1;
+                }
+                return Ok(result);
+            }
+            // Cross byte boundary — read from two bytes
+            if self.byte_offset + 1 >= self.bytes.len() {
+                return Err(BinSchemaError::UnexpectedEof);
+            }
+            let bits_from_first = bits_available;
+            let bits_from_second = num_bits - bits_from_first;
+            let mask_first = (1u8 << bits_from_first) - 1;
+            let high_part = ((self.bytes[self.byte_offset] & mask_first) as u64) << bits_from_second;
+            let shift = 8 - bits_from_second;
+            let mask_second = (1u8 << bits_from_second) - 1;
+            let low_part = ((self.bytes[self.byte_offset + 1] >> shift) & mask_second) as u64;
+            self.byte_offset += 1;
+            self.bit_offset = bits_from_second;
+            if self.bit_offset == 8 {
+                self.bit_offset = 0;
+                self.byte_offset += 1;
+            }
+            return Ok(high_part | low_part);
+        }
+
         let mut result = 0u64;
 
         for i in 0..num_bits {
@@ -338,6 +417,20 @@ impl BitStreamDecoder {
         Ok(bit)
     }
 
+    /// Reads `n` bytes as a slice, advancing the byte offset.
+    /// Only valid when byte-aligned.
+    pub fn read_bytes_vec(&mut self, n: usize) -> Result<Vec<u8>> {
+        if self.bit_offset != 0 {
+            return Err(BinSchemaError::InvalidValue("read_bytes_vec requires byte alignment".to_string()));
+        }
+        if self.byte_offset + n > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let vec = self.bytes[self.byte_offset..self.byte_offset + n].to_vec();
+        self.byte_offset += n;
+        Ok(vec)
+    }
+
     pub fn read_uint8(&mut self) -> Result<u8> {
         if self.bit_offset == 0 {
             // Byte-aligned: read directly (same as TypeScript fast path)
@@ -361,6 +454,20 @@ impl BitStreamDecoder {
     }
 
     pub fn read_uint16(&mut self, endianness: Endianness) -> Result<u16> {
+        if self.bit_offset == 0 {
+            if self.byte_offset + 2 > self.bytes.len() {
+                return Err(BinSchemaError::UnexpectedEof);
+            }
+            let v = match endianness {
+                Endianness::BigEndian =>
+                    u16::from_be_bytes([self.bytes[self.byte_offset], self.bytes[self.byte_offset + 1]]),
+                Endianness::LittleEndian =>
+                    u16::from_le_bytes([self.bytes[self.byte_offset], self.bytes[self.byte_offset + 1]]),
+            };
+            self.byte_offset += 2;
+            return Ok(v);
+        }
+        // Not byte-aligned: fallback
         match endianness {
             Endianness::BigEndian => {
                 let high = self.read_uint8()? as u16;
@@ -376,6 +483,24 @@ impl BitStreamDecoder {
     }
 
     pub fn read_uint32(&mut self, endianness: Endianness) -> Result<u32> {
+        if self.bit_offset == 0 {
+            if self.byte_offset + 4 > self.bytes.len() {
+                return Err(BinSchemaError::UnexpectedEof);
+            }
+            let bytes: [u8; 4] = [
+                self.bytes[self.byte_offset],
+                self.bytes[self.byte_offset + 1],
+                self.bytes[self.byte_offset + 2],
+                self.bytes[self.byte_offset + 3],
+            ];
+            let v = match endianness {
+                Endianness::BigEndian => u32::from_be_bytes(bytes),
+                Endianness::LittleEndian => u32::from_le_bytes(bytes),
+            };
+            self.byte_offset += 4;
+            return Ok(v);
+        }
+        // Not byte-aligned: fallback
         match endianness {
             Endianness::BigEndian => {
                 let b0 = self.read_uint8()? as u32;
@@ -395,6 +520,20 @@ impl BitStreamDecoder {
     }
 
     pub fn read_uint64(&mut self, endianness: Endianness) -> Result<u64> {
+        if self.bit_offset == 0 {
+            if self.byte_offset + 8 > self.bytes.len() {
+                return Err(BinSchemaError::UnexpectedEof);
+            }
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&self.bytes[self.byte_offset..self.byte_offset + 8]);
+            let v = match endianness {
+                Endianness::BigEndian => u64::from_be_bytes(bytes),
+                Endianness::LittleEndian => u64::from_le_bytes(bytes),
+            };
+            self.byte_offset += 8;
+            return Ok(v);
+        }
+        // Not byte-aligned: fallback
         match endianness {
             Endianness::BigEndian => {
                 let high = self.read_uint32(endianness)? as u64;

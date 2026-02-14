@@ -480,6 +480,7 @@ export class BitStreamEncoder {
  */
 export class BitStreamDecoder {
   protected _bytes: Uint8Array;
+  private _dataView: DataView;
   private byteOffset: number = 0;
   private bitOffset: number = 0; // Bits read from current byte (0-7)
   private bitOrder: BitOrder;
@@ -490,6 +491,7 @@ export class BitStreamDecoder {
 
   constructor(bytes: Uint8Array | number[], bitOrder: BitOrder = "msb_first") {
     this._bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    this._dataView = new DataView(this._bytes.buffer, this._bytes.byteOffset, this._bytes.byteLength);
     this.bitOrder = bitOrder;
   }
 
@@ -504,6 +506,44 @@ export class BitStreamDecoder {
   readBits(size: number): bigint {
     if (size < 1 || size > 64) {
       throw new Error(`Invalid bit size: ${size} (must be 1-64)`);
+    }
+
+    // Fast path: MSB-first reads of <=8 bits
+    if (this.bitOrder === "msb_first" && size <= 8) {
+      if (this.byteOffset >= this._bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      const bitsAvailable = 8 - this.bitOffset;
+      if (size <= bitsAvailable) {
+        // All bits from current byte — single shift+mask
+        const shift = bitsAvailable - size;
+        const mask = (1 << size) - 1;
+        const result = (this._bytes[this.byteOffset] >> shift) & mask;
+        this.bitOffset += size;
+        if (this.bitOffset === 8) {
+          this.bitOffset = 0;
+          this.byteOffset++;
+        }
+        return BigInt(result);
+      }
+      // Cross byte boundary — two bytes
+      if (this.byteOffset + 1 >= this._bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      const bitsFromFirst = bitsAvailable;
+      const bitsFromSecond = size - bitsFromFirst;
+      const maskFirst = (1 << bitsFromFirst) - 1;
+      const highPart = (this._bytes[this.byteOffset] & maskFirst) << bitsFromSecond;
+      const shift = 8 - bitsFromSecond;
+      const maskSecond = (1 << bitsFromSecond) - 1;
+      const lowPart = (this._bytes[this.byteOffset + 1] >> shift) & maskSecond;
+      this.byteOffset++;
+      this.bitOffset = bitsFromSecond;
+      if (this.bitOffset === 8) {
+        this.bitOffset = 0;
+        this.byteOffset++;
+      }
+      return BigInt(highPart | lowPart);
     }
 
     // Optimization: Use Number operations for sizes <= 31 (much faster than BigInt)
@@ -615,9 +655,34 @@ export class BitStreamDecoder {
   }
 
   /**
+   * Read N bytes as a Uint8Array subarray (zero-copy when byte-aligned).
+   * The returned slice references the decoder's input buffer.
+   */
+  readBytesSlice(n: number): Uint8Array {
+    if (this.bitOffset !== 0) {
+      throw new Error("readBytesSlice requires byte alignment");
+    }
+    if (this.byteOffset + n > this._bytes.length) {
+      throw new Error("Unexpected end of stream");
+    }
+    const slice = this._bytes.subarray(this.byteOffset, this.byteOffset + n);
+    this.byteOffset += n;
+    return slice;
+  }
+
+  /**
    * Read uint16
    */
   readUint16(endianness: Endianness): number {
+    if (this.bitOffset === 0) {
+      if (this.byteOffset + 2 > this._bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      const v = this._dataView.getUint16(this.byteOffset, endianness === "little_endian");
+      this.byteOffset += 2;
+      return v;
+    }
+    // Not byte-aligned: fallback
     if (endianness === "big_endian") {
       const high = this.readUint8();
       const low = this.readUint8();
@@ -633,6 +698,15 @@ export class BitStreamDecoder {
    * Read uint32
    */
   readUint32(endianness: Endianness): number {
+    if (this.bitOffset === 0) {
+      if (this.byteOffset + 4 > this._bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      const v = this._dataView.getUint32(this.byteOffset, endianness === "little_endian");
+      this.byteOffset += 4;
+      return v;
+    }
+    // Not byte-aligned: fallback
     if (endianness === "big_endian") {
       const b0 = this.readUint8();
       const b1 = this.readUint8();
@@ -704,13 +778,20 @@ export class BitStreamDecoder {
    * Read float32 (IEEE 754)
    */
   readFloat32(endianness: Endianness): number {
+    if (this.bitOffset === 0) {
+      if (this.byteOffset + 4 > this._bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      const v = this._dataView.getFloat32(this.byteOffset, endianness === "little_endian");
+      this.byteOffset += 4;
+      return v;
+    }
+    // Not byte-aligned: fallback
     const buffer = new ArrayBuffer(4);
     const view = new DataView(buffer);
-
     for (let i = 0; i < 4; i++) {
       view.setUint8(i, this.readUint8());
     }
-
     return view.getFloat32(0, endianness === "little_endian");
   }
 
@@ -718,13 +799,20 @@ export class BitStreamDecoder {
    * Read float64 (IEEE 754)
    */
   readFloat64(endianness: Endianness): number {
+    if (this.bitOffset === 0) {
+      if (this.byteOffset + 8 > this._bytes.length) {
+        throw new Error("Unexpected end of stream");
+      }
+      const v = this._dataView.getFloat64(this.byteOffset, endianness === "little_endian");
+      this.byteOffset += 8;
+      return v;
+    }
+    // Not byte-aligned: fallback
     const buffer = new ArrayBuffer(8);
     const view = new DataView(buffer);
-
     for (let i = 0; i < 8; i++) {
       view.setUint8(i, this.readUint8());
     }
-
     return view.getFloat64(0, endianness === "little_endian");
   }
 
