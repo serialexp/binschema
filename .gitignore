@@ -18,6 +18,10 @@ kerberos-rfc*.txt
 /type-reference.html
 /packages/binschema/type-reference.html
 
+# Generated website files (rebuilt by website build)
+website/public/examples/*-docs.html
+website/src/examples/*.generated.*
+
 # Rust build artifacts
 rust/target/
 rust/debug-test/
