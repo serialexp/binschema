@@ -147,6 +147,11 @@ func (d *BitStreamDecoder) Seek(offset int) {
 	d.bitOffset = 0 // Reset bit offset when seeking
 }
 
+// Len returns the total length of the underlying byte slice
+func (d *BitStreamDecoder) Len() int {
+	return len(d.bytes)
+}
+
 // Bytes returns the underlying byte slice (for calculating EOF-relative positions)
 func (d *BitStreamDecoder) Bytes() []byte {
 	return d.bytes

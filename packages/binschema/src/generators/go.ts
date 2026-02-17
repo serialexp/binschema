@@ -3483,8 +3483,8 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
   // Generate loop variable name
   const itemVar = `${fieldName.replace(/\./g, "_").replace(/^m_/, "")}_item`;
 
-  // Handle greedy arrays (no length prefix, no terminator - just encode all items)
-  if (kind === "greedy") {
+  // Handle eof_terminated arrays (no length prefix, no terminator - just encode all items)
+  if (kind === "eof_terminated") {
     // Just encode items - no prefix, no terminator
   }
 
@@ -4268,13 +4268,11 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     lines.push(`${indent}\t\tbreak ${loopLabel}`);
     lines.push(`${indent}\t}`);
     // Fall through to decode item
-  } else if (kind === "greedy") {
-    // Greedy: read until end of buffer
-    // For now, just allocate empty array - TODO: implement greedy properly
+  } else if (kind === "eof_terminated") {
+    // Read items until end of stream
     lines.push(`${indent}result.${fieldName} = []${itemType}{}`);
-    lines.push(`${indent}// TODO: Implement greedy array reading`);
-    lines.push(``);
-    return lines;
+    lines.push(`${indent}for decoder.Position() < decoder.Len() {`);
+    // Fall through to decode item
   } else {
     throw new Error(`Unknown array kind: ${kind}`);
   }
@@ -4341,7 +4339,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     // Close outer loop
     if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count") {
       lines.push(`${indent}}`);
-    } else if (kind === "null_terminated") {
+    } else if (kind === "null_terminated" || kind === "eof_terminated") {
       lines.push(`${indent}}`);
     }
 
@@ -4424,7 +4422,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count") {
       lines.push(`${indent}\tresult.${fieldName}[i] = ${itemVar}`);
       lines.push(`${indent}}`);
-    } else if (kind === "null_terminated" || kind === "byte_length_prefixed" || kind === "signature_terminated") {
+    } else if (kind === "null_terminated" || kind === "byte_length_prefixed" || kind === "signature_terminated" || kind === "eof_terminated") {
       // For these kinds, we use append since we don't know the count in advance
       lines.push(`${indent}\tresult.${fieldName} = append(result.${fieldName}, ${itemVar})`);
       lines.push(`${indent}}`);
@@ -4474,7 +4472,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
       lines.push(`${indent}\t}`);
     }
     lines.push(`${indent}}`);
-  } else if (kind === "signature_terminated" || kind === "byte_length_prefixed") {
+  } else if (kind === "signature_terminated" || kind === "byte_length_prefixed" || kind === "eof_terminated") {
     // For these kinds, we use append and check loop condition at the start
     lines.push(`${indent}\tresult.${fieldName} = append(result.${fieldName}, ${itemValue})`);
     lines.push(`${indent}}`);
