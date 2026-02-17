@@ -80,8 +80,8 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     const hasHeaderStruct = result.code.includes("pub struct Header");
     const hasFileStruct = result.code.includes("pub struct File");
     const hasNestedField = result.code.includes("pub header: Header");
-    const callsNestedEncode = result.code.includes("self.header.encode()");
-    const callsNestedDecode = result.code.includes("HeaderOutput::decode_with_decoder(decoder)");
+    const callsNestedEncode = result.code.includes("self.header.encode_into(encoder)");
+    const callsNestedDecode = result.code.includes("Header::decode_with_decoder(decoder)");
 
     if (hasHeaderStruct && hasFileStruct && hasNestedField && callsNestedEncode && callsNestedDecode) {
       passed++;
@@ -352,6 +352,103 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     failed++;
     checks.push({
       description: "All primitive types",
+      passed: false,
+      message: `Exception: ${error.message}`
+    });
+  }
+
+  // Test 9: eof_terminated array
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Envelope: {
+          sequence: [
+            { name: "header", type: "uint8" },
+            { name: "data", type: "array", kind: "eof_terminated", items: { type: "uint8" } } as any,
+          ]
+        }
+      }
+    };
+
+    const result = generateRust(schema, "Envelope");
+
+    const hasWhileLoop = result.code.includes("while decoder.position() < decoder.bytes_len()");
+    const hasVecDecl = result.code.includes("let mut data: Vec<u8> = Vec::new()");
+    const hasNoLengthPrefix = !result.code.includes("encoder.write_uint8(self.data.len()");
+
+    if (hasWhileLoop && hasVecDecl && hasNoLengthPrefix) {
+      passed++;
+      checks.push({ description: "eof_terminated array generation", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "eof_terminated array generation",
+        passed: false,
+        message: `Missing content: whileLoop=${hasWhileLoop}, vecDecl=${hasVecDecl}, noLengthPrefix=${hasNoLengthPrefix}`
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "eof_terminated array generation",
+      passed: false,
+      message: `Exception: ${error.message}`
+    });
+  }
+
+  // Test 10: Discriminated union (peek-based) generates enum with encode/decode
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        TypeA: {
+          sequence: [
+            { name: "tag", type: "uint8", const: 0x01 } as any,
+            { name: "value", type: "uint16" },
+          ]
+        },
+        TypeB: {
+          sequence: [
+            { name: "tag", type: "uint8", const: 0x02 } as any,
+            { name: "value", type: "uint32" },
+          ]
+        },
+        MyUnion: {
+          type: "discriminated_union",
+          discriminator: { peek: "uint8" },
+          variants: [
+            { type: "TypeA", when: "value == 0x01" },
+            { type: "TypeB", when: "value == 0x02" },
+          ]
+        } as any
+      }
+    };
+
+    const result = generateRust(schema, "MyUnion");
+
+    const hasEnum = result.code.includes("pub enum MyUnion");
+    const hasEncode = result.code.includes("pub fn encode(&self)");
+    const hasDecode = result.code.includes("pub fn decode(bytes: &[u8])");
+    const hasDecodeBody = result.code.includes("peek_uint8") || result.code.includes("read_uint8");
+    const hasVariantA = result.code.includes("MyUnion::TypeA");
+    const hasVariantB = result.code.includes("MyUnion::TypeB");
+
+    if (hasEnum && hasEncode && hasDecode && hasDecodeBody && hasVariantA && hasVariantB) {
+      passed++;
+      checks.push({ description: "Discriminated union (peek-based) generation", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Discriminated union (peek-based) generation",
+        passed: false,
+        message: `Missing: enum=${hasEnum}, encode=${hasEncode}, decode=${hasDecode}, body=${hasDecodeBody}, varA=${hasVariantA}, varB=${hasVariantB}`
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Discriminated union (peek-based) generation",
       passed: false,
       message: `Exception: ${error.message}`
     });

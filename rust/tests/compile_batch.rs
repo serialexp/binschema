@@ -328,6 +328,21 @@ fn prefix_type_names(code: &str, prefix: &str) -> String {
     result
 }
 
+/// Check if a sequence type needs separate Input/Output structs.
+/// Returns true only when the type has any field with computed or const values.
+/// Types without these get a single unified struct (no Input/Output suffix).
+fn type_needs_input_output_split(type_name: &str, schema: &Schema) -> bool {
+    match schema.types.get(type_name) {
+        Some(TypeDef::Sequence { sequence, .. }) => {
+            sequence.iter().any(|f| {
+                if f.name.is_none() { return false; }
+                f.computed.is_some() || f.r#const.is_some()
+            })
+        }
+        _ => false,
+    }
+}
+
 /// Generate the test harness main function
 fn generate_test_harness(suites: &[(String, TestSuite)]) -> String {
     let mut harness = String::from(
@@ -354,10 +369,8 @@ fn main() {
         // Convert test_type to PascalCase to match Rust generator naming
         let type_pascal = to_pascal_case(&suite.test_type);
         let prefixed_type = format!("{}_{}", prefix, type_pascal);
-        // Check if the test type is a composite (has sequence) - these use Input/Output separation
-        let uses_input_output = suite.schema.types.get(&suite.test_type)
-            .map(|t| matches!(t, TypeDef::Sequence { .. }))
-            .unwrap_or(false);
+        // Check if the test type needs Input/Output separation (has computed or const fields)
+        let uses_input_output = type_needs_input_output_split(&suite.test_type, &suite.schema);
         let input_type = if uses_input_output {
             format!("{}Input", prefixed_type)
         } else {
@@ -642,8 +655,15 @@ fn generate_value_construction(
             }
         };
 
-        // Pass the current type name as containing type for bitfield struct naming
-        let formatted_value = format_value_with_field_and_context(field_value, field, schema, prefix, current_type_name, test_description);
+        // Determine suffix for nested types: if the parent type is unified (no split),
+        // child types that DO need a split are typed as ChildOutput in the unified struct.
+        // If the parent needs a split, we're constructing an Input struct, so children use "Input".
+        let child_suffix = if type_needs_input_output_split(current_type_name, schema) {
+            "Input"
+        } else {
+            "Output"
+        };
+        let formatted_value = format_value_with_field_and_suffix(field_value, field, schema, prefix, current_type_name, child_suffix, test_description);
         result.push_str(&format!("                {}: {},\n", rust_field_name, formatted_value));
     }
 
@@ -755,7 +775,7 @@ fn format_value_with_field_and_suffix(
     // Handle array fields - propagate suffix for choice types inside arrays
     if field_type == "array" {
         if let serde_json::Value::Array(arr) = value {
-            return format_array_with_field_and_suffix(arr, field, schema, prefix, suffix);
+            return format_array_with_field_and_suffix(arr, field, schema, prefix, suffix, containing_type_name);
         }
         return "vec![]".to_string();
     }
@@ -767,7 +787,19 @@ fn format_value_with_field_and_suffix(
             let variant_types: Vec<String> = variants.iter()
                 .map(|v| v.type_name.clone())
                 .collect();
-            return format_inline_discriminated_union_value(value, &variant_types, schema, prefix);
+            let field_name = field.name.as_deref().unwrap_or("");
+            return format_inline_discriminated_union_value(value, &variant_types, schema, prefix, containing_type_name, field_name);
+        }
+    }
+
+    // Handle inline choice fields (not named types in schema)
+    if field_type == "choice" {
+        if let Some(ref choices) = field.choices {
+            let variant_types: Vec<String> = choices.iter()
+                .map(|c| c.type_name.clone())
+                .collect();
+            let field_name = field.name.as_deref().unwrap_or("");
+            return format_choice_value(value, &variant_types, schema, prefix, containing_type_name, field_name);
         }
     }
 
@@ -1094,9 +1126,14 @@ fn format_nested_struct_with_suffix(
         }
     };
 
-    // Composite types use the specified suffix (Input for encoding, Output for enum variants)
+    // Composite types use the specified suffix only if they need Input/Output split
     let rust_type_name = format!("{}_{}", prefix, to_pascal_case(type_name));
-    let rust_type_name = format!("{}{}", rust_type_name, suffix);
+    let needs_split = type_needs_input_output_split(type_name, schema);
+    let rust_type_name = if needs_split {
+        format!("{}{}", rust_type_name, suffix)
+    } else {
+        rust_type_name
+    };
     let mut result = format!("{} {{ ", rust_type_name);
 
     for field in sequence {
@@ -1152,9 +1189,11 @@ fn format_nested_struct_with_suffix(
             }
         };
 
-        // Pass the type_name as containing type and propagate suffix for nested types
-        // Note: test_description is empty here - negative infinity detection only works at top level
-        let formatted_value = format_value_with_field_and_suffix(field_value, field, schema, prefix, type_name, suffix, "");
+        // Determine suffix for child types: if the current type is unified (no split),
+        // its fields reference split children as ChildOutput, so children need "Output".
+        // If the current type is split, propagate the existing suffix.
+        let child_suffix = if needs_split { suffix } else { "Output" };
+        let formatted_value = format_value_with_field_and_suffix(field_value, field, schema, prefix, type_name, child_suffix, "");
         result.push_str(&format!("{}: {}, ", rust_field_name, formatted_value));
     }
 
@@ -1187,6 +1226,7 @@ fn format_array_with_field(
     field: &Field,
     schema: &Schema,
     prefix: &str,
+    containing_type_name: &str,
 ) -> String {
     if arr.is_empty() {
         return "vec![]".to_string();
@@ -1210,8 +1250,9 @@ fn format_array_with_field(
             let variant_types: Vec<String> = choices.iter()
                 .map(|c| c.type_name.clone())
                 .collect();
+            let field_name = field.name.as_deref().unwrap_or("");
             let formatted: Vec<String> = arr.iter()
-                .map(|v| format_choice_value(v, &variant_types, schema, prefix))
+                .map(|v| format_choice_value(v, &variant_types, schema, prefix, containing_type_name, field_name))
                 .collect();
             return format!("vec![{}]", formatted.join(", "));
         }
@@ -1248,6 +1289,7 @@ fn format_array_with_field_and_suffix(
     schema: &Schema,
     prefix: &str,
     suffix: &str,
+    containing_type_name: &str,
 ) -> String {
     if arr.is_empty() {
         return "vec![]".to_string();
@@ -1271,8 +1313,9 @@ fn format_array_with_field_and_suffix(
             let variant_types: Vec<String> = choices.iter()
                 .map(|c| c.type_name.clone())
                 .collect();
+            let field_name = field.name.as_deref().unwrap_or("");
             let formatted: Vec<String> = arr.iter()
-                .map(|v| format_choice_value(v, &variant_types, schema, prefix))
+                .map(|v| format_choice_value(v, &variant_types, schema, prefix, containing_type_name, field_name))
                 .collect();
             return format!("vec![{}]", formatted.join(", "));
         }
@@ -1557,6 +1600,8 @@ fn format_inline_discriminated_union_value(
     variant_types: &[String],
     schema: &Schema,
     prefix: &str,
+    containing_type_name: &str,
+    field_name: &str,
 ) -> String {
     if let serde_json::Value::Object(map) = value {
         // Get the variant type from the "type" field
@@ -1568,11 +1613,8 @@ fn format_inline_discriminated_union_value(
         let payload = map.get("value");
 
         if !variant_type.is_empty() {
-            // Build the enum name from the variant types ({prefix}_Union{Type1}{Type2}...)
-            let enum_name = format!("{}_Union{}", prefix, variant_types.iter()
-                .map(|t| to_pascal_case(t))
-                .collect::<Vec<_>>()
-                .join(""));
+            // Build the enum name from parent type + field name
+            let enum_name = format!("{}_{}{}", prefix, to_pascal_case(containing_type_name), to_pascal_case(field_name));
             let variant_pascal = to_pascal_case(variant_type);
 
             if let Some(payload_val) = payload {
@@ -1624,7 +1666,8 @@ fn get_default_value_for_type(field_type: &str, schema: &Schema, prefix: &str) -
                                 fields.push(format!("{}: {}", field_name, default_val));
                             }
                         }
-                        format!("{}Input {{ {} }}", rust_type_name, fields.join(", "))
+                        let type_suffix = if type_needs_input_output_split(field_type, schema) { "Input" } else { "" };
+                        format!("{}{} {{ {} }}", rust_type_name, type_suffix, fields.join(", "))
                     }
                     TypeDef::Direct { type_name: wrapped_type, .. } => {
                         // Type alias - generate proper default based on wrapped type
@@ -1663,6 +1706,8 @@ fn format_choice_value(
     variant_types: &[String],
     schema: &Schema,
     prefix: &str,
+    containing_type_name: &str,
+    field_name: &str,
 ) -> String {
     let value_map = match value {
         serde_json::Value::Object(map) => map,
@@ -1675,12 +1720,8 @@ fn format_choice_value(
         None => return "/* missing type field in choice */".to_string(),
     };
 
-    // Build the choice enum name: Choice{Type1}{Type2}...
-    let enum_name = format!("Choice{}", variant_types.iter()
-        .map(|t| to_pascal_case(t))
-        .collect::<Vec<_>>()
-        .join(""));
-    let prefixed_enum = format!("{}_{}", prefix, enum_name);
+    // Build the choice enum name from parent type + field name
+    let prefixed_enum = format!("{}_{}{}", prefix, to_pascal_case(containing_type_name), to_pascal_case(field_name));
 
     // The variant name in Rust is PascalCase
     let variant_pascal = to_pascal_case(variant_type);
