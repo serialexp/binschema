@@ -28,8 +28,18 @@ rust/test-output.txt
 # Benchmark generated files
 .generated-bench/
 benchmarks/results-*.json
-benchmarks/perf.data
 benchmarks/*.0x/
+benchmarks/go-compare/go-compare.test
+benchmarks/rust-compare/target/
+
+# Profiling artifacts
+benchmarks/perf.data
+benchmarks/perf-*.data
+benchmarks/go-compare/cpu-*.prof
+benchmarks/go-compare/mem-*.prof
+benchmarks/rust-compare/perf.data
+benchmarks/rust-compare/flamegraph-*.svg
+isolate-*.log
 
 # Test debug output
 go/test/tmp-go-debug/

@@ -62,6 +62,27 @@ test-rust-categorize:
 
 # ========== Website ==========
 
+# Regenerate website example code from the demo sensor schema
+# Run this when code generators change to keep website examples accurate
+regen-website-examples:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT="$(pwd)"
+    SCHEMA="$ROOT/website/src/examples/demo-sensor.schema.json"
+    OUT_DIR="$ROOT/website/src/examples"
+    CLI="$ROOT/packages/binschema/dist/cli/index.js"
+    mkdir -p "$ROOT/tmp/gen-ts" "$ROOT/tmp/gen-go" "$ROOT/tmp/gen-rust"
+    # TypeScript generator needs to run from packages/binschema to find runtime files
+    cd "$ROOT/packages/binschema"
+    node "$CLI" generate --language ts --schema "$SCHEMA" --out "$ROOT/tmp/gen-ts" --type SensorReading
+    cd "$ROOT"
+    node "$CLI" generate --language go --schema "$SCHEMA" --out "$ROOT/tmp/gen-go" --type SensorReading
+    node "$CLI" generate --language rust --schema "$SCHEMA" --out "$ROOT/tmp/gen-rust" --type SensorReading
+    cp "$ROOT/tmp/gen-ts/generated.ts" "$OUT_DIR/demo-sensor.generated.ts"
+    cp "$ROOT/tmp/gen-go/generated.go" "$OUT_DIR/demo-sensor.generated.go"
+    cp "$ROOT/tmp/gen-rust/generated.rs" "$OUT_DIR/demo-sensor.generated.rs"
+    echo "Regenerated website example code in $OUT_DIR"
+
 # Build website
 website:
     cd website && npm install && npm run build
@@ -115,8 +136,8 @@ clean:
 
 # ========== Benchmarks ==========
 
-# Run all benchmarks (TypeScript and Go)
-bench: bench-ts bench-go bench-compare
+# Run all benchmarks (TypeScript, Go, and Rust)
+bench: bench-ts bench-go bench-rust bench-compare
 
 # Run TypeScript benchmarks
 bench-ts:
@@ -134,7 +155,53 @@ bench-compare:
     @echo "Comparing benchmark results..."
     @bun benchmarks/compare.ts
 
+# Run Rust benchmarks (DNS packet decode/encode via Criterion)
+bench-rust:
+    @echo "Running Rust benchmarks..."
+    @bun benchmarks/generate-rust-bench.ts
+    @cd benchmarks/rust-compare && cargo bench --bench dns_bench
+
+# Run Go DNS comparison benchmarks (BinSchema vs Kaitai vs C)
+bench-go-compare:
+    @echo "Running Go DNS comparison benchmarks..."
+    @cd benchmarks/go-compare && go test -bench=. -benchtime=3s -count=5 -benchmem | tee benchmark_results.txt
+
 # Compare against other serialization libraries
 bench-libraries:
     @echo "Comparing BinSchema against other libraries..."
     @cd benchmarks && bun install --silent && cd .. && bun benchmarks/compare-libraries.ts
+
+# === Profiling ===
+
+# Profile Go BinSchema DNS decode (opens pprof web UI on :8080)
+profile-go target="response":
+    @echo "Profiling Go BinSchema DNS decode ({{target}})..."
+    @cd benchmarks/go-compare && bash profile.sh {{target}} web
+
+# Profile Go BinSchema DNS decode (text output, no browser)
+profile-go-text target="response":
+    @cd benchmarks/go-compare && bash profile.sh {{target}} text
+
+# Profile Rust BinSchema DNS decode (generates flamegraph SVG)
+profile-rust:
+    @echo "Building and profiling Rust BinSchema DNS decode..."
+    @bun benchmarks/generate-rust-bench.ts
+    @cd benchmarks/rust-compare && cargo build --release --bin profile_decode \
+        && perf record -g --call-graph dwarf,16384 -o perf.data ./target/release/profile_decode \
+        && perf script -i perf.data | inferno-collapse-perf | inferno-flamegraph > flamegraph-rust.svg \
+        && echo "Flamegraph: benchmarks/rust-compare/flamegraph-rust.svg"
+
+# Profile Rust — text report (no flamegraph, just top functions)
+profile-rust-text:
+    @cd benchmarks/rust-compare && perf report -i perf.data --stdio --no-children -g none 2>/dev/null | head -40
+
+# Profile TypeScript BinSchema DNS decode (generates V8 profile)
+profile-ts:
+    @echo "Generating decoder and profiling with Node.js..."
+    @bun benchmarks/profile-ts-decode.ts > /dev/null
+    @bun build benchmarks/.generated-bench/BinSchemaDnsProfile.ts --outdir benchmarks/.generated-bench/ --outfile BinSchemaDnsProfile.js --target=node > /dev/null
+    @cd benchmarks && node --prof profile-ts-standalone.mjs \
+        && node --prof-process isolate-*.log 2>/dev/null | head -60 \
+        && rm -f isolate-*.log
+    @echo ""
+    @echo "For interactive flamegraph: 0x benchmarks/profile-ts-standalone.mjs"
