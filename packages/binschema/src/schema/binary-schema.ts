@@ -988,10 +988,22 @@ const OptionalFieldSchema = z.object({
 });
 
 /**
- * Type reference without name (for array items)
+ * Type reference without name (for array items and type aliases)
+ * IMPORTANT: type must start with uppercase letter to avoid matching built-in type names
+ * (e.g., "discriminated_union", "back_reference", "array", "string", etc.)
+ * Without this check, a malformed built-in type silently falls through to this
+ * catch-all schema, stripping all required fields and producing broken code.
  */
 const TypeRefElementSchema = z.object({
-  type: z.string(),
+  type: z.string().refine(
+    (t) => {
+      const baseName = t.split('<')[0];
+      return /^[A-Z]/.test(baseName);
+    },
+    {
+      message: "Type references must start with uppercase letter (built-in types like 'discriminated_union', 'array', 'string', 'back_reference' use specific schemas with required fields)"
+    }
+  ),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
@@ -1064,6 +1076,37 @@ const ChoiceElementSchema = z.object({
 });
 
 /**
+ * Choice field (with name - for sequence fields)
+ * Flat discriminated union where discriminator is a field within each variant type
+ */
+const ChoiceFieldSchema = ChoiceElementSchema.extend({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+}).meta({
+  title: "Choice",
+  description: "Flat discriminated union where the first field of each variant type serves as the discriminator. Each variant must have a const value on its first field for auto-detection during decoding.",
+  use_for: "Protocol sections with type tags, heterogeneous record types, tagged data blocks",
+  wire_format: "Discriminator is peeked (read without consuming) to determine which variant type to decode. Each variant includes the discriminator field in its wire format.",
+  notes: [
+    "All variant types must have a first field with a const value (the discriminator)",
+    "All variant discriminator fields must have the same name and type",
+    "Discriminator values must be unique across all variants",
+    "Unlike discriminated_union, choice auto-detects the discriminator from the variant type definitions"
+  ],
+  examples: [
+    {
+      name: "data",
+      type: "choice",
+      choices: [
+        { type: "SparseFloor" },
+        { type: "DenseFloor" }
+      ]
+    }
+  ]
+});
+
+/**
  * Back reference element (without name - for type aliases)
  * Used for compression via backwards references (like DNS name compression)
  */
@@ -1088,16 +1131,6 @@ const BackReferenceElementSchema = z.object({
   }),
   description: z.string().optional().meta({
     description: "Human-readable description of this back reference field"
-  }),
-});
-
-/**
- * Choice field (with name - for struct sequence fields)
- * Extends the element schema with a name field
- */
-const ChoiceFieldSchema = ChoiceElementSchema.extend({
-  name: z.string().meta({
-    description: "Field name"
   }),
 });
 

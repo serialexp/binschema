@@ -1,4 +1,4 @@
-import { BinarySchema } from "../../schema/binary-schema";
+import { BinarySchema, BinarySchemaSchema } from "../../schema/binary-schema";
 import { validateSchema, ValidationResult } from "../../schema/validator";
 
 /**
@@ -850,6 +850,159 @@ export function runDiscriminatedUnionValidationTests(): { passed: number; failed
         passed: false,
         message: 'Expected to fail but passed validation'
       });
+    }
+  }
+
+  return { passed, failed, checks };
+}
+
+/**
+ * Parse-Level Validation Tests
+ *
+ * These test that the Zod schema correctly REJECTS malformed schemas at parse time,
+ * rather than silently stripping invalid fields and letting broken code get generated.
+ *
+ * Background: Before the fix, a discriminator like { name: "encoding", type: "uint8" }
+ * (which is neither peek-based nor field-based) would silently pass Zod validation because
+ * the TypeRefElementSchema catch-all would match the `type: "discriminated_union"` as a
+ * type reference string, stripping the discriminator and variants entirely.
+ * This led to the generator producing broken/empty code with no indication of why.
+ */
+
+interface ParseValidationTestCase {
+  description: string;
+  schema: any; // Raw input (not typed - we're testing parse rejection)
+  shouldParse: boolean;
+}
+
+const PARSE_VALIDATION_TESTS: ParseValidationTestCase[] = [
+  {
+    description: "Rejects discriminator with invalid format { name, type } instead of { peek } or { field }",
+    shouldParse: false,
+    schema: {
+      config: { endianness: "big_endian" },
+      types: {
+        "SparseFloor": { sequence: [{ name: "value", type: "uint8" }] },
+        "DenseFloor": { sequence: [{ name: "value", type: "uint8" }] },
+        "FloorData": {
+          type: "discriminated_union",
+          discriminator: { name: "encoding", type: "uint8" },
+          variants: [
+            { type: "SparseFloor", when: "value == 0" },
+            { type: "DenseFloor", when: "value == 1" }
+          ]
+        }
+      }
+    }
+  },
+  {
+    description: "Rejects back_reference type alias missing required fields",
+    shouldParse: false,
+    schema: {
+      config: { endianness: "big_endian" },
+      types: {
+        "BrokenRef": {
+          type: "back_reference"
+          // Missing: storage, offset_mask, offset_from, target_type
+        }
+      }
+    }
+  },
+  {
+    description: "Accepts valid peek-based discriminated union",
+    shouldParse: true,
+    schema: {
+      config: { endianness: "big_endian" },
+      types: {
+        "TypeA": { sequence: [{ name: "a", type: "uint8" }] },
+        "TypeB": { sequence: [{ name: "b", type: "uint8" }] },
+        "MyUnion": {
+          type: "discriminated_union",
+          discriminator: { peek: "uint8" },
+          variants: [
+            { type: "TypeA", when: "value == 0" },
+            { type: "TypeB", when: "value == 1" }
+          ]
+        }
+      }
+    }
+  },
+  {
+    description: "Accepts valid field-based discriminated union in sequence",
+    shouldParse: true,
+    schema: {
+      config: { endianness: "big_endian" },
+      types: {
+        "TypeA": { sequence: [{ name: "a", type: "uint8" }] },
+        "TypeB": { sequence: [{ name: "b", type: "uint8" }] },
+        "Container": {
+          sequence: [
+            { name: "tag", type: "uint8" },
+            {
+              name: "payload",
+              type: "discriminated_union",
+              discriminator: { field: "tag" },
+              variants: [
+                { type: "TypeA", when: "value == 0" },
+                { type: "TypeB", when: "value == 1" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    description: "Rejects discriminator with empty object {}",
+    shouldParse: false,
+    schema: {
+      config: { endianness: "big_endian" },
+      types: {
+        "TypeA": { sequence: [{ name: "a", type: "uint8" }] },
+        "BrokenUnion": {
+          type: "discriminated_union",
+          discriminator: {},
+          variants: [
+            { type: "TypeA", when: "value == 0" }
+          ]
+        }
+      }
+    }
+  },
+];
+
+export function runParseValidationTests(): { passed: number; failed: number; checks: TestCheck[] } {
+  let passed = 0;
+  let failed = 0;
+  const checks: TestCheck[] = [];
+
+  for (const tc of PARSE_VALIDATION_TESTS) {
+    try {
+      BinarySchemaSchema.parse(tc.schema);
+
+      if (tc.shouldParse) {
+        passed++;
+        checks.push({ description: `[parse] ${tc.description}`, passed: true });
+      } else {
+        failed++;
+        checks.push({
+          description: `[parse] ${tc.description}`,
+          passed: false,
+          message: "Expected Zod parse to reject this schema, but it was accepted"
+        });
+      }
+    } catch (error: any) {
+      if (!tc.shouldParse) {
+        passed++;
+        checks.push({ description: `[parse] ${tc.description}`, passed: true });
+      } else {
+        failed++;
+        checks.push({
+          description: `[parse] ${tc.description}`,
+          passed: false,
+          message: `Expected Zod parse to accept this schema, but it was rejected: ${error.message?.slice(0, 300)}`
+        });
+      }
     }
   }
 
