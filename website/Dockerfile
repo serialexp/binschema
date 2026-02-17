@@ -18,7 +18,6 @@ COPY website/ ./
 
 # Copy repo assets needed by prepare-docs.js (generates HTML docs from example schemas)
 COPY README.md ../README.md
-COPY type-reference.html ../type-reference.html
 COPY examples/ ../examples/
 
 # Build the static site (prepare-docs generates HTML docs, then Vite builds)
