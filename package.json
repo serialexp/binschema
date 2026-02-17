@@ -10,6 +10,6 @@
   },
   "devDependencies": {
     "husky": "^9.1.7",
-    "just-release": "^0.6.0"
+    "just-release": "^0.8.2"
   }
 }
