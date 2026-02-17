@@ -1,0 +1,14 @@
+[package]
+name = "binschema-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+binschema-runtime = { path = "../../rust" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "dns_bench"
+harness = false
