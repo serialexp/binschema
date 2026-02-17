@@ -1,0 +1,708 @@
+# BinSchema
+
+> Binary protocol schema definition and code generation tool. Define binary formats in JSON5, generate type-safe parsers and serializers for TypeScript, Go, and Rust.
+
+BinSchema lets you describe binary wire formats declaratively in JSON5. From a single schema, it generates encoders and decoders for multiple languages. It supports bit-level precision (1-64 bit fields), configurable byte/bit ordering, computed fields (auto-calculated lengths, checksums, positions), discriminated unions, conditional fields, back-references, random-access parsing, and variable-length integer encodings.
+
+## Schema Structure
+
+A BinSchema file is a JSON5 document with this top-level shape:
+
+```json5
+{
+  "meta": { ... },        // Optional: title, description, version
+  "config": { ... },      // Optional: global endianness and bit_order
+  "types": { ... },       // Required: map of type name -> type definition
+  "protocol": { ... }     // Optional: protocol metadata (messages, constants)
+}
+```
+
+### Meta
+
+Optional metadata for documentation.
+
+| Field         | Type   | Description                           |
+|---------------|--------|---------------------------------------|
+| `title`       | string | Human-readable title                  |
+| `description` | string | Brief description of what schema defines |
+| `version`     | string | Version string (e.g., `"1.0"`, `"RFC 2083"`) |
+
+### Config
+
+Optional global configuration. Can be overridden per-field.
+
+| Field        | Values                          | Description                     |
+|--------------|---------------------------------|---------------------------------|
+| `endianness` | `"big_endian"`, `"little_endian"` | Byte order for multi-byte values |
+| `bit_order`  | `"msb_first"`, `"lsb_first"`     | Bit ordering within bytes       |
+
+## Type Definitions
+
+Types are defined in the `types` map. Type names **must start with an uppercase letter** to avoid conflicts with built-in type names. There are two kinds of type definitions:
+
+### Composite Types (Structs)
+
+A composite type has a `sequence` of named fields that are encoded/decoded in order:
+
+```json5
+{
+  "MyType": {
+    "description": "Optional description",
+    "sequence": [
+      { "name": "field1", "type": "uint8" },
+      { "name": "field2", "type": "uint16" }
+    ],
+    "instances": [ ... ]  // Optional: position-based fields for random access
+  }
+}
+```
+
+### Type Aliases
+
+A type alias directly references another type without wrapping it in a struct:
+
+```json5
+{
+  "Realm": { "type": "KerberosString" },
+  "Pointer": { "type": "uint16" }
+}
+```
+
+## Primitive Types
+
+### Unsigned Integers
+
+| Type     | Size    | Range       | Code Gen (TS/Go/Rust) |
+|----------|---------|-------------|------------------------|
+| `uint8`  | 1 byte  | 0-255       | `number` / `uint8` / `u8` |
+| `uint16` | 2 bytes | 0-65535     | `number` / `uint16` / `u16` |
+| `uint32` | 4 bytes | 0-4294967295 | `number` / `uint32` / `u32` |
+| `uint64` | 8 bytes | 0-2^64-1    | `bigint` / `uint64` / `u64` |
+
+All multi-byte integer fields support an optional `endianness` property to override the global config.
+
+`uint8`, `uint16`, and `uint32` fields support a `const` property to set a fixed constant value. This is used for magic numbers, signatures, and as discriminators in choice types.
+
+### Signed Integers
+
+| Type    | Size    | Range             | Code Gen (TS/Go/Rust) |
+|---------|---------|-------------------|------------------------|
+| `int8`  | 1 byte  | -128 to 127       | `number` / `int8` / `i8` |
+| `int16` | 2 bytes | -32768 to 32767   | `number` / `int16` / `i16` |
+| `int32` | 4 bytes | -2^31 to 2^31-1   | `number` / `int32` / `i32` |
+| `int64` | 8 bytes | -2^63 to 2^63-1   | `bigint` / `int64` / `i64` |
+
+### Floating Point
+
+| Type      | Size    | Description           | Code Gen (TS/Go/Rust) |
+|-----------|---------|------------------------|------------------------|
+| `float32` | 4 bytes | IEEE 754 single precision | `number` / `float32` / `f32` |
+| `float64` | 8 bytes | IEEE 754 double precision | `number` / `float64` / `f64` |
+
+### Bit Fields
+
+For sub-byte fields with 1-64 bit precision:
+
+```json5
+{ "name": "flags", "type": "bit", "size": 4 }
+```
+
+Signed bit fields use:
+
+```json5
+{ "name": "offset", "type": "int", "size": 12, "signed": true }
+```
+
+### Bitfield (Structured Bit-Level Access)
+
+Groups multiple named bit fields with explicit offsets within a parent field:
+
+```json5
+{
+  "name": "flags",
+  "type": "bitfield",
+  "size": 16,
+  "bit_order": "msb_first",
+  "fields": [
+    { "name": "qr", "offset": 0, "size": 1 },
+    { "name": "opcode", "offset": 1, "size": 4 },
+    { "name": "aa", "offset": 5, "size": 1 },
+    { "name": "tc", "offset": 6, "size": 1 },
+    { "name": "rd", "offset": 7, "size": 1 }
+  ]
+}
+```
+
+### Variable-Length Integers
+
+For encoding schemes where the integer size varies based on value:
+
+```json5
+{ "name": "length", "type": "varlength", "encoding": "der" }
+{ "name": "delta_time", "type": "varlength", "encoding": "vlq" }
+```
+
+| Encoding | Description | Used By |
+|----------|-------------|---------|
+| `"der"`  | ASN.1 DER/BER length encoding. Short form (0-127 = 1 byte), long form (1+N bytes) | Kerberos, X.509, LDAP, SNMP |
+| `"leb128"` | Little Endian Base 128. 7 bits/byte, little-endian | Protocol Buffers, WebAssembly, DWARF |
+| `"ebml"` | EBML variable-size integer. Leading-zeros width indicator | Matroska/WebM containers |
+| `"vlq"` | Variable Length Quantity. MSB-first, 7 bits/byte | MIDI, Git packfiles |
+
+Optional property `max_bytes` (1-8) limits the maximum encoded size.
+
+## Strings
+
+Strings have a `type` of `"string"` and require a `kind` to specify how their length is determined.
+
+### String Encoding
+
+| Encoding  | Description |
+|-----------|-------------|
+| `"utf8"`  | UTF-8 encoding (default) |
+| `"ascii"` | 7-bit ASCII, one byte per character |
+| `"latin1"` | ISO-8859-1, one byte per character |
+
+### String Kinds
+
+**Fixed-length:**
+```json5
+{ "name": "chunk_type", "type": "string", "kind": "fixed", "length": 4, "encoding": "ascii" }
+```
+
+**Length-prefixed** (count prefix, then characters):
+```json5
+{ "name": "label", "type": "string", "kind": "length_prefixed", "length_type": "uint8", "encoding": "ascii" }
+```
+
+**Field-referenced** (length comes from an earlier field):
+```json5
+{ "name": "text", "type": "string", "kind": "field_referenced", "length_field": "text_length", "encoding": "utf8" }
+```
+
+**Null-terminated:**
+```json5
+{ "name": "name", "type": "string", "kind": "null_terminated", "encoding": "utf8" }
+```
+
+## Arrays
+
+Arrays have a `type` of `"array"`, a `kind` to specify sizing, and `items` to specify element type.
+
+### Array Kinds
+
+**`fixed`** - Fixed number of elements:
+```json5
+{ "name": "magic", "type": "array", "kind": "fixed", "length": 4, "items": { "type": "uint8" } }
+```
+
+**`length_prefixed`** - Element count prefix, then that many elements:
+```json5
+{ "name": "records", "type": "array", "kind": "length_prefixed", "length_type": "uint16", "items": { "type": "Record" } }
+```
+
+**`length_prefixed_items`** - Element count prefix, then per-item length prefix + element:
+```json5
+{ "name": "entries", "type": "array", "kind": "length_prefixed_items", "length_type": "uint16", "item_length_type": "uint32", "items": { "type": "Entry" } }
+```
+
+**`byte_length_prefixed`** - Byte-length prefix; reads elements until that many bytes consumed:
+```json5
+{ "name": "events", "type": "array", "kind": "byte_length_prefixed", "length_type": "uint32", "items": { "type": "Event" } }
+```
+Supports `length_type: "varlength"` with `length_encoding: "der"` for ASN.1 DER containers.
+
+**`field_referenced`** - Element count comes from a previously decoded field:
+```json5
+{ "name": "questions", "type": "array", "kind": "field_referenced", "length_field": "qdcount", "items": { "type": "Question" } }
+```
+Supports dot notation for nested fields: `"length_field": "header.num_tracks"`.
+
+**`computed_count`** - Element count computed from an expression:
+```json5
+{ "name": "values", "type": "array", "kind": "computed_count", "count_expr": "max - min + 1", "items": { "type": "uint8" } }
+```
+
+**`null_terminated`** - Read elements until a zero/null terminator:
+```json5
+{ "name": "labels", "type": "array", "kind": "null_terminated", "items": { "type": "Label" } }
+```
+
+**`signature_terminated`** - Read elements until a specific multi-byte signature value:
+```json5
+{
+  "name": "records", "type": "array", "kind": "signature_terminated",
+  "terminator_value": 65535, "terminator_type": "uint16",
+  "terminator_endianness": "big_endian",
+  "items": { "type": "Record" }
+}
+```
+
+**`variant_terminated`** - Read elements until a specific variant type in a discriminated union:
+```json5
+{
+  "name": "chunks", "type": "array", "kind": "variant_terminated",
+  "terminal_variants": ["EndMarker"],
+  "items": { "type": "ChunkOrEnd" }
+}
+```
+
+**`eof_terminated`** - Read elements until end of stream:
+```json5
+{ "name": "chunks", "type": "array", "kind": "eof_terminated", "items": { "type": "Chunk" } }
+```
+
+### Array Items
+
+Array `items` can be any element type: primitives, type references, strings, nested arrays, discriminated unions, choices, optional, or back references. Element types are the same as field types but without a `name` property.
+
+## Computed Fields
+
+Computed fields are automatically calculated during encoding. The user does not provide their value; the encoder computes it from other fields. During decoding, the value is read from the wire format normally.
+
+Add a `computed` property to any numeric field:
+
+### `length_of` - Byte length of a target field
+
+```json5
+{ "name": "length", "type": "uint16", "computed": { "type": "length_of", "target": "data" } }
+```
+
+Optional modifiers:
+- `encoding`: For string targets, specify encoding for byte length calculation (e.g., `"utf8"`)
+- `offset`: Add a constant to the computed length (e.g., `1` for ASN.1 BIT STRING)
+
+### `length_of` with `from_after_field` - Length of everything after a field
+
+For ASN.1/DER TLV containers where the length field measures "everything after me":
+
+```json5
+{
+  "name": "sequence_length", "type": "varlength", "encoding": "der",
+  "computed": { "type": "length_of", "from_after_field": "sequence_length" }
+}
+```
+
+This is mutually exclusive with `target`.
+
+### `count_of` - Element count of an array
+
+```json5
+{ "name": "count", "type": "uint16", "computed": { "type": "count_of", "target": "items" } }
+```
+
+### `crc32_of` - CRC32 checksum
+
+```json5
+{ "name": "crc32", "type": "uint32", "computed": { "type": "crc32_of", "target": "body" } }
+```
+
+The target must be an array of `uint8` (byte array).
+
+### `position_of` - Byte offset to a target
+
+```json5
+{ "name": "offset", "type": "uint32", "computed": { "type": "position_of", "target": "data" } }
+```
+
+### `sum_of_sizes` - Sum of encoded sizes of multiple fields
+
+```json5
+{ "name": "total", "type": "uint32", "computed": { "type": "sum_of_sizes", "targets": ["field_a", "field_b"] } }
+```
+
+### `sum_of_type_sizes` - Sum of encoded sizes of array elements of a specific type
+
+```json5
+{
+  "name": "dir_size", "type": "uint32",
+  "computed": { "type": "sum_of_type_sizes", "target": "sections", "element_type": "CentralDirEntry" }
+}
+```
+
+### Cross-Struct References
+
+Computed field targets can reference fields in parent or sibling structs:
+
+| Syntax | Meaning |
+|--------|---------|
+| `"body"` | Field in the same struct |
+| `"../body"` | Field in the parent struct |
+| `"header.length"` | Nested field (dot notation) |
+| `"../sections[corresponding<LocalFile>]"` | Nth element of matching type in parent array |
+| `"../sections[first<CentralDirEntry>]"` | First element of a specific type in parent array |
+
+## Discriminated Unions
+
+Two types of discriminated unions dispatch to different types based on a discriminator value.
+
+### `discriminated_union` - Wrapped Union
+
+Each variant is wrapped in `{ type: "VariantName", value: { ... } }`:
+
+```json5
+{
+  "name": "message",
+  "type": "discriminated_union",
+  "discriminator": { "peek": "uint8" },
+  "variants": [
+    { "type": "TextMessage", "when": "value === 0x01" },
+    { "type": "BinaryMessage", "when": "value === 0x02" },
+    { "type": "UnknownMessage" }  // Fallback (no when), must be last
+  ]
+}
+```
+
+**Discriminator options:**
+
+Peek-based (reads without consuming bytes):
+```json5
+{ "peek": "uint8" }                                      // Peek 1 byte
+{ "peek": "uint16", "endianness": "big_endian" }          // Peek 2 bytes
+{ "peek": "uint32", "endianness": "little_endian" }       // Peek 4 bytes
+```
+
+Field-based (uses a previously decoded field):
+```json5
+{ "field": "message_type" }         // Simple field reference
+{ "field": "flags.opcode" }         // Dot notation for bitfield sub-fields
+```
+
+**Variant conditions** (`when` expressions):
+- `"value === 0x01"` - Exact match
+- `"value >= 0x80"` - Range check
+- `"value >= 128 && value <= 143"` - Range
+- `"value === 0x01 || value === 0x02"` - Multiple values
+
+The last variant may omit `when` to act as a fallback/default.
+
+### `choice` - Flat Union (No Wrapper)
+
+A flat discriminated union where each variant type has a common first field with a `const` value that acts as the discriminator. No wrapping — the decoded value is the variant struct directly:
+
+```json5
+{
+  "type": "choice",
+  "choices": [
+    { "type": "LocalFile" },
+    { "type": "CentralDirEntry" },
+    { "type": "EndOfCentralDir" }
+  ]
+}
+```
+
+Requirements:
+- All choice types must be composite types (have a `sequence`).
+- All must share the same first field (same name and type: `uint8`, `uint16`, or `uint32`).
+- Each variant's first field must have a unique `const` value.
+
+## Conditional Fields
+
+Fields that are only present when a condition on earlier fields is true. No presence indicator is written; the condition is evaluated from previously decoded values:
+
+```json5
+{ "name": "data", "type": "Payload", "conditional": "flags.has_data == 1" }
+{ "name": "note_data", "type": "NoteOn", "conditional": "status >= 144 && status <= 159" }
+```
+
+Conditional fields produce `T | undefined` in TypeScript, `*T` in Go, `Option<T>` in Rust.
+
+## Optional Fields
+
+Optional fields include a presence indicator on the wire (1 = present, 0 = absent):
+
+```json5
+{ "name": "nickname", "type": "optional", "value_type": "String" }
+{ "name": "flag", "type": "optional", "value_type": "uint8", "presence_type": "bit" }
+```
+
+| Property | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `value_type` | Any type name | required | The wrapped type |
+| `presence_type` | `"uint8"`, `"bit"` | `"uint8"` | Size of presence indicator |
+
+## Generic / Parameterized Types
+
+Types can be parameterized with `<T>`:
+
+```json5
+{
+  "Optional<T>": {
+    "sequence": [
+      { "name": "present", "type": "uint8" },
+      { "name": "value", "type": "T", "conditional": "present == 1" }
+    ]
+  }
+}
+```
+
+Use with: `{ "name": "reply_to", "type": "Optional<uint64>" }`
+
+## Back References (Pointer Compression)
+
+For formats like DNS name compression where data can reference earlier occurrences:
+
+```json5
+{
+  "name": "pointer",
+  "type": "back_reference",
+  "storage": "uint16",
+  "offset_mask": "0x3FFF",
+  "offset_from": "message_start",
+  "target_type": "DomainName"
+}
+```
+
+| Property | Description |
+|----------|-------------|
+| `storage` | Integer type for the wire representation (`uint8`, `uint16`, `uint32`) |
+| `offset_mask` | Hex bitmask to extract offset bits (e.g., `"0x3FFF"` for DNS 14-bit pointers) |
+| `offset_from` | Reference point: `"message_start"` or `"current_position"` |
+| `target_type` | Type to parse at the referenced offset |
+| `endianness` | Optional, for multi-byte storage types |
+
+## Padding
+
+Insert zero bytes to align the current position to a byte boundary:
+
+```json5
+{ "name": "pad", "type": "padding", "align_to": 4 }
+```
+
+`align_to` must be a power of 2. Inserts 0 to `(align_to - 1)` zero bytes depending on current position. Not represented in decoded values.
+
+## Constant Fields
+
+Any `uint8`, `uint16`, or `uint32` field can have a `const` value. Constant fields are:
+- Always written with the constant value during encoding (user cannot override)
+- Validated during decoding (error if wire value doesn't match)
+- Used as discriminators in `choice` types
+
+```json5
+{ "name": "signature", "type": "uint32", "const": 67324752 }
+{ "name": "tag", "type": "uint8", "const": 0x30 }
+```
+
+Fixed-length arrays also support `const` for magic byte sequences:
+```json5
+{ "name": "magic", "type": "array", "kind": "fixed", "length": 4, "items": { "type": "uint8" }, "const": [77, 84, 104, 100] }
+```
+
+## Random Access (Instances / Position Fields)
+
+For formats that require seeking to specific positions (ZIP, ELF, PCF), types can define `instances` — fields that are lazily evaluated by seeking to a position:
+
+```json5
+{
+  "FileFormat": {
+    "sequence": [
+      { "name": "magic", "type": "uint32" },
+      { "name": "data_offset", "type": "uint32" }
+    ],
+    "instances": [
+      {
+        "name": "data",
+        "type": "DataBlock",
+        "position": "data_offset"
+      }
+    ]
+  }
+}
+```
+
+### Instance Field Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | string | Field name |
+| `type` | string or inline discriminated_union | Type to decode at the position |
+| `position` | number or string | Absolute position (number), negative for from-EOF, or field reference (string) |
+| `size` | number or string | Optional size hint |
+| `alignment` | number | Required byte alignment (must be power of 2) |
+
+Position field `type` can also be an inline discriminated union:
+```json5
+{
+  "name": "table_data",
+  "type": {
+    "discriminator": { "field": "format_type" },
+    "variants": [
+      { "type": "MetricsTable", "when": "value === 1" },
+      { "type": "BitmapTable", "when": "value === 2" }
+    ]
+  },
+  "position": "table_offset"
+}
+```
+
+Instances require seekable input streams. In generated code, they are lazy-evaluated (TypeScript: getter, Go: method with `sync.Once`).
+
+## Protocol Definition
+
+The optional `protocol` section adds message-level metadata on top of binary types. Used for generating protocol documentation.
+
+```json5
+{
+  "protocol": {
+    "name": "DNS",
+    "version": "RFC 1035",
+    "description": "Domain Name System protocol",
+    "header": "DNSHeader",
+    "header_size_field": "length",
+    "discriminator": "flags.opcode",
+    "field_descriptions": {
+      "DNSHeader.id": "Transaction identifier"
+    },
+    "messages": [
+      {
+        "code": "0x00",
+        "name": "Standard Query",
+        "direction": "client_to_server",
+        "payload_type": "DNSMessage",
+        "description": "Standard DNS query",
+        "notes": ["Recursion desired flag is typically set"],
+        "example": {
+          "description": "Query for example.com A record",
+          "bytes": [0x00, 0x01, ...],
+          "decoded": { ... }
+        }
+      }
+    ],
+    "message_groups": [
+      { "name": "Queries", "messages": ["0x00", "0x01"] }
+    ],
+    "constants": {
+      "MAX_UDP_SIZE": { "value": 512, "description": "Maximum UDP message size" }
+    },
+    "notes": ["All values are big-endian (network byte order)"]
+  }
+}
+```
+
+### Message Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `code` | string or number | Message type code (normalized to hex) |
+| `name` | string | Human-readable name |
+| `direction` | `"client_to_server"`, `"server_to_client"`, `"bidirectional"` | Optional message direction |
+| `payload_type` | string | Type name from the schema's `types` |
+| `description` | string | Short description |
+| `notes` | string or string[] | Longer usage notes |
+| `example` | object | Wire format example with `description`, `bytes`, optional `decoded` |
+| `since` | string | Protocol version when added |
+| `deprecated` | string | Protocol version when deprecated |
+
+## Code Generation
+
+BinSchema generates code for three languages from a single schema:
+
+| Language | Generator | Runtime | Status |
+|----------|-----------|---------|--------|
+| TypeScript | `src/generators/typescript.ts` | `src/runtime/bit-stream.ts` | Reference implementation, full feature support |
+| Go | `src/generators/go.ts` + `go/codegen/` | `go/runtime/bitstream.go` | Production ready, follows TypeScript patterns |
+| Rust | `src/generators/rust.ts` | `rust/` | Experimental, limited support |
+
+### Rust Generated Code
+
+The Rust code generator produces idiomatic Rust with the following design choices:
+
+**Unified vs Split Types.** Types without `const` or `computed` fields generate a single unified struct (e.g., `Point`). Types with `const` or `computed` fields generate an Input/Output pair: `FooInput` (for encoding, omits const/computed fields) and `FooOutput` (for decoding, includes all fields), with `type Foo = FooOutput` and a `From<FooOutput> for FooInput` conversion.
+
+```rust
+// Unified type (no const/computed fields)
+pub struct Point {
+    pub x: u16,
+    pub y: u16,
+}
+
+// Split type (has const field `tag`)
+pub struct SparseFloorInput {
+    pub index: u8,
+    pub value: u16,
+}
+pub struct SparseFloorOutput {
+    pub tag: u8,
+    pub index: u8,
+    pub value: u16,
+}
+pub type SparseFloor = SparseFloorOutput;
+```
+
+**Enum Naming.** Inline `choice` and `discriminated_union` fields generate an enum named `{ParentType}{FieldName}` in PascalCase, with each variant named after the variant type. For example, a `FloorEntry` struct with an inline choice field `data` generates `FloorEntryData`:
+
+```rust
+pub enum FloorEntryData {
+    SparseFloor(SparseFloorOutput),
+    DenseFloor(DenseFloorOutput),
+}
+
+pub struct FloorEntry {
+    pub floor_num: u8,
+    pub data: FloorEntryData,
+}
+```
+
+**Zero-Copy Encoding with `encode_into`.** Every type provides both `encode()` (returns `Result<Vec<u8>>`) and `encode_into(&self, encoder: &mut BitStreamEncoder) -> Result<()>`. The `encode()` method is a thin wrapper around `encode_into`. Nested structs, arrays, and unions use `encode_into` internally to write directly into the parent's encoder, avoiding intermediate `Vec<u8>` allocations:
+
+```rust
+impl Point {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        self.encode_into(&mut encoder)?;
+        Ok(encoder.finish())
+    }
+
+    pub fn encode_into(&self, encoder: &mut BitStreamEncoder) -> Result<()> {
+        encoder.write_uint16(self.x, Endianness::BigEndian);
+        encoder.write_uint16(self.y, Endianness::BigEndian);
+        Ok(())
+    }
+}
+
+impl Rectangle {
+    pub fn encode_into(&self, encoder: &mut BitStreamEncoder) -> Result<()> {
+        self.top_left.encode_into(encoder)?;      // zero-copy, no intermediate Vec
+        self.bottom_right.encode_into(encoder)?;
+        Ok(())
+    }
+}
+```
+
+Types that need an encode context (e.g., for back-reference compression dicts) additionally provide `encode_with_context` and `encode_into_with_context` variants.
+
+### CLI
+
+```bash
+binschema generate --language ts --schema my-format.schema.json --out ./generated
+binschema generate --language go --schema my-format.schema.json --out ./generated
+binschema docs build --schema my-format.schema.json --out docs.html
+```
+
+## Example Schemas
+
+The `examples/` directory contains complete, real-world schemas:
+
+| Schema | Format | Key Features Demonstrated |
+|--------|--------|---------------------------|
+| `dns.schema.json` | DNS (RFC 1035) | Bitfields, null-terminated arrays, protocol layer, back-references |
+| `zip.schema.json` | ZIP archive | CRC32 checksums, position tracking, cross-struct references, choice types |
+| `png.schema.json` | PNG image | EOF-terminated arrays, fixed strings, chunk-based format |
+| `midi.schema.json` | MIDI files | VLQ varlength encoding, byte-length-prefixed arrays, conditional fields |
+| `kerberos.schema.json` | Kerberos V5 | ASN.1 DER encoding, computed lengths, from_after_field, choice with peek |
+| `superchat.schema.json` | Custom chat | Generic types, message groups, protocol constants |
+| `sensornet.schema.json` | IoT sensors | Little-endian, float32, bit-level flags |
+| `pcf.schema.json` | X11 PCF fonts | Table-directory pattern, random access instances |
+
+## Testing
+
+Tests are defined in TypeScript and automatically exported to JSON for cross-language validation:
+
+```bash
+npm test                          # Run all tests
+npm test -- --filter=dns          # Filter by name
+npm test -- --failures            # Show only failures
+DEBUG_TEST=1 npm test -- --filter=test_name   # Verbose debug output
+just test-go                      # Run Go test suite
+just test-rust                    # Run Rust test suite
+```
