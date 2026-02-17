@@ -2480,39 +2480,40 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
               lines.push(`                    ${choiceEnumName}::${rustChoiceTypeName}(v) => {`);
               for (const sf of extractableFields) {
                 if (!sf.name) continue;
-                const sfRustName = toRustFieldName(sf.name);
+                const sfName = sf.name;
+                const sfRustName = toRustFieldName(sfName);
                 const sfType = sf.type as string;
                 // Convert each field to a FieldValue
                 if (sfType === "array" && (sf as any).items?.type === "uint8") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::Bytes(v.${sfRustName}.clone()));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(v.${sfRustName}.clone()));`);
                 } else if (sfType === "string") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::String(v.${sfRustName}.clone()));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::String(v.${sfRustName}.clone()));`);
                 } else if (sfType === "uint8") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::U8(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U8(v.${sfRustName}));`);
                 } else if (sfType === "uint16") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::U16(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U16(v.${sfRustName}));`);
                 } else if (sfType === "uint32") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::U32(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U32(v.${sfRustName}));`);
                 } else if (sfType === "uint64") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::U64(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U64(v.${sfRustName}));`);
                 } else if (sfType === "int8") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::I8(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I8(v.${sfRustName}));`);
                 } else if (sfType === "int16") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::I16(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I16(v.${sfRustName}));`);
                 } else if (sfType === "int32") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::I32(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I32(v.${sfRustName}));`);
                 } else if (sfType === "int64") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::I64(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I64(v.${sfRustName}));`);
                 } else if (sfType === "float32") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::F32(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::F32(v.${sfRustName}));`);
                 } else if (sfType === "float64") {
-                  lines.push(`                        item_fields.insert("${sf.name}".to_string(), FieldValue::F64(v.${sfRustName}));`);
+                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::F64(v.${sfRustName}));`);
                 } else if (sfType === "array") {
                   // Non-uint8 array — encode to bytes for size/crc computation
                   lines.push(`                        {`);
                   lines.push(`                            let mut sf_enc = BitStreamEncoder::new(BitOrder::MsbFirst);`);
                   lines.push(`                            for sf_item in &v.${sfRustName} { let sf_bytes = sf_item.encode()?; for b in sf_bytes { sf_enc.write_uint8(b); } }`);
-                  lines.push(`                            item_fields.insert("${sf.name}".to_string(), FieldValue::Bytes(sf_enc.finish()));`);
+                  lines.push(`                            item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(sf_enc.finish()));`);
                   lines.push(`                        }`);
                 } else if (schema.types?.[sfType]) {
                   // Named composite type — encode to bytes
@@ -2525,7 +2526,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
                   } else {
                     lines.push(`                            let sf_bytes = v.${sfRustName}.encode()?;`);
                   }
-                  lines.push(`                            item_fields.insert("${sf.name}".to_string(), FieldValue::Bytes(sf_bytes));`);
+                  lines.push(`                            item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(sf_bytes));`);
                   lines.push(`                        }`);
                 }
               }

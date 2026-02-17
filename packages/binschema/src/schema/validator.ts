@@ -28,7 +28,7 @@ export interface ValidationResult {
 const BUILT_IN_TYPES = [
   "bit", "int", "uint8", "uint16", "uint32", "uint64",
   "int8", "int16", "int32", "int64", "varlength", "float32", "float64",
-  "string", "array", "optional", "bitfield", "discriminated_union", "back_reference",
+  "string", "array", "optional", "bitfield", "discriminated_union", "back_reference", "choice",
   "padding"
 ];
 
@@ -1449,6 +1449,11 @@ function validateField(
   // Check back_reference fields
   if (fieldType === "back_reference") {
     validateBackReference(field as any, path, schema, errors);
+  }
+
+  // Check choice fields
+  if (fieldType === "choice") {
+    validateChoice(field as any, path, schema, errors);
   }
 
   // Check optional fields

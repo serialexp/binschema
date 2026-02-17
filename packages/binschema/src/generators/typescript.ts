@@ -1355,16 +1355,21 @@ function generateDecodeChoice(
     }
   }
 
+  // Wrap in block scope to avoid duplicate 'const discriminator' when
+  // multiple choice fields appear in the same struct
+  code += `${indent}{\n`;
+  const inner = indent + "  ";
+
   // Peek discriminator value using the detected type
   if (discriminatorType === 'uint32') {
     const endian = discriminatorEndianness === 'big_endian' ? "'big'" : "'little'";
-    code += `${indent}const discriminator = this.peekUint32(${endian});\n`;
+    code += `${inner}const discriminator = this.peekUint32(${endian});\n`;
   } else if (discriminatorType === 'uint16') {
     const endian = discriminatorEndianness === 'big_endian' ? "'big'" : "'little'";
-    code += `${indent}const discriminator = this.peekUint16(${endian});\n`;
+    code += `${inner}const discriminator = this.peekUint16(${endian});\n`;
   } else {
     // Default to uint8
-    code += `${indent}const discriminator = this.peekUint8();\n`;
+    code += `${inner}const discriminator = this.peekUint8();\n`;
   }
 
   // Generate if-else chain for each choice
@@ -1383,26 +1388,27 @@ function generateDecodeChoice(
       }
     }
 
-    code += `${indent}${ifKeyword} (discriminator === 0x${discriminatorValue.toString(16)}) {\n`;
+    code += `${inner}${ifKeyword} (discriminator === 0x${discriminatorValue.toString(16)}) {\n`;
 
     // Determine the base object for context
     const baseObject = target.includes(".") ? target.split(".")[0] : "value";
 
     // Choice uses flat structure - decode directly into target without wrapper
-    code += `${indent}  const decoder = new ${choice.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
-    code += `${indent}  const decodedValue = decoder.decode();\n`;
-    code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
+    code += `${inner}  const decoder = new ${choice.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+    code += `${inner}  const decodedValue = decoder.decode();\n`;
+    code += `${inner}  this.byteOffset += decoder.byteOffset;\n`;
 
     // Add type property for TypeScript discrimination (flat structure, not wrapped)
-    code += `${indent}  ${target} = { ...decodedValue, type: '${choice.type}' };\n`;
-    code += `${indent}}`;
+    code += `${inner}  ${target} = { ...decodedValue, type: '${choice.type}' };\n`;
+    code += `${inner}}`;
     if (i < choices.length - 1) {
       code += "\n";
     }
   }
 
   code += ` else {\n`;
-  code += `${indent}  throw new Error(\`Unknown choice discriminator: 0x\${discriminator.toString(16)}\`);\n`;
+  code += `${inner}  throw new Error(\`Unknown choice discriminator: 0x\${discriminator.toString(16)}\`);\n`;
+  code += `${inner}}\n`;
   code += `${indent}}\n`;
 
   return code;

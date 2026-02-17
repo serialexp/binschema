@@ -1092,6 +1092,16 @@ const BackReferenceElementSchema = z.object({
 });
 
 /**
+ * Choice field (with name - for struct sequence fields)
+ * Extends the element schema with a name field
+ */
+const ChoiceFieldSchema = ChoiceElementSchema.extend({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+});
+
+/**
  * Back reference field (with name - for struct fields)
  * Extends the element schema with a name field
  */
@@ -1663,6 +1673,7 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     StringFieldSchema,
     BitfieldFieldSchema,
     DiscriminatedUnionFieldSchema,
+    ChoiceFieldSchema,
     BackReferenceFieldSchema,
     PaddingFieldSchema,
   ]),
