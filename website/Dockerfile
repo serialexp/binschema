@@ -1,27 +1,38 @@
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 
-WORKDIR /workspace/website
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
-# Install dependencies first to leverage Docker layer caching
-COPY website/package.json ./
+WORKDIR /workspace
 
-# Copy workspace packages needed for the binschema dependency
-COPY packages/binschema/package.json ../packages/binschema/package.json
-COPY packages/binschema/dist/ ../packages/binschema/dist/
-COPY packages/zod-metadata-extractor/package.json ../packages/zod-metadata-extractor/package.json
-COPY packages/zod-metadata-extractor/dist/ ../packages/zod-metadata-extractor/dist/
+# Copy workspace config and all package.json files for dependency installation
+COPY pnpm-workspace.yaml ./
+COPY package.json ./
+COPY pnpm-lock.yaml ./
+COPY website/package.json ./website/
+COPY packages/binschema/package.json ./packages/binschema/
+COPY packages/binschema/tsconfig.json ./packages/binschema/
+COPY packages/zod-metadata-extractor/package.json ./packages/zod-metadata-extractor/
+COPY packages/zod-metadata-extractor/tsconfig.json ./packages/zod-metadata-extractor/
 
-RUN npm install --no-fund --no-audit
+# Install all dependencies
+RUN pnpm install --frozen-lockfile
 
-# Copy website application source
-COPY website/ ./
+# Copy source code needed for building
+COPY packages/zod-metadata-extractor/src/ ./packages/zod-metadata-extractor/src/
+COPY packages/binschema/src/ ./packages/binschema/src/
 
-# Copy repo assets needed by prepare-docs.js (generates HTML docs from example schemas)
-COPY README.md ../README.md
-COPY examples/ ../examples/
+# Build workspace packages
+RUN pnpm -r --filter binschema... run build
+
+# Copy website source and repo assets
+COPY website/ ./website/
+COPY README.md ./README.md
+COPY examples/ ./examples/
 
 # Build the static site (prepare-docs generates HTML docs, then Vite builds)
-RUN npm run build
+WORKDIR /workspace/website
+RUN pnpm run build
 
 FROM nginx:1.27-alpine AS runtime
 
