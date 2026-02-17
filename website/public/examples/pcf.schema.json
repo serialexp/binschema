@@ -1,0 +1,108 @@
+{
+  "meta": {
+    "title": "PCF Font Format",
+    "version": "X11",
+    "description": "Portable Compiled Format (PCF) bitmap font format from X11 Window System. Table-based structure with header followed by table directory pointing to font data sections."
+  },
+  "config": {
+    "endianness": "little_endian"
+  },
+  "types": {
+    "Format": {
+      "description": "Table format specifier (4 bytes). Contains endianness and bit order flags.",
+      "sequence": [
+        {
+          "name": "padding1",
+          "type": "bit",
+          "size": 2,
+          "description": "Reserved padding bits"
+        },
+        {
+          "name": "scan_unit_mask",
+          "type": "bit",
+          "size": 2,
+          "description": "Scan unit size indicator"
+        },
+        {
+          "name": "is_msb_first",
+          "type": "bit",
+          "size": 1,
+          "description": "If set, most significant bit comes first in bitmaps"
+        },
+        {
+          "name": "is_big_endian",
+          "type": "bit",
+          "size": 1,
+          "description": "If set, integers in this table are big-endian"
+        },
+        {
+          "name": "glyph_pad_mask",
+          "type": "bit",
+          "size": 2,
+          "description": "Glyph padding indicator"
+        },
+        {
+          "name": "format_byte",
+          "type": "uint8",
+          "description": "Format type byte"
+        },
+        {
+          "name": "padding",
+          "type": "uint16",
+          "description": "Reserved padding"
+        }
+      ]
+    },
+    "TableEntry": {
+      "description": "Table directory entry pointing to a table in the file",
+      "sequence": [
+        {
+          "name": "table_type",
+          "type": "uint32",
+          "description": "Table type enum: 1=properties, 2=accelerators, 4=metrics, 8=bitmaps, 0x10=ink_metrics, 0x20=bdf_encodings, 0x40=swidths, 0x80=glyph_names, 0x100=bdf_accelerators"
+        },
+        {
+          "name": "format",
+          "type": "Format",
+          "description": "Table format specifier"
+        },
+        {
+          "name": "len_body",
+          "type": "uint32",
+          "description": "Size of table body in bytes"
+        },
+        {
+          "name": "ofs_body",
+          "type": "uint32",
+          "description": "Offset to table body from start of file"
+        }
+      ]
+    },
+    "PcfFont": {
+      "description": "PCF font file structure",
+      "sequence": [
+        {
+          "name": "magic",
+          "type": "array",
+          "kind": "fixed",
+          "length": 4,
+          "items": { "type": "uint8" },
+          "description": "Magic bytes: 0x01 'f' 'c' 'p'"
+        },
+        {
+          "name": "num_tables",
+          "type": "uint32",
+          "description": "Number of tables in the font"
+        },
+        {
+          "name": "tables",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "num_tables",
+          "items": { "type": "TableEntry" },
+          "description": "Table directory entries"
+        }
+      ]
+    }
+  }
+}

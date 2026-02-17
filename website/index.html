@@ -4,6 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BinSchema - Binary Protocol Schema Generator</title>
+  <meta name="description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Go, and Rust. Bit-level precision with computed fields, CRC32 checksums, and more." />
+
+  <!-- OpenGraph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="BinSchema - Binary Protocol Schema Generator" />
+  <meta property="og:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Go, and Rust." />
+  <meta property="og:url" content="https://binschema.dev/" />
+  <meta property="og:image" content="https://binschema.dev/og-image.png" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="BinSchema - Binary Protocol Schema Generator" />
+  <meta name="twitter:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Go, and Rust." />
+  <meta name="twitter:image" content="https://binschema.dev/og-image.png" />
+
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
@@ -16,9 +31,12 @@
       </div>
       <nav class="site-nav">
         <a href="#overview">Overview</a>
+        <a href="#when-to-use">When to Use</a>
         <a href="#installation">Installation</a>
+        <a href="#usage-examples">Usage</a>
         <a href="#schema-reference">Schema Reference</a>
         <a href="#examples">Examples</a>
+        <a href="/playground.html">Playground</a>
         <a href="https://github.com/serialexp/binschema" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
     </div>
@@ -29,10 +47,10 @@
       <div class="container hero-content">
         <div>
           <h1>Define Binary Protocols Once, Generate Everywhere</h1>
-          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript.</p>
+          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript, Go, and Rust.</p>
           <div class="cta-group">
             <a class="cta primary" href="#installation">Get Started</a>
-            <a class="cta secondary" href="#schema-reference">Explore the Schema</a>
+            <a class="cta secondary" href="#usage-examples">See It in Action</a>
           </div>
         </div>
       </div>
@@ -56,7 +74,7 @@
           </div>
           <div class="feature">
             <h3>Multi-Language Output</h3>
-            <p>Generate type-safe encoders and decoders for TypeScript today, with Go and Rust coming soon.</p>
+            <p>Generate type-safe encoders and decoders for TypeScript, Go, and Rust from a single schema definition.</p>
           </div>
           <div class="feature">
             <h3>IDE Support</h3>
@@ -70,22 +88,55 @@
       </div>
     </section>
 
-    <section id="installation" class="content-section alt">
+    <section id="when-to-use" class="content-section alt">
+      <div class="container">
+        <h2>When to Use BinSchema</h2>
+        <p class="section-lead">BinSchema is a schema-first tool for <strong>designing compact binary protocols</strong>. Define your wire format once, get type-safe encoders <em>and</em> decoders in every target language.</p>
+
+        <div class="comparison-grid">
+          <div class="comparison-card use">
+            <h3>Use BinSchema when&hellip;</h3>
+            <ul>
+              <li>You're building a <strong>real-time protocol</strong> (games, chat, telemetry) over WebSockets or TCP and every byte counts</li>
+              <li>You need <strong>both encoding and decoding</strong> &mdash; client and server, possibly in different languages</li>
+              <li>Your format uses bit-packed flags, variable-length fields, computed lengths, or CRC checksums</li>
+              <li>You want <strong>one schema, multiple languages</strong> &mdash; TypeScript frontend, Go backend, Rust embedded</li>
+            </ul>
+          </div>
+          <div class="comparison-card alt-tool">
+            <h3>How it compares</h3>
+            <ul>
+              <li><strong>vs. Protobuf / FlatBuffers / Cap'n Proto</strong> &mdash; those impose their own wire format. BinSchema gives you <em>full control</em> over every bit on the wire</li>
+              <li><strong>vs. Kaitai Struct</strong> &mdash; Kaitai is decode-only. BinSchema generates both encoders and decoders from the same schema</li>
+              <li><strong>vs. hand-written parsers</strong> &mdash; BinSchema eliminates the boilerplate and keeps all languages in sync automatically</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="installation" class="content-section">
       <div class="container">
         <h2>Installation</h2>
 
         <h3>From npm</h3>
-        <pre><code>npm install binschema</code></pre>
+        <pre><code class="language-bash">npm install binschema</code></pre>
 
         <h3>CLI Usage</h3>
-        <pre><code># Generate TypeScript code
+        <pre><code class="language-bash"># Generate TypeScript code
 binschema generate --language ts --schema protocol.bschema.json --out ./generated
+
+# Generate Go code
+binschema generate --language go --schema protocol.bschema.json --out ./generated
+
+# Generate Rust code
+binschema generate --language rust --schema protocol.bschema.json --out ./generated
 
 # Generate HTML documentation
 binschema docs build --schema protocol.bschema.json --out docs.html</code></pre>
 
         <h3>Programmatic API</h3>
-        <pre><code>import { generateTypeScript, validateSchema } from 'binschema';
+        <pre><code class="language-typescript">import { generateTypeScript, generateGo, validateSchema } from 'binschema';
 
 const schema = {
   config: { endianness: 'big_endian' },
@@ -102,10 +153,11 @@ const schema = {
 };
 
 const result = validateSchema(schema);
-const code = generateTypeScript(schema);</code></pre>
+const tsCode = generateTypeScript(schema);
+const goCode = generateGo(schema);</code></pre>
 
         <h3>Schema Format</h3>
-        <pre><code>{
+        <pre><code class="language-json">{
   "$schema": "https://binschema.dev/schema.json",
   "config": {
     "endianness": "big_endian",
@@ -126,11 +178,429 @@ const code = generateTypeScript(schema);</code></pre>
       </div>
     </section>
 
+    <section id="usage-examples" class="content-section alt">
+      <div class="container">
+        <h2>See It in Action</h2>
+        <p class="section-lead">Define your schema once, generate type-safe encoders and decoders for TypeScript, Go, and Rust.</p>
+
+        <div class="example-step">
+          <h3>1. Define Your Schema</h3>
+          <pre><code class="language-json">{
+  "config": { "endianness": "big_endian" },
+  "types": {
+    "SensorReading": {
+      "sequence": [
+        { "name": "device_id",   "type": "uint16"  },
+        { "name": "temperature", "type": "float32" },
+        { "name": "humidity",    "type": "uint8"   },
+        { "name": "timestamp",   "type": "uint32"  }
+      ]
+    }
+  }
+}</code></pre>
+        </div>
+
+        <div class="example-step">
+          <h3>2. Generate Code</h3>
+          <pre><code class="language-bash">binschema generate --language ts --schema sensor.schema.json --out ./generated</code></pre>
+
+          <div class="code-tabs">
+            <div class="tab-bar">
+              <button class="tab-btn active" data-tab="typescript">TypeScript</button>
+              <button class="tab-btn" data-tab="go">Go</button>
+              <button class="tab-btn" data-tab="rust">Rust</button>
+            </div>
+
+            <div class="tab-panel" data-tab="typescript">
+              <pre><code class="language-typescript">// Generated types and encoder/decoder classes
+
+export interface SensorReadingInput {
+  device_id: number;    // uint16
+  temperature: number;  // float32
+  humidity: number;     // uint8
+  timestamp: number;    // uint32
+}
+
+export interface SensorReadingOutput {
+  device_id: number;
+  temperature: number;
+  humidity: number;
+  timestamp: number;
+}
+
+export class SensorReadingEncoder extends BitStreamEncoder {
+  encode(value: SensorReadingInput): Uint8Array { /* ... */ }
+}
+
+export class SensorReadingDecoder extends SeekableBitStreamDecoder {
+  decode(): SensorReadingOutput { /* ... */ }
+}</code></pre>
+              <details>
+                <summary>View full generated code</summary>
+                <pre><code class="language-typescript">import { BitStreamEncoder, Endianness } from "./bit-stream.js";
+import { SeekableBitStreamDecoder } from "./seekable-bit-stream.js";
+import { createReader } from "./binary-reader.js";
+
+export interface SensorReadingInput {
+  /** 16-bit Unsigned Integer */
+  device_id: number;
+  /** 32-bit Floating Point (IEEE 754) */
+  temperature: number;
+  /** 8-bit Unsigned Integer */
+  humidity: number;
+  /** 32-bit Unsigned Integer */
+  timestamp: number;
+}
+
+export interface SensorReadingOutput {
+  device_id: number;
+  temperature: number;
+  humidity: number;
+  timestamp: number;
+}
+
+export type SensorReading = SensorReadingOutput;
+
+export class SensorReadingEncoder extends BitStreamEncoder {
+  constructor() {
+    super("msb_first");
+  }
+
+  encode(value: SensorReadingInput): Uint8Array {
+    this.writeUint16(value.device_id, "big_endian");
+    this.writeFloat32(value.temperature, "big_endian");
+    this.writeUint8(value.humidity);
+    this.writeUint32(value.timestamp, "big_endian");
+    return this.finish();
+  }
+
+  calculateSize(value: SensorReading): number {
+    let size = 0;
+    size += 2; // device_id
+    size += 4; // temperature
+    size += 1; // humidity
+    size += 4; // timestamp
+    return size;
+  }
+}
+
+export class SensorReadingDecoder extends SeekableBitStreamDecoder {
+  constructor(input: Uint8Array | number[] | string) {
+    const reader = createReader(input);
+    super(reader, "msb_first");
+  }
+
+  decode(): SensorReadingOutput {
+    return {
+      device_id: this.readUint16("big_endian"),
+      temperature: this.readFloat32("big_endian"),
+      humidity: this.readUint8(),
+      timestamp: this.readUint32("big_endian"),
+    };
+  }
+}</code></pre>
+              </details>
+            </div>
+
+            <div class="tab-panel" data-tab="go" hidden>
+              <pre><code class="language-go">// Generated struct with Encode/Decode methods
+
+type SensorReading struct {
+    DeviceId    uint16
+    Temperature float32
+    Humidity    uint8
+    Timestamp   uint32
+}
+
+func (m *SensorReading) Encode() ([]byte, error) { /* ... */ }
+
+func DecodeSensorReading(bytes []byte) (*SensorReading, error) { /* ... */ }</code></pre>
+              <details>
+                <summary>View full generated code</summary>
+                <pre><code class="language-go">package main
+
+import (
+    "fmt"
+    "github.com/anthropics/binschema/runtime"
+)
+
+type SensorReading struct {
+    DeviceId    uint16
+    Temperature float32
+    Humidity    uint8
+    Timestamp   uint32
+}
+
+func (m *SensorReading) Encode() ([]byte, error) {
+    encoder := runtime.NewBitStreamEncoder(runtime.MSBFirst)
+    encoder.WriteUint16(m.DeviceId, runtime.BigEndian)
+    encoder.WriteFloat32(m.Temperature, runtime.BigEndian)
+    encoder.WriteUint8(m.Humidity)
+    encoder.WriteUint32(m.Timestamp, runtime.BigEndian)
+    return encoder.Finish(), nil
+}
+
+func DecodeSensorReading(bytes []byte) (*SensorReading, error) {
+    decoder := runtime.NewBitStreamDecoder(bytes, runtime.MSBFirst)
+    result := &amp;SensorReading{}
+
+    deviceId, err := decoder.ReadUint16(runtime.BigEndian)
+    if err != nil {
+        return nil, fmt.Errorf("failed to decode device_id: %w", err)
+    }
+    result.DeviceId = deviceId
+
+    temperature, err := decoder.ReadFloat32(runtime.BigEndian)
+    if err != nil {
+        return nil, fmt.Errorf("failed to decode temperature: %w", err)
+    }
+    result.Temperature = temperature
+
+    humidity, err := decoder.ReadUint8()
+    if err != nil {
+        return nil, fmt.Errorf("failed to decode humidity: %w", err)
+    }
+    result.Humidity = humidity
+
+    timestamp, err := decoder.ReadUint32(runtime.BigEndian)
+    if err != nil {
+        return nil, fmt.Errorf("failed to decode timestamp: %w", err)
+    }
+    result.Timestamp = timestamp
+
+    return result, nil
+}</code></pre>
+              </details>
+            </div>
+
+            <div class="tab-panel" data-tab="rust" hidden>
+              <pre><code class="language-rust">// Generated structs with encode/decode implementations
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorReadingInput {
+    pub device_id: u16,
+    pub temperature: f32,
+    pub humidity: u8,
+    pub timestamp: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorReadingOutput {
+    pub device_id: u16,
+    pub temperature: f32,
+    pub humidity: u8,
+    pub timestamp: u32,
+}
+
+impl SensorReadingInput {
+    pub fn encode(&amp;self) -&gt; Result&lt;Vec&lt;u8&gt;&gt; { /* ... */ }
+}
+
+impl SensorReadingOutput {
+    pub fn decode(bytes: &amp;[u8]) -&gt; Result&lt;Self&gt; { /* ... */ }
+}</code></pre>
+              <details>
+                <summary>View full generated code</summary>
+                <pre><code class="language-rust">use binschema_runtime::{
+    BitStreamEncoder, BitStreamDecoder,
+    Endianness, BitOrder, Result,
+};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorReadingInput {
+    pub device_id: u16,
+    pub temperature: f32,
+    pub humidity: u8,
+    pub timestamp: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorReadingOutput {
+    pub device_id: u16,
+    pub temperature: f32,
+    pub humidity: u8,
+    pub timestamp: u32,
+}
+
+pub type SensorReading = SensorReadingOutput;
+
+impl SensorReadingInput {
+    pub fn encode(&amp;self) -&gt; Result&lt;Vec&lt;u8&gt;&gt; {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        encoder.write_uint16(self.device_id, Endianness::BigEndian);
+        encoder.write_float32(self.temperature, Endianness::BigEndian);
+        encoder.write_uint8(self.humidity);
+        encoder.write_uint32(self.timestamp, Endianness::BigEndian);
+        Ok(encoder.finish())
+    }
+}
+
+impl SensorReadingOutput {
+    pub fn decode(bytes: &amp;[u8]) -&gt; Result&lt;Self&gt; {
+        let mut decoder = BitStreamDecoder::new(
+            bytes.to_vec(), BitOrder::MsbFirst
+        );
+        let device_id = decoder.read_uint16(Endianness::BigEndian)?;
+        let temperature = decoder.read_float32(Endianness::BigEndian)?;
+        let humidity = decoder.read_uint8()?;
+        let timestamp = decoder.read_uint32(Endianness::BigEndian)?;
+        Ok(Self {
+            device_id,
+            temperature,
+            humidity,
+            timestamp,
+        })
+    }
+}</code></pre>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="example-step">
+          <h3>3. Use the Generated Code</h3>
+          <div class="code-tabs">
+            <div class="tab-bar">
+              <button class="tab-btn active" data-tab="typescript">TypeScript</button>
+              <button class="tab-btn" data-tab="go">Go</button>
+              <button class="tab-btn" data-tab="rust">Rust</button>
+            </div>
+
+            <div class="tab-panel" data-tab="typescript">
+              <pre><code class="language-typescript">import { SensorReadingEncoder, SensorReadingDecoder } from "./generated.js";
+
+// Encode a sensor reading to binary
+const encoder = new SensorReadingEncoder();
+const bytes = encoder.encode({
+  device_id: 42,
+  temperature: 23.5,
+  humidity: 65,
+  timestamp: 1700000000,
+});
+// bytes: Uint8Array(11) — ready to send over the wire
+
+// Decode binary back to a typed object
+const decoder = new SensorReadingDecoder(bytes);
+const reading = decoder.decode();
+console.log(reading.temperature); // 23.5
+console.log(reading.device_id);   // 42</code></pre>
+            </div>
+
+            <div class="tab-panel" data-tab="go" hidden>
+              <pre><code class="language-go">package main
+
+import "fmt"
+
+func main() {
+    // Encode a sensor reading to binary
+    reading := &amp;SensorReading{
+        DeviceId:    42,
+        Temperature: 23.5,
+        Humidity:    65,
+        Timestamp:   1700000000,
+    }
+    bytes, err := reading.Encode()
+    if err != nil {
+        panic(err)
+    }
+    // bytes: []byte — ready to send over the wire
+
+    // Decode binary back to a typed struct
+    decoded, err := DecodeSensorReading(bytes)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(decoded.Temperature) // 23.5
+    fmt.Println(decoded.DeviceId)    // 42
+}</code></pre>
+            </div>
+
+            <div class="tab-panel" data-tab="rust" hidden>
+              <pre><code class="language-rust">use generated::*;
+
+fn main() -&gt; Result&lt;()&gt; {
+    // Encode a sensor reading to binary
+    let reading = SensorReadingInput {
+        device_id: 42,
+        temperature: 23.5,
+        humidity: 65,
+        timestamp: 1_700_000_000,
+    };
+    let bytes = reading.encode()?;
+    // bytes: Vec&lt;u8&gt; — ready to send over the wire
+
+    // Decode binary back to a typed struct
+    let decoded = SensorReadingOutput::decode(&amp;bytes)?;
+    println!("{}", decoded.temperature); // 23.5
+    println!("{}", decoded.device_id);   // 42
+    Ok(())
+}</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="schema-reference" class="content-section">
       <div class="container">
         <h2>Schema Definition Reference</h2>
-        <p class="section-lead">Full reference for every field and construct available in a BinSchema definition.</p>
-        <p><a href="docs/type-reference.html" class="cta primary">View Type Reference</a></p>
+        <p class="section-lead">A quick overview of the types and constructs available in a BinSchema definition.</p>
+
+        <div class="ref-grid">
+          <div class="ref-category">
+            <h3>Primitives</h3>
+            <ul>
+              <li><code>uint8</code>, <code>uint16</code>, <code>uint32</code>, <code>uint64</code></li>
+              <li><code>int8</code>, <code>int16</code>, <code>int32</code>, <code>int64</code></li>
+              <li><code>float32</code>, <code>float64</code></li>
+              <li><code>bool</code></li>
+            </ul>
+          </div>
+          <div class="ref-category">
+            <h3>Bit-Level</h3>
+            <ul>
+              <li><code>bit</code> &mdash; 1&ndash;64 bits, MSB or LSB first</li>
+              <li>Mixed bit and byte fields in the same struct</li>
+              <li>Configurable bit ordering per-schema or per-field</li>
+            </ul>
+          </div>
+          <div class="ref-category">
+            <h3>Strings &amp; Bytes</h3>
+            <ul>
+              <li>Fixed-length and length-prefixed strings</li>
+              <li>Null-terminated strings</li>
+              <li>Raw byte arrays with field-referenced lengths</li>
+            </ul>
+          </div>
+          <div class="ref-category">
+            <h3>Arrays</h3>
+            <ul>
+              <li>Fixed count, field-referenced count</li>
+              <li>Length-delimited (byte length from another field)</li>
+              <li>Variant-terminated (read until a discriminator matches)</li>
+            </ul>
+          </div>
+          <div class="ref-category">
+            <h3>Computed Fields</h3>
+            <ul>
+              <li><code>length_of</code> &mdash; byte length of another field</li>
+              <li><code>count_of</code> &mdash; element count of an array</li>
+              <li><code>position_of</code> &mdash; byte offset for random access</li>
+              <li><code>crc32_of</code> &mdash; CRC32 checksum</li>
+            </ul>
+          </div>
+          <div class="ref-category">
+            <h3>Advanced</h3>
+            <ul>
+              <li>Discriminated unions (tagged variants)</li>
+              <li>Conditional fields (<code>if</code> expressions)</li>
+              <li>Variable-length integers (LEB128, VLQ, DER)</li>
+              <li>Constant and reserved fields</li>
+            </ul>
+          </div>
+        </div>
+
+        <p style="margin-top: 2rem;"><a href="docs/type-reference.html" class="cta primary">Full Type Reference</a></p>
       </div>
     </section>
 

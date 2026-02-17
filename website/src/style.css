@@ -278,6 +278,281 @@ code {
   font-weight: 600;
 }
 
+/* === Tab UI === */
+
+.code-tabs {
+  margin: 1rem 0;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+}
+
+.tab-btn {
+  padding: 0.6rem 1.2rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+
+.tab-btn:hover {
+  color: var(--fg);
+}
+
+.tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.tab-panel[hidden] {
+  display: none;
+}
+
+.tab-panel pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* === Example Steps === */
+
+.example-step {
+  margin-bottom: 2.5rem;
+}
+
+.example-step:last-child {
+  margin-bottom: 0;
+}
+
+.example-step h3 {
+  margin-top: 0;
+}
+
+/* === Details / Summary (expandable code) === */
+
+.tab-panel details {
+  margin-top: -0.5rem;
+}
+
+.tab-panel details summary {
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.5rem 0;
+  user-select: none;
+}
+
+.tab-panel details summary:hover {
+  text-decoration: underline;
+}
+
+.tab-panel details pre {
+  border-radius: 10px;
+}
+
+/* === Prism.js Token Colors (matches #0f172a background) === */
+
+pre[class*="language-"],
+code[class*="language-"] {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  text-shadow: none;
+}
+
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #64748b;
+}
+
+.token.punctuation {
+  color: #94a3b8;
+}
+
+.token.property,
+.token.tag,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #f87171;
+}
+
+.token.boolean,
+.token.number {
+  color: #c084fc;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #86efac;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string {
+  color: #67e8f9;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #7dd3fc;
+}
+
+.token.function,
+.token.class-name {
+  color: #fbbf24;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #fb923c;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
+}
+
+/* === "When to Use" Comparison Grid === */
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.comparison-card {
+  padding: 1.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.comparison-card.use {
+  background: rgba(63, 131, 248, 0.06);
+  border-color: rgba(63, 131, 248, 0.25);
+}
+
+.comparison-card.alt-tool {
+  background: var(--bg);
+}
+
+.comparison-card h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+
+.comparison-card.use h3 {
+  color: var(--primary-dark);
+}
+
+.comparison-card ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.comparison-card li {
+  margin-bottom: 0.5rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.comparison-card li:last-child {
+  margin-bottom: 0;
+}
+
+.comparison-card li a {
+  font-weight: 500;
+}
+
+/* === Schema Reference Grid === */
+
+.ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.ref-category {
+  padding: 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.ref-category h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: var(--primary-dark);
+}
+
+.ref-category ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.ref-category li {
+  margin-bottom: 0.3rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.ref-category li:last-child {
+  margin-bottom: 0;
+}
+
+.ref-category code {
+  background: rgba(63, 131, 248, 0.08);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--primary-dark);
+}
+
+/* === Example Card Tags === */
+
+.example-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.example-tag {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(124, 58, 237, 0.08);
+  color: #7c3aed;
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .site-footer {
   padding: 2rem 0;
   color: var(--muted);
@@ -296,5 +571,10 @@ code {
   .cta-group {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .tab-btn {
+    padding: 0.5rem 0.8rem;
+    font-size: 0.85rem;
   }
 }

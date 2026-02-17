@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BinSchema Playground - Interactive Binary Schema Editor</title>
+  <meta name="description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Go, and Rust code." />
+
+  <!-- OpenGraph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="BinSchema Playground" />
+  <meta property="og:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Go, and Rust code." />
+  <meta property="og:url" content="https://binschema.dev/playground.html" />
+  <meta property="og:image" content="https://binschema.dev/og-image.png" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="BinSchema Playground" />
+  <meta name="twitter:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Go, and Rust code." />
+  <meta name="twitter:image" content="https://binschema.dev/og-image.png" />
+
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <div class="branding">
+        <a href="/" class="logo">BinSchema</a>
+        <p class="tagline">Interactive Playground</p>
+      </div>
+      <nav class="site-nav">
+        <a href="/">Home</a>
+        <a href="/#usage-examples">Usage</a>
+        <a href="/#examples">Examples</a>
+        <a href="https://github.com/serialexp/binschema" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="playground-main">
+    <div class="playground-toolbar">
+      <div class="toolbar-left">
+        <label for="example-select">Load example:</label>
+        <select id="example-select">
+          <option value="sensor">Sensor Reading</option>
+          <option value="packet">Network Packet</option>
+          <option value="bitfield">Bitfield Flags</option>
+        </select>
+      </div>
+      <div class="toolbar-right">
+        <span id="status-indicator" class="status valid">Valid schema</span>
+        <button id="share-btn" title="Copy shareable link">Share</button>
+      </div>
+    </div>
+
+    <div class="playground-layout">
+      <div class="playground-editor">
+        <div class="panel-header">Schema (JSON)</div>
+        <div id="editor-container"></div>
+        <div id="error-panel" class="error-panel" hidden></div>
+      </div>
+
+      <div class="playground-output">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="typescript">TypeScript</button>
+          <button class="tab-btn" data-tab="go">Go</button>
+          <button class="tab-btn" data-tab="rust">Rust</button>
+        </div>
+        <div class="output-panels">
+          <div class="tab-panel" data-tab="typescript">
+            <pre><code id="output-typescript" class="language-typescript"></code></pre>
+          </div>
+          <div class="tab-panel" data-tab="go" hidden>
+            <pre><code id="output-go" class="language-go"></code></pre>
+          </div>
+          <div class="tab-panel" data-tab="rust" hidden>
+            <pre><code id="output-rust" class="language-rust"></code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module" src="/src/playground.js"></script>
+</body>
+</html>

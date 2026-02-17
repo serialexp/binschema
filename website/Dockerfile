@@ -1,25 +1,33 @@
 FROM node:20-alpine AS build
 
-WORKDIR /workspace/binschema-website
+WORKDIR /workspace/website
 
 # Install dependencies first to leverage Docker layer caching
-COPY binschema-website/package.json ./
+COPY website/package.json ./
+
+# Copy workspace packages needed for the binschema dependency
+COPY packages/binschema/package.json ../packages/binschema/package.json
+COPY packages/binschema/dist/ ../packages/binschema/dist/
+COPY packages/zod-metadata-extractor/package.json ../packages/zod-metadata-extractor/package.json
+COPY packages/zod-metadata-extractor/dist/ ../packages/zod-metadata-extractor/dist/
+
 RUN npm install --no-fund --no-audit
 
-# Copy application source and supporting BinSchema assets
-COPY binschema-website/ ./
-COPY tools/binschema ../tools/binschema
+# Copy website application source
+COPY website/ ./
 
-# Build the static site (includes docs preparation)
+# Copy repo assets needed by prepare-docs.js (generates HTML docs from example schemas)
+COPY README.md ../README.md
+COPY type-reference.html ../type-reference.html
+COPY examples/ ../examples/
+
+# Build the static site (prepare-docs generates HTML docs, then Vite builds)
 RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime
 
-# Provide a simple SPA-friendly nginx configuration
-COPY binschema-website/nginx.conf /etc/nginx/conf.d/default.conf
-
-# Copy compiled assets into the nginx web root
-COPY --from=build /workspace/binschema-website/dist /usr/share/nginx/html
+COPY website/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /workspace/website/dist /usr/share/nginx/html
 
 EXPOSE 80
 

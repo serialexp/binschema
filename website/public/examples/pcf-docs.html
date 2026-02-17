@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Standard MIDI File Format</title>
+  <title>PCF Font Format</title>
   <style>
     /* Protocol Documentation Styles */
     * {
@@ -593,8 +593,8 @@
 </head>
 <body>
   <header class="protocol-header">
-    <h1>Standard MIDI File Format</h1>
-    <div class="protocol-version">Version 1.0</div>
+    <h1>PCF Font Format</h1>
+    <div class="protocol-version">Version X11</div>
   </header>
 
   <nav class="toc">
@@ -611,7 +611,7 @@
   <main>
     <section id="overview" class="section">
       <h2>Overview</h2>
-      <p>Standard MIDI File (SMF) format for storing MIDI sequences. Supports variable-length quantities, meta events, and multiple track chunks.</p>
+      <p>Portable Compiled Format (PCF) bitmap font format from X11 Window System. Table-based structure with header followed by table directory pointing to font data sections.</p>
     </section>
 
     <section id="usage" class="section">
@@ -622,147 +622,43 @@
         <summary><h3>TypeScript</h3></summary>
 
         <h4>Generate Code</h4>
-        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema standard-midi-file-format.schema.json --out ./generated</code></pre>
+        <pre class="code-example"><code class="language-bash">binschema generate --language ts --schema pcf-font-format.schema.json --out ./generated</code></pre>
 
         <h4>Import and Use</h4>
-        <pre class="code-example"><code class="language-typescript">import { MIDIFileEncoder, MIDIFileDecoder } from './generated/standard-midi-file-format.js';
+        <pre class="code-example"><code class="language-typescript">import { PcfFontEncoder, PcfFontDecoder } from './generated/pcf-font-format.js';
 
 // Encoding (object → bytes)
-const encoder = new MIDIFileEncoder();
+const encoder = new PcfFontEncoder();
 const bytes = encoder.encode({
-  "header": {
-    "format": 0,
-    "num_tracks": 0,
-    "division": 0
-  },
-  "tracks": [
+  "magic": [
+    0,
+    1
+  ],
+  "num_tables": 0,
+  "tables": [
     {
-      "length": 0,
-      "events": [
-        {
-          "status": 0,
-          "meta_event": {
-            "meta_type": 0,
-            "data": [
-              0,
-              1
-            ]
-          },
-          "note_on": {
-            "note": 0,
-            "velocity": 0
-          },
-          "polyphonic_pressure": {
-            "note": 0,
-            "pressure": 0
-          },
-          "program_change": {
-            "program": 0
-          }
-        },
-        {
-          "status": 0,
-          "meta_event": {
-            "meta_type": 0,
-            "data": [
-              0,
-              1
-            ]
-          },
-          "sysex_event": {
-            "data": [
-              0,
-              1
-            ]
-          },
-          "note_off": {
-            "note": 0,
-            "velocity": 0
-          },
-          "note_on": {
-            "note": 0,
-            "velocity": 0
-          },
-          "polyphonic_pressure": {
-            "note": 0,
-            "pressure": 0
-          },
-          "control_change": {
-            "controller": 0,
-            "value": 0
-          },
-          "program_change": {
-            "program": 0
-          },
-          "channel_pressure": {
-            "pressure": 0
-          },
-          "pitch_bend": {
-            "lsb": 0,
-            "msb": 0
-          }
-        }
-      ]
+      "table_type": 0,
+      "format": {
+        "format_byte": 0,
+        "padding": 0
+      },
+      "len_body": 0,
+      "ofs_body": 0
     },
     {
-      "length": 0,
-      "events": [
-        {
-          "status": 0,
-          "meta_event": {
-            "meta_type": 0,
-            "data": [
-              0,
-              1
-            ]
-          },
-          "sysex_event": {
-            "data": [
-              0,
-              1
-            ]
-          },
-          "channel_pressure": {
-            "pressure": 0
-          },
-          "pitch_bend": {
-            "lsb": 0,
-            "msb": 0
-          }
-        },
-        {
-          "status": 0,
-          "meta_event": {
-            "meta_type": 0,
-            "data": [
-              0,
-              1
-            ]
-          },
-          "sysex_event": {
-            "data": [
-              0,
-              1
-            ]
-          },
-          "program_change": {
-            "program": 0
-          },
-          "channel_pressure": {
-            "pressure": 0
-          },
-          "pitch_bend": {
-            "lsb": 0,
-            "msb": 0
-          }
-        }
-      ]
+      "table_type": 0,
+      "format": {
+        "format_byte": 0,
+        "padding": 0
+      },
+      "len_body": 0,
+      "ofs_body": 0
     }
   ]
 });
 
 // Decoding (bytes → object)
-const decoder = new MIDIFileDecoder(bytes);
+const decoder = new PcfFontDecoder(bytes);
 const decoded = decoder.decode();
 console.log(decoded);</code></pre>
       </details>
@@ -771,25 +667,25 @@ console.log(decoded);</code></pre>
         <summary><h3>Go</h3></summary>
 
         <h4>Generate Code</h4>
-        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema standard-midi-file-format.schema.json --out ./generated</code></pre>
+        <pre class="code-example"><code class="language-bash">binschema generate --language go --schema pcf-font-format.schema.json --out ./generated</code></pre>
 
         <h4>Import and Use</h4>
         <pre class="code-example"><code class="language-go">package main
 
 import (
     "fmt"
-    "standard-midi-file-format/generated"
+    "pcf-font-format/generated"
 )
 
 func main() {
     // Encoding (struct → bytes)
-    data := generated.MIDIFile{
+    data := generated.PcfFont{
         // Fill in your data here
     }
-    bytes := generated.EncodeMIDIFile(data)
+    bytes := generated.EncodePcfFont(data)
 
     // Decoding (bytes → struct)
-    decoded, err := generated.DecodeMIDIFile(bytes)
+    decoded, err := generated.DecodePcfFont(bytes)
     if err != nil {
         panic(err)
     }
@@ -801,20 +697,20 @@ func main() {
         <summary><h3>Rust</h3></summary>
 
         <h4>Generate Code</h4>
-        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema standard-midi-file-format.schema.json --out ./generated</code></pre>
+        <pre class="code-example"><code class="language-bash">binschema generate --language rust --schema pcf-font-format.schema.json --out ./generated</code></pre>
 
         <h4>Import and Use</h4>
-        <pre class="code-example"><code class="language-rust">use generated::MIDIFile;
+        <pre class="code-example"><code class="language-rust">use generated::PcfFont;
 
 fn main() {
     // Encoding (struct → bytes)
-    let data = MIDIFile {
+    let data = PcfFont {
         // Fill in your data here
     };
     let bytes = data.encode();
 
     // Decoding (bytes → struct)
-    let decoded = MIDIFile::decode(&bytes).unwrap();
+    let decoded = PcfFont::decode(&bytes).unwrap();
     println!("{:?}", decoded);
 }</code></pre>
       </details>
@@ -847,46 +743,66 @@ fn main() {
             </tbody>
           </table>
         </details>
-        <details class="type-details" id="type-ChannelPressureEvent">
-          <summary><h3>ChannelPressureEvent</h3></summary>
-          <p class="type-description">Channel Pressure (Aftertouch) - pressure on entire channel</p>
+        <details class="type-details" id="type-Format">
+          <summary><h3>Format</h3></summary>
+          <p class="type-description">Table format specifier (4 bytes). Contains endianness and bit order flags.</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 1">
-                <div class="field-name">pressure</div>
+                <div class="field-name">padding1</div>
+                <div class="field-type">bit&lt;2&gt;</div>
+                <div class="field-size">2 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">scan_unit_mask</div>
+                <div class="field-type">bit&lt;2&gt;</div>
+                <div class="field-size">2 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">is_msb_first</div>
+                <div class="field-type">bit&lt;1&gt;</div>
+                <div class="field-size">1 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">is_big_endian</div>
+                <div class="field-type">bit&lt;1&gt;</div>
+                <div class="field-size">1 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">glyph_pad_mask</div>
+                <div class="field-type">bit&lt;2&gt;</div>
+                <div class="field-size">2 bits</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 1">
+                <div class="field-name">format_byte</div>
                 <div class="field-type">uint8</div>
                 <div class="field-size">1 byte</div>
+                
+                
+              </div>
+              <div class="field" style="flex: 2">
+                <div class="field-name">padding</div>
+                <div class="field-type">uint16</div>
+                <div class="field-size">2 bytes</div>
                 
                 
               </div>
             </div>
           </div>
         </details>
-        <details class="type-details" id="type-ControlChangeEvent">
-          <summary><h3>ControlChangeEvent</h3></summary>
-          <p class="type-description">Control Change - modify a controller value</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">controller</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">value</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-HeaderChunk">
-          <summary><h3>HeaderChunk</h3></summary>
-          <p class="type-description">MIDI file header chunk - contains file format and track info</p>
+        <details class="type-details" id="type-PcfFont">
+          <summary><h3>PcfFont</h3></summary>
+          <p class="type-description">PCF font file structure</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 4">
@@ -897,234 +813,15 @@ fn main() {
                 
               </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">length</div>
-                <div class="field-type"><code>0x06</code></div>
-                <div class="field-size">4 bytes</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">format</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">num_tracks</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 2">
-                <div class="field-name">division</div>
-                <div class="field-type">uint16</div>
-                <div class="field-size">2 bytes</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-MetaEventData">
-          <summary><h3>MetaEventData</h3></summary>
-          <p class="type-description">Meta Event data - non-MIDI information (tempo, time signature, text, etc.)</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">meta_type</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">length</div>
-                <div class="field-type"><a href="#type-VLQ" class="type-link">VLQ</a></div>
-                <div class="field-size">variable</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">data</div>
-                <div class="field-type">uint8[]</div>
-                <div class="field-size">variable</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-MIDIFile">
-          <summary><h3>MIDIFile</h3></summary>
-          <p class="type-description">Complete Standard MIDI File</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 14">
-                <div class="field-name">header</div>
-                <div class="field-type"><a href="#type-HeaderChunk" class="type-link">HeaderChunk</a></div>
-                <div class="field-size">14 bytes</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">tracks</div>
-                <div class="field-type">TrackChunk[]</div>
-                <div class="field-size">variable</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-NoteOffEvent">
-          <summary><h3>NoteOffEvent</h3></summary>
-          <p class="type-description">Note Off event - stop playing a note</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">note</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">velocity</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-NoteOnEvent">
-          <summary><h3>NoteOnEvent</h3></summary>
-          <p class="type-description">Note On event - start playing a note</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">note</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">velocity</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-PitchBendEvent">
-          <summary><h3>PitchBendEvent</h3></summary>
-          <p class="type-description">Pitch Bend Change - bend pitch of all notes on channel</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">lsb</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">msb</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-PolyphonicPressureEvent">
-          <summary><h3>PolyphonicPressureEvent</h3></summary>
-          <p class="type-description">Polyphonic Key Pressure (Aftertouch) - pressure on individual note</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">note</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">pressure</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-ProgramChangeEvent">
-          <summary><h3>ProgramChangeEvent</h3></summary>
-          <p class="type-description">Program Change - select instrument/patch</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 1">
-                <div class="field-name">program</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-SysExEventData">
-          <summary><h3>SysExEventData</h3></summary>
-          <p class="type-description">System Exclusive Event data - manufacturer-specific data</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">length</div>
-                <div class="field-type"><a href="#type-VLQ" class="type-link">VLQ</a></div>
-                <div class="field-size">variable</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">data</div>
-                <div class="field-type">uint8[]</div>
-                <div class="field-size">variable</div>
-                
-                
-              </div>
-            </div>
-          </div>
-        </details>
-        <details class="type-details" id="type-TrackChunk">
-          <summary><h3>TrackChunk</h3></summary>
-          <p class="type-description">MIDI track chunk - contains a sequence of events</p>
-          <div class="wire-format">
-            <div class="wire-diagram">
-              <div class="field" style="flex: 4">
-                <div class="field-name">magic</div>
-                <div class="field-type">uint8[]</div>
-                <div class="field-size">variable</div>
-                
-                
-              </div>
-              <div class="field" style="flex: 4">
-                <div class="field-name">length</div>
+                <div class="field-name">num_tables</div>
                 <div class="field-type">uint32</div>
                 <div class="field-size">4 bytes</div>
                 
                 
               </div>
               <div class="field" style="flex: 4">
-                <div class="field-name">events</div>
-                <div class="field-type">TrackEvent[]</div>
+                <div class="field-name">tables</div>
+                <div class="field-type">TableEntry[]</div>
                 <div class="field-size">variable</div>
                 
                 
@@ -1132,104 +829,41 @@ fn main() {
             </div>
           </div>
         </details>
-        <details class="type-details" id="type-TrackEvent">
-          <summary><h3>TrackEvent</h3></summary>
-          <p class="type-description">A single event in a MIDI track</p>
+        <details class="type-details" id="type-TableEntry">
+          <summary><h3>TableEntry</h3></summary>
+          <p class="type-description">Table directory entry pointing to a table in the file</p>
           <div class="wire-format">
             <div class="wire-diagram">
               <div class="field" style="flex: 4">
-                <div class="field-name">delta_time</div>
-                <div class="field-type"><a href="#type-VLQ" class="type-link">VLQ</a></div>
-                <div class="field-size">variable</div>
+                <div class="field-name">table_type</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
                 
                 
               </div>
-              <div class="field" style="flex: 1">
-                <div class="field-name">status</div>
-                <div class="field-type">uint8</div>
-                <div class="field-size">1 byte</div>
-                
-                
-              </div>
-              <div class="field conditional" style="flex: 9">
-                <div class="field-name">meta_event</div>
-                <div class="field-type"><a href="#type-MetaEventData" class="type-link">MetaEventData</a></div>
-                <div class="field-size">9 bytes</div>
-                <div class="field-condition">if status == 255</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 8">
-                <div class="field-name">sysex_event</div>
-                <div class="field-type"><a href="#type-SysExEventData" class="type-link">SysExEventData</a></div>
+              <div class="field" style="flex: 8">
+                <div class="field-name">format</div>
+                <div class="field-type"><a href="#type-Format" class="type-link">Format</a></div>
                 <div class="field-size">8 bytes</div>
-                <div class="field-condition">if status == 240 || status == 247</div>
+                
                 
               </div>
-              <div class="field conditional" style="flex: 2">
-                <div class="field-name">note_off</div>
-                <div class="field-type"><a href="#type-NoteOffEvent" class="type-link">NoteOffEvent</a></div>
-                <div class="field-size">2 bytes</div>
-                <div class="field-condition">if status &gt;= 128 &amp;&amp; status &lt;= 143</div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">len_body</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
+                
                 
               </div>
-              <div class="field conditional" style="flex: 2">
-                <div class="field-name">note_on</div>
-                <div class="field-type"><a href="#type-NoteOnEvent" class="type-link">NoteOnEvent</a></div>
-                <div class="field-size">2 bytes</div>
-                <div class="field-condition">if status &gt;= 144 &amp;&amp; status &lt;= 159</div>
+              <div class="field" style="flex: 4">
+                <div class="field-name">ofs_body</div>
+                <div class="field-type">uint32</div>
+                <div class="field-size">4 bytes</div>
                 
-              </div>
-              <div class="field conditional" style="flex: 2">
-                <div class="field-name">polyphonic_pressure</div>
-                <div class="field-type"><a href="#type-PolyphonicPressureEvent" class="type-link">PolyphonicPressureEvent</a></div>
-                <div class="field-size">2 bytes</div>
-                <div class="field-condition">if status &gt;= 160 &amp;&amp; status &lt;= 175</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 2">
-                <div class="field-name">control_change</div>
-                <div class="field-type"><a href="#type-ControlChangeEvent" class="type-link">ControlChangeEvent</a></div>
-                <div class="field-size">2 bytes</div>
-                <div class="field-condition">if status &gt;= 176 &amp;&amp; status &lt;= 191</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 1">
-                <div class="field-name">program_change</div>
-                <div class="field-type"><a href="#type-ProgramChangeEvent" class="type-link">ProgramChangeEvent</a></div>
-                <div class="field-size">1 bytes</div>
-                <div class="field-condition">if status &gt;= 192 &amp;&amp; status &lt;= 207</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 1">
-                <div class="field-name">channel_pressure</div>
-                <div class="field-type"><a href="#type-ChannelPressureEvent" class="type-link">ChannelPressureEvent</a></div>
-                <div class="field-size">1 bytes</div>
-                <div class="field-condition">if status &gt;= 208 &amp;&amp; status &lt;= 223</div>
-                
-              </div>
-              <div class="field conditional" style="flex: 2">
-                <div class="field-name">pitch_bend</div>
-                <div class="field-type"><a href="#type-PitchBendEvent" class="type-link">PitchBendEvent</a></div>
-                <div class="field-size">2 bytes</div>
-                <div class="field-condition">if status &gt;= 224 &amp;&amp; status &lt;= 239</div>
                 
               </div>
             </div>
           </div>
-        </details>
-        <details class="type-details" id="type-TrackEventData">
-          <summary><h3>TrackEventData</h3></summary>
-          <p class="type-description">Track event payload based on status byte</p>
-          <p class="type-alias">
-            Type alias: <code>discriminated_union</code>
-          </p>
-        </details>
-        <details class="type-details" id="type-VLQ">
-          <summary><h3>VLQ</h3></summary>
-          <p class="type-description">Variable Length Quantity - MIDI&#039;s variable-length integer encoding</p>
-          <p class="type-alias">
-            Type alias: <code>varlength</code>
-          </p>
         </details>
       </div>
     </section>

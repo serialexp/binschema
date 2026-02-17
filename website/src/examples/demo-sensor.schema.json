@@ -1,0 +1,13 @@
+{
+  "config": { "endianness": "big_endian" },
+  "types": {
+    "SensorReading": {
+      "sequence": [
+        { "name": "device_id", "type": "uint16" },
+        { "name": "temperature", "type": "float32" },
+        { "name": "humidity", "type": "uint8" },
+        { "name": "timestamp", "type": "uint32" }
+      ]
+    }
+  }
+}

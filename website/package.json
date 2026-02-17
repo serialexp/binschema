@@ -10,5 +10,13 @@
   },
   "devDependencies": {
     "vite": "^7.1.8"
+  },
+  "dependencies": {
+    "binschema": "workspace:*",
+    "prismjs": "^1.30.0",
+    "codemirror": "^6.0.0",
+    "@codemirror/lang-json": "^6.0.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/theme-one-dark": "^6.0.0"
   }
 }
