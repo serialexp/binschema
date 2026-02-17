@@ -60,11 +60,18 @@ copyIfExists(
   join(docsOutputDir, 'README.md')
 );
 
-// Copy type reference HTML
-copyIfExists(
-  join(binschemaRoot, 'type-reference.html'),
-  join(docsOutputDir, 'type-reference.html')
-);
+// Generate type reference HTML from the built binschema package
+try {
+  const generateScript = join(binschemaPackage, 'dist', 'generate-type-reference.js');
+  console.log('Generating type-reference.html...');
+  execSync(`node "${generateScript}"`, {
+    cwd: docsOutputDir,
+    stdio: 'inherit'
+  });
+  console.log(`Generated ${join(docsOutputDir, 'type-reference.html')}`);
+} catch (error) {
+  console.warn(`Failed to generate type-reference.html: ${error.message}`);
+}
 
 // Process example schemas - copy JSON and generate HTML docs
 const examplesSourceDir = join(binschemaRoot, 'examples');

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 - Page Not Found | BinSchema</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --fg: #1f2933;
+      --muted: #52606d;
+      --primary: #3f83f8;
+      --primary-dark: #1c64f2;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header {
+      background: linear-gradient(135deg, #1c64f2, #7c3aed);
+      color: #fff;
+      padding: 1.5rem 0;
+    }
+
+    header .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo { font-size: 1.5rem; font-weight: 700; }
+    .logo a { color: #fff; }
+    .logo a:hover { text-decoration: none; }
+
+    nav { display: flex; gap: 1.5rem; font-size: 0.95rem; }
+    nav a { color: rgba(255,255,255,0.95); font-weight: 500; }
+
+    .container {
+      width: min(1100px, calc(100% - 3rem));
+      margin: 0 auto;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4rem 0;
+    }
+
+    .error-content { text-align: center; }
+
+    .error-code {
+      font-size: clamp(4rem, 12vw, 8rem);
+      font-weight: 800;
+      line-height: 1;
+      background: linear-gradient(135deg, #1c64f2, #7c3aed);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin: 0;
+    }
+
+    .error-hex {
+      font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin: 0.5rem 0 0;
+      letter-spacing: 0.3em;
+    }
+
+    .error-message {
+      font-size: 1.2rem;
+      color: var(--muted);
+      margin: 1.5rem 0 2rem;
+      max-width: 28rem;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .byte-dump {
+      font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+      background: #0f172a;
+      color: #64748b;
+      padding: 1rem 1.5rem;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      display: inline-block;
+      text-align: left;
+      margin-bottom: 2.5rem;
+      line-height: 1.7;
+    }
+
+    .byte-dump .highlight { color: #f87171; }
+
+    .cta {
+      display: inline-block;
+      padding: 0.9rem 1.6rem;
+      border-radius: 999px;
+      font-weight: 600;
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 12px 24px rgba(63, 131, 248, 0.25);
+      transition: transform 150ms ease, background 150ms ease;
+    }
+
+    .cta:hover {
+      background: var(--primary-dark);
+      transform: translateY(-2px);
+      text-decoration: none;
+    }
+
+    footer {
+      padding: 2rem 0;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="logo"><a href="/">BinSchema</a></div>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/playground.html">Playground</a>
+        <a href="https://github.com/serialexp/binschema" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="error-content">
+      <p class="error-code">404</p>
+      <p class="error-hex">0x00000194</p>
+      <p class="error-message">This page couldn't be decoded. The bytes you're looking for aren't in this stream.</p>
+      <div class="byte-dump">
+        00000000&nbsp; 47 45 54 20 2f <span class="highlight">3f 3f 3f</span> 20&nbsp; 48 54 54 50 2f 31 2e 31<br>
+        00000010&nbsp; 0d 0a <span class="highlight">04 04</span> 00 00 00 00&nbsp; 00 00 00 00 00 00 00 00
+      </div>
+      <br>
+      <a class="cta" href="/">Back to Home</a>
+    </div>
+  </main>
+
+  <footer>
+    <div class="container">&copy; BinSchema</div>
+  </footer>
+</body>
+</html>

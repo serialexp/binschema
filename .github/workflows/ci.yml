@@ -138,6 +138,9 @@ jobs:
           DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
         run: VERSION=$VERSION depot bake --push --project gnp39p759s
 
+      - name: Deploy via Portainer webhook
+        run: curl -fsS -X POST https://portainer.jp.serial-experiments.com/api/stacks/webhooks/0f87260a-ddf8-4218-ab15-a5c1e6f3d704
+
   release:
     runs-on: depot-ubuntu-24.04
     needs: [test-typescript, test-go, test-rust]

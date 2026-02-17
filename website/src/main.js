@@ -13,48 +13,48 @@ const EXAMPLES = [
     name: 'DNS RFC 1035',
     description: 'Complete DNS message implementation including compression pointers.',
     tags: ['bit-level flags', 'compression pointers', 'discriminated unions'],
-    schema: 'examples/dns.schema.json',
-    docs: 'examples/dns-docs.html'
+    schema: '/examples/dns.schema.json',
+    docs: '/examples/dns-docs.html'
   },
   {
     id: 'zip',
     name: 'ZIP Archive',
     description: 'ZIP file format with local headers, central directory, and computed CRCs.',
     tags: ['CRC32 checksums', 'computed lengths', 'random access'],
-    schema: 'examples/zip.schema.json',
-    docs: 'examples/zip-docs.html'
+    schema: '/examples/zip.schema.json',
+    docs: '/examples/zip-docs.html'
   },
   {
     id: 'png',
     name: 'PNG Image',
     description: 'PNG chunk-based format with variant-terminated arrays.',
     tags: ['variant-terminated arrays', 'CRC32', 'chunk-based'],
-    schema: 'examples/png.schema.json',
-    docs: 'examples/png-docs.html'
+    schema: '/examples/png.schema.json',
+    docs: '/examples/png-docs.html'
   },
   {
     id: 'midi',
     name: 'MIDI File',
     description: 'Standard MIDI file format with variable-length quantities (VLQ).',
     tags: ['variable-length integers', 'VLQ encoding', 'nested structures'],
-    schema: 'examples/midi.schema.json',
-    docs: 'examples/midi-docs.html'
+    schema: '/examples/midi.schema.json',
+    docs: '/examples/midi-docs.html'
   },
   {
     id: 'kerberos',
     name: 'Kerberos',
     description: 'Kerberos authentication protocol with ASN.1 DER encoding.',
     tags: ['ASN.1 DER', 'variable-length integers', 'computed lengths'],
-    schema: 'examples/kerberos.schema.json',
-    docs: 'examples/kerberos-docs.html'
+    schema: '/examples/kerberos.schema.json',
+    docs: '/examples/kerberos-docs.html'
   },
   {
     id: 'sensornet',
     name: 'SensorNet Telemetry',
     description: 'Binary telemetry format for low-power sensor networks.',
     tags: ['bit-packed fields', 'conditional fields', 'compact encoding'],
-    schema: 'examples/sensornet.schema.json',
-    docs: 'examples/sensornet-docs.html'
+    schema: '/examples/sensornet.schema.json',
+    docs: '/examples/sensornet-docs.html'
   }
 ];
 
