@@ -136,7 +136,7 @@ jobs:
         env:
           VERSION: ${{ github.sha }}
           DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
-        run: VERSION=$VERSION depot bake --push
+        run: VERSION=$VERSION depot bake --push --project gnp39p759s
 
   release:
     runs-on: depot-ubuntu-24.04
