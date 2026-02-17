@@ -4,6 +4,7 @@ import {
   DocsServeCommand,
   GenerateCommand,
   HelpCommand,
+  ValidateCommand,
   SupportedLanguage,
 } from "../../cli/command-parser";
 import { logger } from "../../logger.js";
@@ -85,6 +86,16 @@ function expectGenerate(argv: string[], expected: Partial<GenerateCommand>): voi
   }
   if (expected.typeName !== undefined) {
     assert(command.typeName === expected.typeName, `Expected typeName="${expected.typeName}" but got "${command.typeName}"`);
+  }
+}
+
+function expectValidate(argv: string[], expected: Partial<ValidateCommand>): void {
+  const result = parseCLICommand(argv);
+  assert(result.ok, `Expected success but got error: ${(result as any).error?.message ?? "unknown"}`);
+  const command = (result as { ok: true; command: ValidateCommand }).command;
+  assert(command.type === "validate", "Parsed command is not validate");
+  if (expected.schemaPath !== undefined) {
+    assert(command.schemaPath === expected.schemaPath, `Expected schema "${expected.schemaPath}" but got "${command.schemaPath}"`);
   }
 }
 
@@ -175,6 +186,22 @@ export function runCommandParserTests(): { passed: number; failed: number; check
   expectError(["generate", "--schema", "schema.json"], "Missing required option: --out <dir>");
   expectError(["generate", "--schema", "schema.json", "--out", "./gen"], "Missing required option: --language <ts|go|rust>");
   expectError(["generate", "--schema", "schema.json", "--out", "./gen", "--language", "cpp"], "Unsupported language");
+
+  // validate command tests
+  expectValidate(
+    ["validate", "--schema", "schema.json"],
+    { schemaPath: "schema.json" },
+  );
+
+  expectValidate(
+    ["validate", "--schema=protocol.json5"],
+    { schemaPath: "protocol.json5" },
+  );
+
+  expectHelp(["validate", "--help"], ["validate"]);
+  expectHelp(["help", "validate"], ["validate"]);
+
+  expectError(["validate"], "Missing required option: --schema <file>");
 
   // All checks passed (assertions would have thrown)
   checks.push({

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { resolve, join } from "path";
 import { spawn } from "child_process";
 import JSON5 from "json5";
@@ -11,6 +11,7 @@ import {
   DocsServeCommand,
   GenerateCommand,
   HelpCommand,
+  ValidateCommand,
 } from "./command-parser.js";
 import type { BinarySchema } from "../schema/binary-schema.js";
 
@@ -43,6 +44,9 @@ async function main() {
     case "generate":
       await handleGenerate(command);
       break;
+    case "validate":
+      await handleValidate(command);
+      break;
     default:
       // Exhaustiveness guard
       const neverCommand: never = command;
@@ -52,6 +56,51 @@ async function main() {
 
 async function handleHelp(command: HelpCommand): Promise<void> {
   console.log(formatHelp(command.path));
+}
+
+async function handleValidate(command: ValidateCommand): Promise<void> {
+  console.log(`Validating schema: ${command.schemaPath}`);
+
+  try {
+    // Step 1: Parse with Zod (structural validation)
+    const { BinarySchemaSchema } = await import("../schema/binary-schema.js");
+    const absolute = resolve(process.cwd(), command.schemaPath);
+    const raw = readFileSync(absolute, "utf-8");
+    let parsed: BinarySchema;
+    try {
+      const json = JSON5.parse(raw);
+      parsed = BinarySchemaSchema.parse(json);
+    } catch (error) {
+      console.error("Schema parse error:");
+      if (error instanceof Error) {
+        console.error(error.message);
+      } else {
+        console.error(String(error));
+      }
+      process.exitCode = 1;
+      return;
+    }
+
+    // Step 2: Semantic validation
+    const { validateSchema, formatValidationErrors } = await import("../schema/validator.js");
+    const validation = validateSchema(parsed);
+    if (!validation.valid) {
+      console.error("Schema validation failed:");
+      console.error(formatValidationErrors(validation));
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log("✓ Schema is valid");
+  } catch (error) {
+    console.error("Failed to validate schema:");
+    if (error instanceof Error) {
+      console.error(error.message);
+    } else {
+      console.error(String(error));
+    }
+    process.exitCode = 1;
+  }
 }
 
 async function handleDocsBuild(command: DocsBuildCommand): Promise<void> {
@@ -125,6 +174,15 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
 
   const schema = loadSchema(command.schemaPath);
   const absoluteOut = resolve(process.cwd(), command.outputDir);
+
+  // Validate that --out is not an existing file (it must be a directory)
+  if (existsSync(absoluteOut) && !statSync(absoluteOut).isDirectory()) {
+    console.error(`Error: --out path is a file, not a directory: ${absoluteOut}`);
+    console.error("The generate command writes to a directory. Use --out <dir> to specify an output directory.");
+    process.exitCode = 1;
+    return;
+  }
+
   mkdirSync(absoluteOut, { recursive: true });
 
   switch (command.language) {

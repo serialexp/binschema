@@ -41,6 +41,9 @@ export type { GoGeneratorOptions, GeneratedGoCode } from './generators/go.js';
 export { generateHTML } from './generators/html.js';
 export type { HTMLGeneratorOptions } from './generators/html.js';
 
+export { generateRust } from './generators/rust.js';
+export type { RustGeneratorOptions, GeneratedRustCode } from './generators/rust.js';
+
 // =============================================================================
 // Schema Types & Validation
 // =============================================================================

@@ -10,7 +10,8 @@ export type CLICommand =
   | HelpCommand
   | DocsBuildCommand
   | DocsServeCommand
-  | GenerateCommand;
+  | GenerateCommand
+  | ValidateCommand;
 
 export interface HelpCommand {
   readonly type: "help";
@@ -44,6 +45,11 @@ export interface GenerateCommand {
   readonly outputDir: string;
   readonly watch: boolean;
   readonly typeName?: string;
+}
+
+export interface ValidateCommand {
+  readonly type: "validate";
+  readonly schemaPath: string;
 }
 
 export interface CLIParseSuccess {
@@ -292,6 +298,13 @@ function buildCommand(path: string[], values: Record<string, unknown>): CLIParse
       watch: values.watch as boolean,
       typeName: values.typeName as string | undefined,
     } satisfies GenerateCommand);
+  }
+
+  if (path[0] === "validate") {
+    return ok({
+      type: "validate",
+      schemaPath: values.schemaPath as string,
+    } satisfies ValidateCommand);
   }
 
   return fail(`Unsupported command path: ${path.join(" ")}`, formatHelp());
@@ -680,6 +693,22 @@ function createRootSpec(): CommandSpec {
     ],
   };
 
+  const validate: CommandSpec = {
+    name: "validate",
+    description: "Validate a schema file without generating code.",
+    usage: ["binschema validate --schema <file>"],
+    options: [
+      {
+        name: "schema",
+        key: "schemaPath",
+        type: "string",
+        description: "Path to the schema JSON/JSON5 file to validate.",
+        required: true,
+        valueName: "<file>",
+      },
+    ],
+  };
+
   return {
     name: "binschema",
     description: "BinSchema command line interface.",
@@ -687,6 +716,7 @@ function createRootSpec(): CommandSpec {
     subcommands: {
       docs,
       generate,
+      validate,
     },
   };
 }
