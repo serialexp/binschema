@@ -23,6 +23,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "cp ../../README.md .",
     "test": "bun run src/run-tests.ts",
     "test:filter": "bun run src/run-tests.ts --filter",
     "watch": "tsc --watch",
