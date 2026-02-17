@@ -80,7 +80,7 @@ function main() {
   const hasGoResults = existsSync(goResultsPath);
 
   if (!hasTsResults && !hasGoResults) {
-    console.log("No benchmark results found. Run 'make bench-ts' and/or 'make bench-go' first.");
+    console.log("No benchmark results found. Run 'just bench-ts' and/or 'just bench-go' first.");
     process.exit(1);
   }
 
