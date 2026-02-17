@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test-typescript:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +36,7 @@ jobs:
         run: pnpm test
 
   test-go:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -70,7 +70,7 @@ jobs:
         run: just test-go
 
   test-rust:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -101,7 +101,7 @@ jobs:
         run: just test-rust
 
   deploy-website:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs: [test-typescript, test-go, test-rust]
     if: github.ref == 'refs/heads/main'
     steps:
@@ -136,7 +136,7 @@ jobs:
         run: VERSION=$VERSION depot bake --push
 
   release:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs: [test-typescript, test-go, test-rust]
     # Only run on main branch, skip if this is already a release commit
     if: github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'release:')
