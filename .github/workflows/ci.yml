@@ -104,6 +104,9 @@ jobs:
     runs-on: depot-ubuntu-24.04
     needs: [test-typescript, test-go, test-rust]
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
