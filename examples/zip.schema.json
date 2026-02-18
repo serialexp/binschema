@@ -9,15 +9,17 @@
   },
   "types": {
     "LocalFileHeader": {
+      "description": "Header preceding each file's compressed data in the archive. Contains metadata needed to extract the file, including compression info, timestamps, and checksums. Fields like CRC-32 and sizes may be zeroed here when bit 3 of flags is set, with actual values in a trailing data descriptor instead.",
       "sequence": [
-        { "name": "version", "type": "uint16" },
-        { "name": "flags", "type": "uint16" },
-        { "name": "compression_method", "type": "uint16" },
-        { "name": "file_mod_time", "type": "uint16" },
-        { "name": "file_mod_date", "type": "uint16" },
+        { "name": "version", "type": "uint16", "description": "Minimum ZIP specification version needed to extract (major * 10 + minor, e.g. 20 = 2.0)." },
+        { "name": "flags", "type": "uint16", "description": "General purpose bit flags. Bit 0: encrypted. Bit 1-2: compression options. Bit 3: sizes/CRC in data descriptor. Bit 11: UTF-8 file names." },
+        { "name": "compression_method", "type": "uint16", "description": "Compression algorithm. 0 = stored (no compression), 8 = deflate, 14 = LZMA." },
+        { "name": "file_mod_time", "type": "uint16", "description": "Last modification time in MS-DOS format. Bits 15-11: hours (0-23), bits 10-5: minutes (0-59), bits 4-0: seconds/2 (0-29)." },
+        { "name": "file_mod_date", "type": "uint16", "description": "Last modification date in MS-DOS format. Bits 15-9: year offset from 1980, bits 8-5: month (1-12), bits 4-0: day (1-31)." },
         {
           "name": "crc32",
           "type": "uint32",
+          "description": "CRC-32 checksum of the uncompressed file data, computed using the standard ISO 3309 / ITU-T V.42 polynomial.",
           "computed": {
             "type": "crc32_of",
             "target": "../body"
@@ -26,6 +28,7 @@
         {
           "name": "len_body_compressed",
           "type": "uint32",
+          "description": "Size of the compressed file data in bytes. For stored files (method 0) this equals the uncompressed size.",
           "computed": {
             "type": "length_of",
             "target": "../body"
@@ -34,6 +37,7 @@
         {
           "name": "len_body_uncompressed",
           "type": "uint32",
+          "description": "Original uncompressed size of the file data in bytes. For files larger than 4 GiB, the ZIP64 extended information field must be used.",
           "computed": {
             "type": "length_of",
             "target": "../body"
@@ -42,16 +46,18 @@
         {
           "name": "len_file_name",
           "type": "uint16",
+          "description": "Length of the file name field in bytes.",
           "computed": {
             "type": "length_of",
             "target": "file_name",
             "encoding": "utf8"
           }
         },
-        { "name": "len_extra", "type": "uint16" },
+        { "name": "len_extra", "type": "uint16", "description": "Length of the extra field in bytes. The extra field stores extensible data such as ZIP64 sizes, timestamps, and platform-specific attributes." },
         {
           "name": "file_name",
           "type": "string",
+          "description": "Path and name of the file within the archive. Forward slashes are used as directory separators. A trailing slash indicates a directory entry.",
           "kind": "field_referenced",
           "length_field": "len_file_name",
           "encoding": "utf8"
@@ -59,12 +65,14 @@
       ]
     },
     "LocalFile": {
+      "description": "A complete local file record consisting of the 4-byte signature, the file header with metadata, and the raw (possibly compressed) file data. Each file stored in the archive has one local file record, written sequentially before the central directory.",
       "sequence": [
-        { "name": "signature", "type": "uint32", "const": 67324752 },
-        { "name": "header", "type": "LocalFileHeader" },
+        { "name": "signature", "type": "uint32", "const": 67324752, "description": "Local file header signature (0x04034B50, or 'PK\\x03\\x04')." },
+        { "name": "header", "type": "LocalFileHeader", "description": "File metadata including name, compression method, timestamps, and sizes." },
         {
           "name": "body",
           "type": "array",
+          "description": "Raw file data, compressed according to the method specified in the header. For method 0 (stored) this is the original file content.",
           "kind": "field_referenced",
           "length_field": "header.len_body_compressed",
           "items": { "type": "uint8" }
@@ -72,17 +80,19 @@
       ]
     },
     "CentralDirEntry": {
+      "description": "Central directory file header. The central directory is written after all local file records and provides a single index of every file in the archive. It duplicates key metadata from each local file header and adds the offset to each local record, enabling random access without scanning the entire file.",
       "sequence": [
-        { "name": "signature", "type": "uint32", "const": 33639248 },
-        { "name": "version_made_by", "type": "uint16" },
-        { "name": "version_needed", "type": "uint16" },
-        { "name": "flags", "type": "uint16" },
-        { "name": "compression_method", "type": "uint16" },
-        { "name": "file_mod_time", "type": "uint16" },
-        { "name": "file_mod_date", "type": "uint16" },
+        { "name": "signature", "type": "uint32", "const": 33639248, "description": "Central directory file header signature (0x02014B50, or 'PK\\x01\\x02')." },
+        { "name": "version_made_by", "type": "uint16", "description": "Version and platform that created the archive. High byte: host OS (0 = MS-DOS/FAT, 3 = Unix). Low byte: ZIP spec version." },
+        { "name": "version_needed", "type": "uint16", "description": "Minimum ZIP specification version needed to extract this entry." },
+        { "name": "flags", "type": "uint16", "description": "General purpose bit flags, mirrored from the local file header." },
+        { "name": "compression_method", "type": "uint16", "description": "Compression algorithm used. Must match the local file header." },
+        { "name": "file_mod_time", "type": "uint16", "description": "Last modification time in MS-DOS format." },
+        { "name": "file_mod_date", "type": "uint16", "description": "Last modification date in MS-DOS format." },
         {
           "name": "crc32",
           "type": "uint32",
+          "description": "CRC-32 checksum of the uncompressed file data. Must match the value in the corresponding local file header.",
           "computed": {
             "type": "crc32_of",
             "target": "../sections[corresponding<LocalFile>].body"
@@ -91,6 +101,7 @@
         {
           "name": "len_body_compressed",
           "type": "uint32",
+          "description": "Compressed size of the file data in bytes.",
           "computed": {
             "type": "length_of",
             "target": "../sections[corresponding<LocalFile>].body"
@@ -99,6 +110,7 @@
         {
           "name": "len_body_uncompressed",
           "type": "uint32",
+          "description": "Uncompressed size of the file data in bytes.",
           "computed": {
             "type": "length_of",
             "target": "../sections[corresponding<LocalFile>].body"
@@ -107,20 +119,22 @@
         {
           "name": "len_file_name",
           "type": "uint16",
+          "description": "Length of the file name field in bytes.",
           "computed": {
             "type": "length_of",
             "target": "file_name",
             "encoding": "utf8"
           }
         },
-        { "name": "len_extra", "type": "uint16" },
-        { "name": "len_comment", "type": "uint16" },
-        { "name": "disk_number_start", "type": "uint16" },
-        { "name": "int_file_attr", "type": "uint16" },
-        { "name": "ext_file_attr", "type": "uint32" },
+        { "name": "len_extra", "type": "uint16", "description": "Length of the extra field in bytes." },
+        { "name": "len_comment", "type": "uint16", "description": "Length of the file comment field in bytes." },
+        { "name": "disk_number_start", "type": "uint16", "description": "Disk number on which this file's local header begins. Always 0 for single-disk archives." },
+        { "name": "int_file_attr", "type": "uint16", "description": "Internal file attributes. Bit 0: file appears to be text (as opposed to binary)." },
+        { "name": "ext_file_attr", "type": "uint32", "description": "External file attributes. Format depends on the host OS in version_made_by. For Unix: high 16 bits contain st_mode (permissions, file type)." },
         {
           "name": "ofs_local_header",
           "type": "uint32",
+          "description": "Byte offset from the start of the archive to the corresponding local file header. Used for random access to individual files.",
           "computed": {
             "type": "position_of",
             "target": "../sections[corresponding<LocalFile>]"
@@ -129,6 +143,7 @@
         {
           "name": "file_name",
           "type": "string",
+          "description": "Path and name of the file, matching the local file header. Used to build the archive's directory listing.",
           "kind": "field_referenced",
           "length_field": "len_file_name",
           "encoding": "utf8"
@@ -136,15 +151,17 @@
       ]
     },
     "EndOfCentralDir": {
+      "description": "End of central directory record. This fixed record appears once at the very end of the archive and points back to the central directory. ZIP readers typically seek to the end of the file and scan backwards for this signature to locate the archive contents.",
       "sequence": [
-        { "name": "signature", "type": "uint32", "const": 101010256 },
-        { "name": "disk_number", "type": "uint16" },
-        { "name": "disk_with_central_dir", "type": "uint16" },
-        { "name": "num_entries_this_disk", "type": "uint16" },
-        { "name": "num_entries_total", "type": "uint16" },
+        { "name": "signature", "type": "uint32", "const": 101010256, "description": "End of central directory signature (0x06054B50, or 'PK\\x05\\x06')." },
+        { "name": "disk_number", "type": "uint16", "description": "Number of the disk containing this record. Always 0 for single-disk archives." },
+        { "name": "disk_with_central_dir", "type": "uint16", "description": "Number of the disk on which the central directory starts. Always 0 for single-disk archives." },
+        { "name": "num_entries_this_disk", "type": "uint16", "description": "Number of central directory entries on this disk. Equals num_entries_total for single-disk archives." },
+        { "name": "num_entries_total", "type": "uint16", "description": "Total number of entries in the central directory across all disks." },
         {
           "name": "len_central_dir",
           "type": "uint32",
+          "description": "Total size of the central directory in bytes, including all central directory file headers.",
           "computed": {
             "type": "sum_of_type_sizes",
             "target": "../sections",
@@ -154,19 +171,22 @@
         {
           "name": "ofs_central_dir",
           "type": "uint32",
+          "description": "Byte offset from the start of the archive to the first central directory entry. Used to seek directly to the central directory.",
           "computed": {
             "type": "position_of",
             "target": "../sections[first<CentralDirEntry>]"
           }
         },
-        { "name": "len_comment", "type": "uint16" }
+        { "name": "len_comment", "type": "uint16", "description": "Length of the archive comment in bytes. The comment, if present, follows immediately after this record." }
       ]
     },
     "ZipArchive": {
+      "description": "Top-level ZIP archive structure. A ZIP file consists of a sequence of local file records, followed by the central directory entries (one per file), and ending with a single end-of-central-directory record. This schema uses a choice array to represent the interleaved section types.",
       "sequence": [
         {
           "name": "sections",
           "type": "array",
+          "description": "Ordered sequence of archive sections: local file records first, then central directory entries, and finally the end-of-central-directory record.",
           "kind": "fixed",
           "length": 3,
           "items": {

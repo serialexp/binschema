@@ -1263,6 +1263,27 @@ function generateCSS(): string {
       display: flex;
       align-items: center;
       gap: 12px;
+      list-style: none;
+    }
+
+    .type-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .type-details summary::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid #6b7280;
+      border-bottom: 2px solid #6b7280;
+      transform: rotate(-45deg);
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+
+    .type-details[open] summary::before {
+      transform: rotate(45deg);
     }
 
     .type-details summary:hover {
@@ -1730,6 +1751,11 @@ function generateCSS(): string {
       border-radius: 3px;
       font-size: 0.85em;
       color: #1f2937;
+    }
+
+    .fields-table td:nth-child(1) code,
+    .fields-table td:nth-child(2) code {
+      word-break: break-all;
     }
 
     .badge {

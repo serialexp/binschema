@@ -6,10 +6,10 @@
     "Packet": {
       "description": "All packets use this header format",
       "sequence": [
-        { "name": "size", "type": "uint16" },
-        { "name": "msg_type", "type": "uint8" },
-        { "name": "device_id", "type": "uint32" },
-        { "name": "sequence_num", "type": "uint16" }
+        { "name": "size", "type": "uint16", "description": "Total size of the packet excluding the size field itself (2 bytes)" },
+        { "name": "msg_type", "type": "uint8", "description": "Message type identifier (1-255)" },
+        { "name": "device_id", "type": "uint32", "description": "Unique device identifier assigned during provisioning" },
+        { "name": "sequence_num", "type": "uint16", "description": "Incrementing sequence number for duplicate detection" }
       ]
     },
     "Optional<T>": {
@@ -22,26 +22,26 @@
     "SensorReading": {
       "description": "Sensor data reading",
       "sequence": [
-        { "name": "sensor_type", "type": "bit", "size": 4 },
-        { "name": "battery_low", "type": "bit", "size": 1 },
-        { "name": "error", "type": "bit", "size": 1 },
-        { "name": "reserved", "type": "bit", "size": 2 },
-        { "name": "timestamp", "type": "uint32" },
-        { "name": "value", "type": "float32" },
-        { "name": "location", "type": "Optional<uint32>" }
+        { "name": "sensor_type", "type": "bit", "size": 4, "description": "Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc." },
+        { "name": "battery_low", "type": "bit", "size": 1, "description": "Battery low warning flag (1=low, 0=normal)" },
+        { "name": "error", "type": "bit", "size": 1, "description": "Error flag (1=sensor error, 0=normal)" },
+        { "name": "reserved", "type": "bit", "size": 2, "description": "Reserved bits for future use" },
+        { "name": "timestamp", "type": "uint32", "description": "Unix timestamp in seconds (device time)" },
+        { "name": "value", "type": "float32", "description": "Sensor reading value (interpretation depends on sensor_type)" },
+        { "name": "location", "type": "Optional<uint32>", "description": "Optional GPS location ID (present if device has GPS enabled)" }
       ]
     },
     "ConfigUpdate": {
       "description": "Configuration update command",
       "sequence": [
-        { "name": "interval", "type": "uint16" },
-        { "name": "threshold", "type": "float32" }
+        { "name": "interval", "type": "uint16", "description": "Reporting interval in seconds" },
+        { "name": "threshold", "type": "float32", "description": "Alert threshold value" }
       ]
     },
     "Acknowledgment": {
       "description": "Generic acknowledgment",
       "sequence": [
-        { "name": "status", "type": "uint8" }
+        { "name": "status", "type": "uint8", "description": "Status code: 0=success, 1=error, 2=retry" }
       ]
     }
   },
@@ -59,22 +59,6 @@
       }
     },
     "discriminator": "msg_type",
-    "field_descriptions": {
-      "Packet.size": "Total size of the packet excluding the size field itself (2 bytes)",
-      "Packet.msg_type": "Message type identifier (1-255)",
-      "Packet.device_id": "Unique device identifier assigned during provisioning",
-      "Packet.sequence_num": "Incrementing sequence number for duplicate detection",
-      "SensorReading.sensor_type": "Sensor type: 0=temperature, 1=humidity, 2=pressure, 3=light, etc.",
-      "SensorReading.battery_low": "Battery low warning flag (1=low, 0=normal)",
-      "SensorReading.error": "Error flag (1=sensor error, 0=normal)",
-      "SensorReading.reserved": "Reserved bits for future use",
-      "SensorReading.timestamp": "Unix timestamp in seconds (device time)",
-      "SensorReading.value": "Sensor reading value (interpretation depends on sensor_type)",
-      "SensorReading.location": "Optional GPS location ID (present if device has GPS enabled)",
-      "ConfigUpdate.interval": "Reporting interval in seconds",
-      "ConfigUpdate.threshold": "Alert threshold value",
-      "Acknowledgment.status": "Status code: 0=success, 1=error, 2=retry"
-    },
     "notes": [
       "All multi-byte integers use **little-endian** byte order.",
       "Devices must increment sequence_num for each packet sent.",

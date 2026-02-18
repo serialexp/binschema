@@ -613,6 +613,114 @@ function generateExampleData(typeName: string, typeDef: TypeDef, schema: BinaryS
 }
 
 /**
+ * Convert a snake_case field name to Go PascalCase
+ */
+export function toGoPascalCase(name: string): string {
+  return name
+    .split(/[_-]/)
+    .map(part => {
+      if (!part) return "";
+      if (/^\d+$/.test(part)) return part;
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join("");
+}
+
+/**
+ * Format a JS value as a Go literal
+ */
+export function formatGoValue(value: unknown, indent: number): string {
+  const pad = "    ".repeat(indent);
+  if (value === null || value === undefined) return "nil";
+  if (typeof value === "string") return `"${value}"`;
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) return String(value);
+    return String(value);
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "{}";
+    // Simple primitive arrays
+    if (value.every(v => typeof v !== "object" || v === null)) {
+      const items = value.map(v => formatGoValue(v, 0)).join(", ");
+      return `{${items}}`;
+    }
+    // Object arrays - each on its own line
+    const items = value.map(v => `${pad}    ${formatGoValue(v, indent + 1)}`).join(",\n");
+    return `{\n${items},\n${pad}}`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return "{}";
+    const fields = entries.map(([k, v]) => `${pad}    ${toGoPascalCase(k)}: ${formatGoValue(v, indent + 1)}`).join(",\n");
+    return `{\n${fields},\n${pad}}`;
+  }
+  return String(value);
+}
+
+/**
+ * Format example data as a Go struct literal
+ */
+export function formatGoExample(data: any, typeName: string): string {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return `generated.${typeName}{\n        // Fill in your data here\n    }`;
+  }
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return `generated.${typeName}{}`;
+  }
+  const fields = entries.map(([k, v]) => `        ${toGoPascalCase(k)}: ${formatGoValue(v, 2)}`).join(",\n");
+  return `generated.${typeName}{\n${fields},\n    }`;
+}
+
+/**
+ * Format a JS value as a Rust literal
+ */
+export function formatRustValue(value: unknown, indent: number): string {
+  const pad = "    ".repeat(indent);
+  if (value === null || value === undefined) return "None";
+  if (typeof value === "string") return `"${value}".to_string()`;
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) return String(value);
+    // Ensure float literal has decimal
+    const s = String(value);
+    return s.includes('.') ? s : s + ".0";
+  }
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "vec![]";
+    if (value.every(v => typeof v !== "object" || v === null)) {
+      const items = value.map(v => formatRustValue(v, 0)).join(", ");
+      return `vec![${items}]`;
+    }
+    const items = value.map(v => `${pad}    ${formatRustValue(v, indent + 1)}`).join(",\n");
+    return `vec![\n${items},\n${pad}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return "{}";
+    const fields = entries.map(([k, v]) => `${pad}    ${k}: ${formatRustValue(v, indent + 1)}`).join(",\n");
+    return `{\n${fields},\n${pad}}`;
+  }
+  return String(value);
+}
+
+/**
+ * Format example data as a Rust struct literal
+ */
+export function formatRustExample(data: any, typeName: string): string {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return `${typeName} {\n        // Fill in your data here\n    }`;
+  }
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return `${typeName} {}`;
+  }
+  const fields = entries.map(([k, v]) => `        ${k}: ${formatRustValue(v, 2)}`).join(",\n");
+  return `${typeName} {\n${fields},\n    }`;
+}
+
+/**
  * Generate usage examples section
  */
 function generateUsageSection(
@@ -658,6 +766,8 @@ function generateUsageSection(
 
   // Format example data for TypeScript/JavaScript
   const tsExample = exampleData ? JSON.stringify(exampleData, null, 2) : '{\n  // your data here\n}';
+  const goExample = exampleData ? formatGoExample(exampleData, exampleTypeName!) : `generated.${exampleTypeName}{\n        // Fill in your data here\n    }`;
+  const rustExample = exampleData ? formatRustExample(exampleData, exampleTypeName!) : `${exampleTypeName} {\n        // Fill in your data here\n    }`;
 
   let html = `    <section id="usage" class="section">
       <h2>Usage</h2>
@@ -698,9 +808,7 @@ import (
 
 func main() {
     // Encoding (struct → bytes)
-    data := generated.${exampleTypeName}{
-        // Fill in your data here
-    }
+    data := ${goExample}
     bytes := generated.Encode${exampleTypeName}(data)
 
     // Decoding (bytes → struct)
@@ -723,9 +831,7 @@ func main() {
 
 fn main() {
     // Encoding (struct → bytes)
-    let data = ${exampleTypeName} {
-        // Fill in your data here
-    };
+    let data = ${rustExample};
     let bytes = data.encode();
 
     // Decoding (bytes → struct)
@@ -758,6 +864,16 @@ function getHeaderSizeExcept(headerFields: Field[], excludeFieldName: string, bi
 }
 
 /**
+ * Resolve a field's description from the field itself or the protocol-level field_descriptions map.
+ * Inline description on the field takes priority.
+ */
+function resolveFieldDescription(field: Field, typeName: string, fieldDescriptions: Record<string, string>): string {
+  if ((field as any).description) return (field as any).description;
+  const fieldKey = `${typeName}.${field.name}`;
+  return fieldDescriptions[fieldKey] || "";
+}
+
+/**
  * Generate frame format section
  */
 function generateFrameFormatSection(
@@ -784,8 +900,6 @@ function generateFrameFormatSection(
 
   const headerFields = getTypeFields(headerType);
   for (const field of headerFields) {
-    const fieldKey = `${headerTypeName}.${field.name}`;
-    const description = fieldDescriptions[fieldKey] || "";
     const typeInfo = getFieldTypeInfo(field, binarySchema);
     const width = calculateFieldWidth(typeInfo.bytes);
 
@@ -810,8 +924,7 @@ function generateFrameFormatSection(
 
   // Add descriptions below the diagram
   for (const field of headerFields) {
-    const fieldKey = `${headerTypeName}.${field.name}`;
-    const description = fieldDescriptions[fieldKey] || "";
+    const description = resolveFieldDescription(field, headerTypeName, fieldDescriptions);
     if (description) {
       html += `        <div class="field-desc"><strong>${escapeHtml(field.name)}:</strong> ${escapeHtml(description)}</div>\n`;
     }
@@ -1019,8 +1132,7 @@ function generateDataTypesSection(
 
       // Add descriptions below the diagram
       for (const field of typeFields) {
-        const fieldKey = `${typeName}.${field.name}`;
-        const fieldDescription = fieldDescriptions[fieldKey] || "";
+        const fieldDescription = resolveFieldDescription(field, typeName, fieldDescriptions);
         if (fieldDescription) {
           html += `            <div class="field-desc"><strong>${escapeHtml(field.name)}:</strong> ${escapeHtml(fieldDescription)}</div>\n`;
         }
@@ -1171,8 +1283,7 @@ function generateMessageDetails(
 
       // Add descriptions below the diagram
       for (const field of payloadFields) {
-        const fieldKey = `${msg.payload_type}.${field.name}`;
-        const description = fieldDescriptions[fieldKey] || "";
+        const description = resolveFieldDescription(field, msg.payload_type, fieldDescriptions);
         if (description) {
           html += `          <div class="field-desc"><strong>${escapeHtml(field.name)}:</strong> ${escapeHtml(description)}</div>\n`;
         }

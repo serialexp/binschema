@@ -20,71 +20,71 @@
     "FrameHeader": {
       "description": "All messages use this frame format",
       "sequence": [
-        { "name": "length", "type": "uint32" },
-        { "name": "version", "type": "uint8" },
-        { "name": "type", "type": "uint8" },
-        { "name": "flags", "type": "uint8" }
+        { "name": "length", "type": "uint32", "description": "Total size of Version + Type + Flags + Payload (excludes the length field itself)" },
+        { "name": "version", "type": "uint8", "description": "Protocol version (current: 1). Both client and server must validate on every message." },
+        { "name": "type", "type": "uint8", "description": "Message type identifier (0x01-0xFF)" },
+        { "name": "flags", "type": "uint8", "description": "Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved" }
       ]
     },
     "AuthRequest": {
       "description": "Authentication request with password",
       "sequence": [
-        { "name": "nickname", "type": "String" },
-        { "name": "password", "type": "String" }
+        { "name": "nickname", "type": "String", "description": "User's nickname (3-32 characters)" },
+        { "name": "password", "type": "String", "description": "User's password (8-128 characters, hashed with bcrypt)" }
       ]
     },
     "AuthResponse": {
       "description": "Authentication response",
       "sequence": [
-        { "name": "success", "type": "uint8" },
-        { "name": "user_id", "type": "Optional<uint64>" },
-        { "name": "nickname", "type": "Optional<String>" },
-        { "name": "message", "type": "String" }
+        { "name": "success", "type": "uint8", "description": "1 if authentication succeeded, 0 if failed" },
+        { "name": "user_id", "type": "Optional<uint64>", "description": "The authenticated user's ID (only present if success=1)" },
+        { "name": "nickname", "type": "Optional<String>", "description": "The authenticated user's registered nickname (only present if success=1)" },
+        { "name": "message", "type": "String", "description": "Welcome message on success, error description on failure" }
       ]
     },
     "SetNickname": {
       "description": "Set or change nickname",
       "sequence": [
-        { "name": "nickname", "type": "String" }
+        { "name": "nickname", "type": "String", "description": "Desired nickname (3-32 characters, alphanumeric + underscore)" }
       ]
     },
     "NicknameResponse": {
       "description": "Nickname change result",
       "sequence": [
-        { "name": "success", "type": "uint8" },
-        { "name": "message", "type": "String" }
+        { "name": "success", "type": "uint8", "description": "1 if nickname was set successfully, 0 if rejected" },
+        { "name": "message", "type": "String", "description": "Confirmation message or error description (see notes for specific cases)" }
       ]
     },
     "PostMessage": {
       "description": "Post a new message",
       "sequence": [
-        { "name": "channel_id", "type": "uint64" },
-        { "name": "subchannel_id", "type": "Optional<uint64>" },
-        { "name": "parent_id", "type": "Optional<uint64>" },
-        { "name": "content", "type": "String" }
+        { "name": "channel_id", "type": "uint64", "description": "Target channel ID" },
+        { "name": "subchannel_id", "type": "Optional<uint64>", "description": "Target subchannel ID (optional, for channels with subchannels)" },
+        { "name": "parent_id", "type": "Optional<uint64>", "description": "Parent message ID for threaded replies (null for top-level posts)" },
+        { "name": "content", "type": "String", "description": "Message content (max 4000 characters)" }
       ]
     },
     "MessagePosted": {
       "description": "Message post confirmation",
       "sequence": [
-        { "name": "success", "type": "uint8" },
-        { "name": "message_id", "type": "uint64" },
-        { "name": "message", "type": "String" }
+        { "name": "success", "type": "uint8", "description": "1 if message was posted successfully, 0 if failed" },
+        { "name": "message_id", "type": "uint64", "description": "The ID of the newly created message (only present if success=1)" },
+        { "name": "message", "type": "String", "description": "Confirmation message on success, error description on failure" }
       ]
     },
     "NewMessage": {
       "description": "Real-time message notification",
       "sequence": [
-        { "name": "message_id", "type": "uint64" },
-        { "name": "channel_id", "type": "uint64" },
-        { "name": "subchannel_id", "type": "Optional<uint64>" },
-        { "name": "parent_id", "type": "Optional<uint64>" },
-        { "name": "author_user_id", "type": "Optional<uint64>" },
-        { "name": "author_nickname", "type": "String" },
-        { "name": "content", "type": "String" },
-        { "name": "created_at", "type": "int64" },
-        { "name": "edited_at", "type": "Optional<int64>" },
-        { "name": "reply_count", "type": "uint32" }
+        { "name": "message_id", "type": "uint64", "description": "Unique message ID" },
+        { "name": "channel_id", "type": "uint64", "description": "Channel this message belongs to" },
+        { "name": "subchannel_id", "type": "Optional<uint64>", "description": "Subchannel ID (null if channel has no subchannels)" },
+        { "name": "parent_id", "type": "Optional<uint64>", "description": "Parent message ID (null for top-level messages)" },
+        { "name": "author_user_id", "type": "Optional<uint64>", "description": "User ID of the message author (null for anonymous users)" },
+        { "name": "author_nickname", "type": "String", "description": "Nickname of the message author" },
+        { "name": "content", "type": "String", "description": "Message text content" },
+        { "name": "created_at", "type": "int64", "description": "Unix timestamp in milliseconds (server time)" },
+        { "name": "edited_at", "type": "Optional<int64>", "description": "Unix timestamp of last edit (null if never edited)" },
+        { "name": "reply_count", "type": "uint32", "description": "Total number of replies to this message (all descendants)" }
       ]
     },
     "RegisterUser": {
@@ -272,39 +272,6 @@
       }
     },
     "discriminator": "type",
-    "field_descriptions": {
-      "FrameHeader.length": "Total size of Version + Type + Flags + Payload (excludes the length field itself)",
-      "FrameHeader.version": "Protocol version (current: 1). Both client and server must validate on every message.",
-      "FrameHeader.type": "Message type identifier (0x01-0xFF)",
-      "FrameHeader.flags": "Bit flags: bit 0=compression (LZ4), bit 1=encryption, bits 2-7 reserved",
-      "AuthRequest.nickname": "User's nickname (3-32 characters)",
-      "AuthRequest.password": "User's password (8-128 characters, hashed with bcrypt)",
-      "AuthResponse.success": "1 if authentication succeeded, 0 if failed",
-      "AuthResponse.user_id": "The authenticated user's ID (only present if success=1)",
-      "AuthResponse.nickname": "The authenticated user's registered nickname (only present if success=1)",
-      "AuthResponse.message": "Welcome message on success, error description on failure",
-      "SetNickname.nickname": "Desired nickname (3-32 characters, alphanumeric + underscore)",
-      "NicknameResponse.success": "1 if nickname was set successfully, 0 if rejected",
-      "NicknameResponse.message": "Confirmation message or error description (see notes for specific cases)",
-      "PostMessage.channel_id": "Target channel ID",
-      "PostMessage.subchannel_id": "Target subchannel ID (optional, for channels with subchannels)",
-      "PostMessage.parent_id": "Parent message ID for threaded replies (null for top-level posts)",
-      "PostMessage.content": "Message content (max 4000 characters)",
-      "MessagePosted.success": "1 if message was posted successfully, 0 if failed",
-      "MessagePosted.message_id": "The ID of the newly created message (only present if success=1)",
-      "MessagePosted.message": "Confirmation message on success, error description on failure",
-      "NewMessage.message_id": "Unique message ID",
-      "NewMessage.channel_id": "Channel this message belongs to",
-      "NewMessage.subchannel_id": "Subchannel ID (null if channel has no subchannels)",
-      "NewMessage.parent_id": "Parent message ID (null for top-level messages)",
-      "NewMessage.author_user_id": "User ID of the message author (null for anonymous users)",
-      "NewMessage.author_nickname": "Nickname of the message author",
-      "NewMessage.content": "Message text content",
-      "NewMessage.created_at": "Unix timestamp in milliseconds (server time)",
-      "NewMessage.edited_at": "Unix timestamp of last edit (null if never edited)",
-      "NewMessage.thread_depth": "Thread nesting depth (0 = root message, 1+ = nested reply)",
-      "NewMessage.reply_count": "Total number of replies to this message (all descendants)"
-    },
     "notes": [
       "All multi-byte integers use big-endian byte order.",
       "Strings are UTF-8 encoded with uint16 length prefix (max 65535 bytes).",

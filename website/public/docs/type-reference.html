@@ -138,6 +138,27 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      list-style: none;
+    }
+
+    .type-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .type-details summary::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid #6b7280;
+      border-bottom: 2px solid #6b7280;
+      transform: rotate(-45deg);
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+
+    .type-details[open] summary::before {
+      transform: rotate(45deg);
     }
 
     .type-details summary:hover {
@@ -605,6 +626,11 @@
       border-radius: 3px;
       font-size: 0.85em;
       color: #1f2937;
+    }
+
+    .fields-table td:nth-child(1) code,
+    .fields-table td:nth-child(2) code {
+      word-break: break-all;
     }
 
     .badge {
@@ -2593,7 +2619,7 @@
                     </tr>
                     <tr>
                       <td><code>kind</code></td>
-                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;byte_length_prefixed&quot; | &quot;null_terminated&quot; | &quot;signature_terminated&quot; | &quot;eof_terminated&quot; | &quot;field_referenced&quot; | &quot;variant_terminated&quot;)</code></td>
+                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;byte_length_prefixed&quot; | &quot;null_terminated&quot; | &quot;signature_terminated&quot; | &quot;eof_terminated&quot; | &quot;field_referenced&quot; | &quot;variant_terminated&quot; | &quot;computed_count&quot;)</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
@@ -2644,6 +2670,12 @@
                     </tr>
                     <tr>
                       <td><code>length_field</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>count_expr</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
                       <td></td>
@@ -3359,6 +3391,95 @@
         </div>
         <div class="type-category">
           <h3>Other Types</h3>
+          <details class="type-details" id="type-choice">
+            <summary>
+              <h4><code>choice</code></h4>
+              <span class="type-title">Choice</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Flat discriminated union where the first field of each variant type serves as the discriminator. Each variant must have a const value on its first field for auto-detection during decoding.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Protocol sections with type tags, heterogeneous record types, tagged data blocks
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Discriminator is peeked (read without consuming) to determine which variant type to decode. Each variant includes the discriminator field in its wire format.</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal &quot;choice&quot;</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Element type (always &#039;choice&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>choices</code></td>
+                      <td><code>array</code> <span class="constraints">(min length: 2)</span></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>List of possible types (must be at least 2)</td>
+                    </tr>
+                    <tr class="union-option-header">
+                      <td colspan="4"><strong>Array Element Fields:</strong></td>
+                    </tr>
+                    <tr class="union-option-field">
+                      <td><code>&nbsp;&nbsp;type</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Name of the variant type</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Human-readable description of this choice</td>
+                    </tr>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>All variant types must have a first field with a const value (the discriminator)</li>
+                  <li>All variant discriminator fields must have the same name and type</li>
+                  <li>Discriminator values must be unique across all variants</li>
+                  <li>Unlike discriminated_union, choice auto-detects the discriminator from the variant type definitions</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;data&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-choice" class="type-link">choice</a>&quot;</span>,
+    <span class="json-key">"choices"</span>: [
+      {
+        <span class="json-key">"type"</span>: <span class="json-string">&quot;SparseFloor&quot;</span>
+      },
+      {
+        <span class="json-key">"type"</span>: <span class="json-string">&quot;DenseFloor&quot;</span>
+      }
+    ]
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
           <details class="type-details" id="type-conditional_field">
             <summary>
               <h4><code>conditional_field</code></h4>
@@ -3468,6 +3589,121 @@
     <span class="json-key">"name"</span>: <span class="json-string">&quot;metadata&quot;</span>,
     <span class="json-key">"type"</span>: <span class="json-string">&quot;Metadata&quot;</span>,
     <span class="json-key">"conditional"</span>: <span class="json-string">&quot;version &gt;= 2&quot;</span>
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-padding">
+            <summary>
+              <h4><code>padding</code></h4>
+              <span class="type-title">Alignment Padding</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Inserts zero bytes to align the current stream position to a byte boundary. Commonly used in binary formats like ELF, PE, PCF fonts, etc.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Structure alignment, section padding, word-aligned access
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>0 to (align_to - 1) zero bytes, depending on current position</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal &quot;padding&quot;</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field type (always &#039;padding&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>align_to</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 1)</span></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Byte boundary to align to (must be power of 2: 2, 4, 8, etc.)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Human-readable description of this field</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>void (not represented in value)</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Padding is not stored in decoded value</li>
+                    <li>Automatically calculated during encoding</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>// not represented</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Padding is handled internally</li>
+                    <li>Not part of struct definition</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>// not represented</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Padding is handled internally</li>
+                    <li>Not part of struct definition</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="notes">
+                <h5>Notes</h5>
+                <ul class="notes-list">
+                  <li>Padding bytes are always zeros (0x00)</li>
+                  <li>Number of padding bytes = (align_to - (position % align_to)) % align_to</li>
+                  <li>If already aligned, zero bytes are inserted</li>
+                  <li>Common values: 2 (word), 4 (dword), 8 (qword), 16 (paragraph)</li>
+                </ul>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;padding&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-padding" class="type-link">padding</a>&quot;</span>,
+    <span class="json-key">"align_to"</span>: <span class="json-number">4</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Align to 4-byte boundary&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;section_padding&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-padding" class="type-link">padding</a>&quot;</span>,
+    <span class="json-key">"align_to"</span>: <span class="json-number">8</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Align to 8-byte boundary&quot;</span>
   }
 ]</code></pre>
               </div>

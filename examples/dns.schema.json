@@ -6,19 +6,19 @@
     "DNSHeader": {
       "description": "DNS message header - fixed 12 bytes at start of all DNS messages",
       "sequence": [
-        { "name": "id", "type": "uint16" },
-        { "name": "qr", "type": "bit", "size": 1 },
-        { "name": "opcode", "type": "bit", "size": 4 },
-        { "name": "aa", "type": "bit", "size": 1 },
-        { "name": "tc", "type": "bit", "size": 1 },
-        { "name": "rd", "type": "bit", "size": 1 },
-        { "name": "ra", "type": "bit", "size": 1 },
-        { "name": "z", "type": "bit", "size": 3 },
-        { "name": "rcode", "type": "bit", "size": 4 },
-        { "name": "qdcount", "type": "uint16" },
-        { "name": "ancount", "type": "uint16" },
-        { "name": "nscount", "type": "uint16" },
-        { "name": "arcount", "type": "uint16" }
+        { "name": "id", "type": "uint16", "description": "A 16-bit identifier assigned by the program that generates any kind of query. This identifier is copied into the corresponding reply and can be used by the requester to match up replies to outstanding queries." },
+        { "name": "qr", "type": "bit", "size": 1, "description": "Query/Response flag - 1 bit that specifies whether this message is a query (0) or a response (1)" },
+        { "name": "opcode", "type": "bit", "size": 4, "description": "Operation code - 4 bits specifying the kind of query. Set by originator, copied into response. 0=standard query (QUERY), 1=inverse query (IQUERY), 2=server status request (STATUS), 3-15=reserved for future use" },
+        { "name": "aa", "type": "bit", "size": 1, "description": "Authoritative Answer - 1 bit valid in responses. Specifies that the responding name server is an authority for the domain name in the question section. Note: AA corresponds to the name matching the query name, or the first owner name in the answer section" },
+        { "name": "tc", "type": "bit", "size": 1, "description": "TrunCation - 1 bit specifying that this message was truncated due to length greater than that permitted on the transmission channel (512 bytes for UDP)" },
+        { "name": "rd", "type": "bit", "size": 1, "description": "Recursion Desired - 1 bit that may be set in a query and is copied into the response. If set, it directs the name server to pursue the query recursively. Recursive query support is optional" },
+        { "name": "ra", "type": "bit", "size": 1, "description": "Recursion Available - 1 bit set or cleared in a response. Denotes whether recursive query support is available in the name server" },
+        { "name": "z", "type": "bit", "size": 3, "description": "Reserved for future use - 3 bits. Must be zero in all queries and responses" },
+        { "name": "rcode", "type": "bit", "size": 4, "description": "Response code - 4 bits set as part of responses. 0=No error, 1=Format error (unable to interpret query), 2=Server failure, 3=Name Error (domain does not exist, only from authoritative server), 4=Not Implemented (query type not supported), 5=Refused (policy reasons), 6-15=reserved" },
+        { "name": "qdcount", "type": "uint16", "description": "An unsigned 16-bit integer specifying the number of entries in the question section" },
+        { "name": "ancount", "type": "uint16", "description": "An unsigned 16-bit integer specifying the number of resource records in the answer section" },
+        { "name": "nscount", "type": "uint16", "description": "An unsigned 16-bit integer specifying the number of name server resource records in the authority records section" },
+        { "name": "arcount", "type": "uint16", "description": "An unsigned 16-bit integer specifying the number of resource records in the additional records section" }
       ]
     },
     "Label": {
@@ -50,11 +50,12 @@
         {
           "name": "qname",
           "type": "DomainName",
+          "description": "A domain name represented as a sequence of labels. Each label consists of a length octet followed by that number of octets. The domain name terminates with the zero length octet for the null label of the root. May be an odd number of octets; no padding is used",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Can be a full domain name OR a compression pointer"]
         },
-        { "name": "qtype", "type": "uint16" },
-        { "name": "qclass", "type": "uint16" }
+        { "name": "qtype", "type": "uint16", "description": "A two-octet code which specifies the type of the query. Values include all TYPE codes plus some more general codes which can match more than one type: 1=A, 2=NS, 5=CNAME, 6=SOA, 12=PTR, 15=MX, 16=TXT, 28=AAAA, 252=AXFR (zone transfer), 255=* (all records)" },
+        { "name": "qclass", "type": "uint16", "description": "A two-octet code that specifies the class of the query. 1=IN (Internet), 2=CS (CSNET, obsolete), 3=CH (CHAOS), 4=HS (Hesiod), 255=* (any class)" }
       ]
     },
     "ResourceRecord": {
@@ -63,13 +64,14 @@
         {
           "name": "name",
           "type": "DomainName",
+          "description": "An owner name - the domain name to which this resource record pertains. Can be a domain name or a compression pointer (2 bytes starting with bits 11)",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Can be a full domain name OR a compression pointer (most commonly compressed)"]
         },
-        { "name": "rtype", "type": "uint16" },
-        { "name": "rclass", "type": "uint16" },
-        { "name": "ttl", "type": "uint32" },
-        { "name": "rdlength", "type": "uint16" },
+        { "name": "rtype", "type": "uint16", "description": "Two octets containing one of the RR TYPE codes. Specifies the meaning of the data in the RDATA field. Common types: 1=A (host address), 2=NS (authoritative name server), 5=CNAME (canonical name), 6=SOA (start of authority), 12=PTR (domain name pointer), 15=MX (mail exchange), 16=TXT (text strings), 28=AAAA (IPv6 address)" },
+        { "name": "rclass", "type": "uint16", "description": "Two octets which specify the class of the data in the RDATA field. 1=IN (Internet), 3=CH (CHAOS), 4=HS (Hesiod)" },
+        { "name": "ttl", "type": "uint32", "description": "A 32-bit unsigned integer that specifies the time interval (in seconds) that the resource record may be cached before it should be discarded. Zero values mean the RR can only be used for the transaction in progress and should not be cached" },
+        { "name": "rdlength", "type": "uint16", "description": "An unsigned 16-bit integer that specifies the length in octets of the RDATA field" },
         {
           "name": "rdata",
           "type": "array",
@@ -95,7 +97,7 @@
     "A_Record": {
       "description": "A record RDATA - IPv4 address (TYPE=1, CLASS=IN)",
       "sequence": [
-        { "name": "address", "type": "uint32" }
+        { "name": "address", "type": "uint32", "description": "A 32-bit Internet address (IPv4). Hosts with multiple Internet addresses will have multiple A records" }
       ]
     },
     "NS_Record": {
@@ -104,6 +106,7 @@
         {
           "name": "nsdname",
           "type": "DomainName",
+          "description": "A domain name which specifies a host which should be authoritative for the specified class and domain",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Name server domain name - can be compressed"]
         }
@@ -115,6 +118,7 @@
         {
           "name": "cname",
           "type": "DomainName",
+          "description": "A domain name which specifies the canonical or primary name for the owner. The owner name is an alias",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Canonical domain name - can be compressed"]
         }
@@ -126,20 +130,22 @@
         {
           "name": "mname",
           "type": "DomainName",
+          "description": "The name of the primary master name server for the zone",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Primary name server - can be compressed"]
         },
         {
           "name": "rname",
           "type": "DomainName",
+          "description": "The mailbox of the person responsible for this zone",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Responsible mailbox - can be compressed"]
         },
-        { "name": "serial", "type": "uint32" },
-        { "name": "refresh", "type": "uint32" },
-        { "name": "retry", "type": "uint32" },
-        { "name": "expire", "type": "uint32" },
-        { "name": "minimum", "type": "uint32" }
+        { "name": "serial", "type": "uint32", "description": "The unsigned 32 bit version number of the original copy of the zone. Zone transfers preserve this value" },
+        { "name": "refresh", "type": "uint32", "description": "The time interval before the zone should be refreshed" },
+        { "name": "retry", "type": "uint32", "description": "The time interval that should elapse before a failed refresh should be retried" },
+        { "name": "expire", "type": "uint32", "description": "The upper limit on the time interval that can elapse before the zone is no longer authoritative" },
+        { "name": "minimum", "type": "uint32", "description": "The minimum TTL field that should be exported with any RR from this zone" }
       ]
     },
     "PTR_Record": {
@@ -148,6 +154,7 @@
         {
           "name": "ptrdname",
           "type": "DomainName",
+          "description": "A domain-name pointer which points to some other location in the domain name space",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Domain name pointer - can be compressed"]
         }
@@ -156,10 +163,11 @@
     "MX_Record": {
       "description": "MX record RDATA - mail exchange (TYPE=15)",
       "sequence": [
-        { "name": "preference", "type": "uint16" },
+        { "name": "preference", "type": "uint16", "description": "A 16-bit preference value used when multiple mail exchanges exist" },
         {
           "name": "exchange",
           "type": "DomainName",
+          "description": "A domain name which specifies a mail exchange",
           "variants": ["DomainName", "Pointer"],
           "notes": ["Mail exchange domain name - can be compressed"]
         }
@@ -179,8 +187,8 @@
     "AAAA_Record": {
       "description": "AAAA record RDATA - IPv6 address (TYPE=28, CLASS=IN)",
       "sequence": [
-        { "name": "address_high", "type": "uint64" },
-        { "name": "address_low", "type": "uint64" }
+        { "name": "address_high", "type": "uint64", "description": "High 64 bits of IPv6 address" },
+        { "name": "address_low", "type": "uint64", "description": "Low 64 bits of IPv6 address" }
       ]
     }
   },
@@ -207,45 +215,6 @@
       }
     },
     "discriminator": "qr",
-    "field_descriptions": {
-      "DNSHeader.id": "A 16-bit identifier assigned by the program that generates any kind of query. This identifier is copied into the corresponding reply and can be used by the requester to match up replies to outstanding queries.",
-      "DNSHeader.qr": "Query/Response flag - 1 bit that specifies whether this message is a query (0) or a response (1)",
-      "DNSHeader.opcode": "Operation code - 4 bits specifying the kind of query. Set by originator, copied into response. 0=standard query (QUERY), 1=inverse query (IQUERY), 2=server status request (STATUS), 3-15=reserved for future use",
-      "DNSHeader.aa": "Authoritative Answer - 1 bit valid in responses. Specifies that the responding name server is an authority for the domain name in the question section. Note: AA corresponds to the name matching the query name, or the first owner name in the answer section",
-      "DNSHeader.tc": "TrunCation - 1 bit specifying that this message was truncated due to length greater than that permitted on the transmission channel (512 bytes for UDP)",
-      "DNSHeader.rd": "Recursion Desired - 1 bit that may be set in a query and is copied into the response. If set, it directs the name server to pursue the query recursively. Recursive query support is optional",
-      "DNSHeader.ra": "Recursion Available - 1 bit set or cleared in a response. Denotes whether recursive query support is available in the name server",
-      "DNSHeader.z": "Reserved for future use - 3 bits. Must be zero in all queries and responses",
-      "DNSHeader.rcode": "Response code - 4 bits set as part of responses. 0=No error, 1=Format error (unable to interpret query), 2=Server failure, 3=Name Error (domain does not exist, only from authoritative server), 4=Not Implemented (query type not supported), 5=Refused (policy reasons), 6-15=reserved",
-      "DNSHeader.qdcount": "An unsigned 16-bit integer specifying the number of entries in the question section",
-      "DNSHeader.ancount": "An unsigned 16-bit integer specifying the number of resource records in the answer section",
-      "DNSHeader.nscount": "An unsigned 16-bit integer specifying the number of name server resource records in the authority records section",
-      "DNSHeader.arcount": "An unsigned 16-bit integer specifying the number of resource records in the additional records section",
-      "Question.qname": "A domain name represented as a sequence of labels. Each label consists of a length octet followed by that number of octets. The domain name terminates with the zero length octet for the null label of the root. May be an odd number of octets; no padding is used",
-      "Question.qtype": "A two-octet code which specifies the type of the query. Values include all TYPE codes plus some more general codes which can match more than one type: 1=A, 2=NS, 5=CNAME, 6=SOA, 12=PTR, 15=MX, 16=TXT, 28=AAAA, 252=AXFR (zone transfer), 255=* (all records)",
-      "Question.qclass": "A two-octet code that specifies the class of the query. 1=IN (Internet), 2=CS (CSNET, obsolete), 3=CH (CHAOS), 4=HS (Hesiod), 255=* (any class)",
-      "ResourceRecord.name": "An owner name - the domain name to which this resource record pertains. Can be a domain name or a compression pointer (2 bytes starting with bits 11)",
-      "ResourceRecord.rtype": "Two octets containing one of the RR TYPE codes. Specifies the meaning of the data in the RDATA field. Common types: 1=A (host address), 2=NS (authoritative name server), 5=CNAME (canonical name), 6=SOA (start of authority), 12=PTR (domain name pointer), 15=MX (mail exchange), 16=TXT (text strings), 28=AAAA (IPv6 address)",
-      "ResourceRecord.rclass": "Two octets which specify the class of the data in the RDATA field. 1=IN (Internet), 3=CH (CHAOS), 4=HS (Hesiod)",
-      "ResourceRecord.ttl": "A 32-bit unsigned integer that specifies the time interval (in seconds) that the resource record may be cached before it should be discarded. Zero values mean the RR can only be used for the transaction in progress and should not be cached",
-      "ResourceRecord.rdlength": "An unsigned 16-bit integer that specifies the length in octets of the RDATA field",
-      "A_Record.address": "A 32-bit Internet address (IPv4). Hosts with multiple Internet addresses will have multiple A records",
-      "NS_Record.nsdname": "A domain name which specifies a host which should be authoritative for the specified class and domain",
-      "CNAME_Record.cname": "A domain name which specifies the canonical or primary name for the owner. The owner name is an alias",
-      "SOA_Record.mname": "The name of the primary master name server for the zone",
-      "SOA_Record.rname": "The mailbox of the person responsible for this zone",
-      "SOA_Record.serial": "The unsigned 32 bit version number of the original copy of the zone. Zone transfers preserve this value",
-      "SOA_Record.refresh": "The time interval before the zone should be refreshed",
-      "SOA_Record.retry": "The time interval that should elapse before a failed refresh should be retried",
-      "SOA_Record.expire": "The upper limit on the time interval that can elapse before the zone is no longer authoritative",
-      "SOA_Record.minimum": "The minimum TTL field that should be exported with any RR from this zone",
-      "PTR_Record.ptrdname": "A domain-name pointer which points to some other location in the domain name space",
-      "MX_Record.preference": "A 16-bit preference value used when multiple mail exchanges exist",
-      "MX_Record.exchange": "A domain name which specifies a mail exchange",
-      "TXT_Record.data": "Arbitrary text data. Each string is prefixed by a length byte",
-      "AAAA_Record.address_high": "High 64 bits of IPv6 address",
-      "AAAA_Record.address_low": "Low 64 bits of IPv6 address"
-    },
     "notes": [
       "All multi-byte integers use big-endian byte order.",
       "DNS message compression allows repeated domain names to be represented by pointers to previous occurrences.",
