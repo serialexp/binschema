@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 (2026-02-18)
+
+### Features
+
+- implement eof_terminated arrays and add decoder Len() method
+- add validate command and improve generate error handling
+- unify struct naming and add eof_terminated array support
+- improve docs, examples, and playground link
+
+### Bug Fixes
+
+- include root README.md in npm package
+- add parse-time validation for type references and discriminators
+- fix broken doc links, domain references, and add 404 page
+
 ## 0.2.0 (2026-02-17)
 
 ### Features
