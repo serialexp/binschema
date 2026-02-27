@@ -1,0 +1,1209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BinSchema Recipes - Common Binary Format Patterns</title>
+  <meta name="description" content="Practical recipes for common binary format patterns: TLV, chunk-based formats, message framing, bit-packed flags, checksums, and more." />
+
+  <!-- OpenGraph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="BinSchema Recipes" />
+  <meta property="og:description" content="Practical recipes for common binary format patterns using BinSchema." />
+  <meta property="og:url" content="https://binschema.net/recipes.html" />
+  <meta property="og:image" content="https://binschema.net/og-image.png" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="BinSchema Recipes" />
+  <meta name="twitter:description" content="Practical recipes for common binary format patterns using BinSchema." />
+  <meta name="twitter:image" content="https://binschema.net/og-image.png" />
+
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/src/style.css" />
+  <style>
+    /* === Recipes Layout === */
+    .recipes-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: calc(100vh - 140px);
+    }
+
+    /* === Sidebar === */
+    .recipes-sidebar {
+      background: var(--bg-alt);
+      border-right: 1px solid var(--border);
+      padding: 1.5rem 0;
+      position: sticky;
+      top: 0;
+      height: calc(100vh - 140px);
+      overflow-y: auto;
+    }
+
+    .sidebar-group {
+      margin-bottom: 1.5rem;
+    }
+
+    .sidebar-group-title {
+      padding: 0 1.25rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+
+    .sidebar-link {
+      display: block;
+      padding: 0.4rem 1.25rem;
+      font-size: 0.88rem;
+      color: var(--fg);
+      border-left: 3px solid transparent;
+      transition: background 100ms ease, border-color 100ms ease;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    .sidebar-link:hover {
+      background: rgba(63, 131, 248, 0.06);
+      text-decoration: none;
+    }
+
+    .sidebar-link.active {
+      color: var(--primary);
+      border-left-color: var(--primary);
+      background: rgba(63, 131, 248, 0.08);
+      font-weight: 600;
+    }
+
+    /* === Main Content === */
+    .recipes-main {
+      padding: 2.5rem 3rem;
+      max-width: 840px;
+    }
+
+    .recipe[hidden] {
+      display: none;
+    }
+
+    .recipe h2 {
+      margin: 0 0 0.25rem;
+      font-size: 1.6rem;
+    }
+
+    .recipe-problem {
+      color: var(--muted);
+      font-size: 1.05rem;
+      margin: 0 0 2rem;
+      line-height: 1.6;
+    }
+
+    .recipe h3 {
+      font-size: 1.15rem;
+      margin: 2rem 0 0.75rem;
+      color: var(--fg);
+    }
+
+    .recipe h3:first-of-type {
+      margin-top: 0;
+    }
+
+    .recipe p {
+      line-height: 1.7;
+      margin: 0.75rem 0;
+    }
+
+    .recipe ul, .recipe ol {
+      padding-left: 1.25rem;
+      line-height: 1.7;
+    }
+
+    .recipe li {
+      margin-bottom: 0.4rem;
+    }
+
+    .recipe code:not([class*="language-"]) {
+      background: rgba(63, 131, 248, 0.08);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.88em;
+      color: var(--primary-dark);
+    }
+
+    .recipe pre {
+      margin: 1rem 0;
+    }
+
+    .recipe-features {
+      margin-top: 1.5rem;
+      padding: 1.25rem;
+      background: rgba(63, 131, 248, 0.04);
+      border: 1px solid rgba(63, 131, 248, 0.15);
+      border-radius: var(--radius);
+    }
+
+    .recipe-features h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.95rem;
+      color: var(--primary-dark);
+    }
+
+    .recipe-features ul {
+      margin: 0;
+      padding-left: 1.25rem;
+    }
+
+    .recipe-features li {
+      font-size: 0.93rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .recipe-tips {
+      margin-top: 1.25rem;
+      padding: 1.25rem;
+      background: rgba(124, 58, 237, 0.04);
+      border: 1px solid rgba(124, 58, 237, 0.12);
+      border-radius: var(--radius);
+    }
+
+    .recipe-tips h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.95rem;
+      color: #7c3aed;
+    }
+
+    .recipe-tips ul {
+      margin: 0;
+      padding-left: 1.25rem;
+    }
+
+    .recipe-tips li {
+      font-size: 0.93rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .recipe-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .recipe-tag {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      background: rgba(124, 58, 237, 0.08);
+      color: #7c3aed;
+      font-size: 0.78rem;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    /* === Responsive === */
+    @media (max-width: 768px) {
+      .recipes-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .recipes-sidebar {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: 1rem 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+        overflow-x: auto;
+      }
+
+      .sidebar-group {
+        display: contents;
+        margin: 0;
+      }
+
+      .sidebar-group-title {
+        display: none;
+      }
+
+      .sidebar-link {
+        border-left: none;
+        border-bottom: 2px solid transparent;
+        padding: 0.4rem 0.8rem;
+        font-size: 0.82rem;
+        white-space: nowrap;
+      }
+
+      .sidebar-link.active {
+        border-left: none;
+        border-bottom-color: var(--primary);
+      }
+
+      .recipes-main {
+        padding: 1.5rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <div class="branding">
+        <a href="/" class="logo">BinSchema</a>
+        <p class="tagline">Recipes &amp; Common Patterns</p>
+      </div>
+      <nav class="site-nav">
+        <a href="/">Home</a>
+        <a href="/#schema-reference">Schema Reference</a>
+        <a href="/#examples">Examples</a>
+        <a href="/playground.html">Playground</a>
+        <a href="https://github.com/serialexp/binschema" target="_blank" rel="noreferrer">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="recipes-layout">
+    <nav class="recipes-sidebar" id="sidebar">
+      <div class="sidebar-group">
+        <div class="sidebar-group-title">Core</div>
+        <a class="sidebar-link" href="#tlv">TLV (Tag-Length-Value)</a>
+        <a class="sidebar-link" href="#chunks">Chunk-Based Formats</a>
+        <a class="sidebar-link" href="#message-framing">Message Framing</a>
+        <a class="sidebar-link" href="#bit-flags">Bit-Packed Flags</a>
+        <a class="sidebar-link" href="#length-prefixed">Length-Prefixed Containers</a>
+      </div>
+      <div class="sidebar-group">
+        <div class="sidebar-group-title">Intermediate</div>
+        <a class="sidebar-link" href="#strings">String Handling</a>
+        <a class="sidebar-link" href="#conditional">Conditional &amp; Optional Fields</a>
+        <a class="sidebar-link" href="#checksums">Checksums &amp; Magic Numbers</a>
+      </div>
+      <div class="sidebar-group">
+        <div class="sidebar-group-title">Advanced</div>
+        <a class="sidebar-link" href="#random-access">Random Access &amp; Offsets</a>
+        <a class="sidebar-link" href="#varlength">Variable-Length Integers</a>
+        <a class="sidebar-link" href="#unknown-handling">Graceful Unknown Handling</a>
+        <a class="sidebar-link" href="#cross-references">Cross-Struct References</a>
+      </div>
+    </nav>
+
+    <main class="recipes-main" id="content">
+
+      <!-- ========== 1. TLV ========== -->
+      <article class="recipe" id="recipe-tlv" hidden>
+        <h2>TLV (Tag-Length-Value)</h2>
+        <p class="recipe-problem">Parse tag-length-value encoded data where each element is identified by a type tag, followed by a length, then the value payload. Used in ASN.1/DER, custom protocols, and many network formats.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">const</span>
+          <span class="recipe-tag">length_of</span>
+          <span class="recipe-tag">discriminated_union</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "types": {
+    "TextPayload": {
+      "sequence": [
+        { "name": "text", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint16", "encoding": "utf8" }
+      ]
+    },
+    "BinaryPayload": {
+      "sequence": [
+        { "name": "data", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "uint8" } }
+      ]
+    },
+    "TLVRecord": {
+      "sequence": [
+        { "name": "tag", "type": "uint8" },
+        { "name": "length", "type": "uint16", "endianness": "big_endian",
+          "computed": { "type": "length_of", "target": "value" } },
+        { "name": "value", "type": "discriminated_union",
+          "discriminator": { "field": "tag" },
+          "byte_budget": { "field": "length" },
+          "variants": [
+            { "when": "value === 0x01", "type": "TextPayload" },
+            { "when": "value === 0x02", "type": "BinaryPayload" },
+            { "type": "BinaryPayload" }
+          ]
+        }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>The <code>tag</code> field identifies the record type. The <code>length</code> field is computed automatically during encoding &mdash; it calculates the byte size of <code>value</code>. During decoding, <code>byte_budget</code> limits the variant decoder to exactly <code>length</code> bytes, so even if a variant reads fewer bytes than expected, the decoder advances correctly.</p>
+        <p>The <code>discriminated_union</code> dispatches on the previously decoded <code>tag</code> field. The last variant (no <code>when</code>) acts as a fallback for unknown tag values.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>computed.length_of</code> &mdash; auto-calculates byte length of the value payload during encoding</li>
+            <li><code>discriminated_union</code> with <code>field</code> discriminator &mdash; dispatches based on previously decoded tag</li>
+            <li><code>byte_budget</code> &mdash; limits variant decoding to exactly <code>length</code> bytes</li>
+            <li>Fallback variant (no <code>when</code>) &mdash; gracefully handles unknown tag types</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Use <code>byte_budget</code> whenever the length field describes the payload size &mdash; it makes the decoder resilient to incomplete variant parsing.</li>
+            <li>For ASN.1 DER, replace <code>uint16</code> with <code>varlength</code> encoding <code>"der"</code> and use <code>from_after_field</code> instead of <code>target</code>.</li>
+            <li>A stream of TLV records can be modeled as an <code>eof_terminated</code> array of <code>TLVRecord</code>.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 2. Chunks ========== -->
+      <article class="recipe" id="recipe-chunks" hidden>
+        <h2>Chunk-Based Formats (RIFF/IFF)</h2>
+        <p class="recipe-problem">Parse formats built from named chunks, each with a string identifier and size field. Used by RIFF (WAV, AVI), IFF, and voxel formats like MagicaVoxel VOX.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">string const</span>
+          <span class="recipe-tag">byte_budget</span>
+          <span class="recipe-tag">fallback variant</span>
+          <span class="recipe-tag">eof_terminated</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "config": { "endianness": "little_endian" },
+  "types": {
+    "SizeData": {
+      "sequence": [
+        { "name": "x", "type": "uint32" },
+        { "name": "y", "type": "uint32" },
+        { "name": "z", "type": "uint32" }
+      ]
+    },
+    "RawBytes": {
+      "sequence": [
+        { "name": "data", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "uint8" } }
+      ]
+    },
+    "Chunk": {
+      "sequence": [
+        { "name": "chunk_id", "type": "string", "kind": "fixed",
+          "length": 4, "encoding": "ascii" },
+        { "name": "content_size", "type": "uint32",
+          "computed": { "type": "length_of", "target": "content" } },
+        { "name": "content", "type": "discriminated_union",
+          "discriminator": { "field": "chunk_id" },
+          "byte_budget": { "field": "content_size" },
+          "variants": [
+            { "when": "value == 'SIZE'", "type": "SizeData" },
+            { "type": "RawBytes" }
+          ]
+        }
+      ]
+    },
+    "File": {
+      "sequence": [
+        { "name": "magic", "type": "string", "kind": "fixed",
+          "length": 4, "encoding": "ascii", "const": "VOX " },
+        { "name": "version", "type": "uint32" },
+        { "name": "chunks", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "Chunk" } }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>Each chunk starts with a 4-byte ASCII identifier (<code>chunk_id</code>) and a <code>content_size</code> that declares how many bytes follow. The <code>discriminated_union</code> uses <code>chunk_id</code> as the discriminator with string literal conditions like <code>value == 'SIZE'</code>.</p>
+        <p>The <code>byte_budget</code> creates a sub-slice of exactly <code>content_size</code> bytes. Known chunks (like <code>SizeData</code>) decode their typed fields from the sub-slice. Unknown chunks fall back to <code>RawBytes</code>, which uses an <code>eof_terminated</code> array &mdash; it reads until the sub-slice is exhausted, naturally stopping at the byte budget boundary.</p>
+        <p>The file header uses <code>const: "VOX "</code> on a fixed-length string to validate the magic identifier.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>string const</code> &mdash; fixed-length string with a constant value for magic numbers and identifiers</li>
+            <li>String literal conditions (<code>value == 'SIZE'</code>) &mdash; dispatch on ASCII chunk IDs</li>
+            <li><code>byte_budget</code> &mdash; safe sub-slice decoding bounded by content size</li>
+            <li>Fallback variant with <code>eof_terminated</code> &mdash; capture raw bytes for unknown chunks</li>
+            <li><code>length_of</code> &mdash; auto-compute content size during encoding</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>RIFF formats typically use little-endian byte order. IFF formats use big-endian.</li>
+            <li>Some chunk formats require 2-byte alignment padding after odd-length chunks &mdash; add a <code>padding</code> field with <code>align_to: 2</code> after the content.</li>
+            <li>For nested chunk containers (RIFF's "LIST" chunk), the content variant can itself contain an <code>eof_terminated</code> array of sub-chunks.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 3. Message Framing ========== -->
+      <article class="recipe" id="recipe-message-framing" hidden>
+        <h2>Message Framing</h2>
+        <p class="recipe-problem">Parse network protocols where a fixed header contains a message type and length, followed by a variable-length payload that depends on the type. Used in virtually every network protocol.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">discriminated_union</span>
+          <span class="recipe-tag">length_of</span>
+          <span class="recipe-tag">from_after_field</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "config": { "endianness": "big_endian" },
+  "types": {
+    "LoginRequest": {
+      "sequence": [
+        { "name": "username", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint8", "encoding": "utf8" },
+        { "name": "token", "type": "array", "kind": "fixed", "length": 32,
+          "items": { "type": "uint8" } }
+      ]
+    },
+    "Ping": {
+      "sequence": [
+        { "name": "timestamp", "type": "uint64" }
+      ]
+    },
+    "ChatMessage": {
+      "sequence": [
+        { "name": "channel", "type": "uint16" },
+        { "name": "text", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint16", "encoding": "utf8" }
+      ]
+    },
+    "Message": {
+      "sequence": [
+        { "name": "msg_type", "type": "uint8" },
+        { "name": "length", "type": "uint16",
+          "computed": { "type": "length_of", "from_after_field": "length" } },
+        { "name": "payload", "type": "discriminated_union",
+          "discriminator": { "field": "msg_type" },
+          "variants": [
+            { "when": "value === 0x01", "type": "LoginRequest" },
+            { "when": "value === 0x02", "type": "Ping" },
+            { "when": "value === 0x03", "type": "ChatMessage" }
+          ]
+        }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>The <code>Message</code> struct has a fixed 3-byte header: a <code>msg_type</code> byte and a <code>length</code> field. The <code>length</code> uses <code>from_after_field: "length"</code>, meaning it measures the byte size of everything that follows the length field itself &mdash; just the payload.</p>
+        <p>The <code>discriminated_union</code> uses the previously decoded <code>msg_type</code> to select the right payload type. Each variant condition checks the discriminator value.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>from_after_field</code> &mdash; length field measures "everything after me" (common in protocol headers)</li>
+            <li>Field-based <code>discriminator</code> &mdash; dispatch on a previously decoded header field</li>
+            <li>Multiple variant types &mdash; each message type has its own structure</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>For protocols where the length includes the header, use <code>target</code> pointing to the entire payload instead of <code>from_after_field</code>.</li>
+            <li>Add <code>byte_budget: { "field": "length" }</code> to make decoding resilient &mdash; useful when messages may have trailing padding or extensions.</li>
+            <li>A stream of messages is naturally an <code>eof_terminated</code> or <code>length_prefixed</code> array of <code>Message</code>.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 4. Bit-Packed Flags ========== -->
+      <article class="recipe" id="recipe-bit-flags" hidden>
+        <h2>Bit-Packed Flags</h2>
+        <p class="recipe-problem">Pack multiple boolean flags, small enumerations, or opcodes into one or two bytes. Used in protocol headers (DNS, TCP), hardware registers, and compact binary formats.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">bitfield</span>
+          <span class="recipe-tag">bit_order</span>
+          <span class="recipe-tag">conditional</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "types": {
+    "DNSFlags": {
+      "sequence": [
+        { "name": "flags", "type": "bitfield", "size": 16,
+          "bit_order": "msb_first",
+          "fields": [
+            { "name": "qr", "offset": 0, "size": 1 },
+            { "name": "opcode", "offset": 1, "size": 4 },
+            { "name": "aa", "offset": 5, "size": 1 },
+            { "name": "tc", "offset": 6, "size": 1 },
+            { "name": "rd", "offset": 7, "size": 1 },
+            { "name": "ra", "offset": 8, "size": 1 },
+            { "name": "z", "offset": 9, "size": 3 },
+            { "name": "rcode", "offset": 12, "size": 4 }
+          ]
+        }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>A <code>bitfield</code> packs multiple named sub-fields into a fixed number of bits. Each sub-field has an explicit bit <code>offset</code> and <code>size</code>. The <code>bit_order</code> determines whether bits are numbered from the most significant bit (<code>msb_first</code>) or least significant bit (<code>lsb_first</code>).</p>
+        <p>The generated code provides each sub-field as a named property. In TypeScript, <code>flags.qr</code> gives you the 1-bit QR flag; <code>flags.opcode</code> gives the 4-bit opcode.</p>
+        <p>Sub-fields can be referenced in conditions elsewhere: <code>"conditional": "flags.opcode == 0"</code> would make a field present only for standard queries.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>bitfield</code> &mdash; pack multiple named fields into a fixed bit container</li>
+            <li><code>bit_order</code> &mdash; MSB-first (network protocols) or LSB-first (hardware registers)</li>
+            <li>Dot-notation access (<code>flags.qr</code>) in conditions and discriminators</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Use <code>msb_first</code> for network protocols (DNS, TCP headers). Use <code>lsb_first</code> for hardware registers and x86-style formats.</li>
+            <li>Bitfield <code>size</code> must be a multiple of 8 (byte-aligned). Common sizes: 8, 16, 32.</li>
+            <li>For a single bit flag that doesn't need grouping, use <code>"type": "bit", "size": 1</code> directly.</li>
+            <li>Bitfield sub-fields can be used as discriminated union discriminators: <code>"discriminator": { "field": "flags.opcode" }</code>.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 5. Length-Prefixed Containers ========== -->
+      <article class="recipe" id="recipe-length-prefixed" hidden>
+        <h2>Length-Prefixed Containers</h2>
+        <p class="recipe-problem">Model arrays where the element count or total byte length is given by a preceding field. The two most common array patterns in binary formats.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">count_of</span>
+          <span class="recipe-tag">field_referenced</span>
+          <span class="recipe-tag">byte_length_prefixed</span>
+        </div>
+
+        <h3>Count-Prefixed (number of elements)</h3>
+<pre><code class="language-json">{
+  "types": {
+    "Record": {
+      "sequence": [
+        { "name": "id", "type": "uint16" },
+        { "name": "value", "type": "uint32" }
+      ]
+    },
+    "RecordList": {
+      "sequence": [
+        { "name": "count", "type": "uint16",
+          "computed": { "type": "count_of", "target": "records" } },
+        { "name": "records", "type": "array", "kind": "field_referenced",
+          "length_field": "count", "items": { "type": "Record" } }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>Byte-Length-Prefixed (total byte size)</h3>
+<pre><code class="language-json">{
+  "types": {
+    "Event": {
+      "sequence": [
+        { "name": "type", "type": "uint8" },
+        { "name": "data", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint8", "encoding": "utf8" }
+      ]
+    },
+    "EventBlock": {
+      "sequence": [
+        { "name": "block_size", "type": "uint32",
+          "computed": { "type": "length_of", "target": "events" } },
+        { "name": "events", "type": "array",
+          "kind": "byte_length_prefixed", "length_type": "uint32",
+          "items": { "type": "Event" } }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p><strong>Count-prefixed:</strong> The <code>count</code> field stores the number of elements. The array uses <code>field_referenced</code> to read exactly that many items. During encoding, <code>count_of</code> auto-computes the element count.</p>
+        <p><strong>Byte-length-prefixed:</strong> The prefix stores the total byte size of all elements combined. The array uses <code>byte_length_prefixed</code> and reads elements until the byte budget is consumed. This works with variable-size elements.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>count_of</code> &mdash; auto-compute array element count during encoding</li>
+            <li><code>length_of</code> &mdash; auto-compute total byte length during encoding</li>
+            <li><code>field_referenced</code> array &mdash; element count from a prior field</li>
+            <li><code>byte_length_prefixed</code> array &mdash; reads elements until byte count reached</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Use count-prefixed when all elements are the same fixed size. Use byte-length-prefixed when elements have variable sizes.</li>
+            <li>For inline count (no separate field), use <code>"kind": "length_prefixed"</code> with <code>"length_type": "uint16"</code> &mdash; the count prefix is built into the array.</li>
+            <li>The <code>length_field</code> supports dot notation for nested references: <code>"length_field": "header.num_records"</code>.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 6. String Handling ========== -->
+      <article class="recipe" id="recipe-strings" hidden>
+        <h2>String Handling</h2>
+        <p class="recipe-problem">Binary formats represent strings in different ways: fixed-width fields, length-prefixed, null-terminated, or sized by another field. Choose the right kind for your format.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">string kinds</span>
+          <span class="recipe-tag">encoding</span>
+          <span class="recipe-tag">const</span>
+        </div>
+
+        <h3>Fixed-Length (padded with zeros)</h3>
+<pre><code class="language-json">{ "name": "magic", "type": "string", "kind": "fixed",
+  "length": 4, "encoding": "ascii", "const": "RIFF" }</code></pre>
+        <p>Reads exactly <code>length</code> bytes. Shorter strings are zero-padded during encoding. Use <code>const</code> for magic identifiers that must match a specific value.</p>
+
+        <h3>Length-Prefixed</h3>
+<pre><code class="language-json">{ "name": "username", "type": "string", "kind": "length_prefixed",
+  "length_type": "uint16", "encoding": "utf8" }</code></pre>
+        <p>Writes the string's byte length as a prefix, then the string bytes. The most common pattern for variable-length text.</p>
+
+        <h3>Null-Terminated</h3>
+<pre><code class="language-json">{ "name": "label", "type": "string", "kind": "null_terminated",
+  "encoding": "ascii" }</code></pre>
+        <p>Reads bytes until a <code>0x00</code> byte. Common in C-style formats and DNS labels.</p>
+
+        <h3>Field-Referenced</h3>
+<pre><code class="language-json">{ "name": "text_length", "type": "uint16" },
+{ "name": "text", "type": "string", "kind": "field_referenced",
+  "length_field": "text_length", "encoding": "utf8" }</code></pre>
+        <p>String length comes from a separate, previously decoded field. Use when the length field is shared or at a different position from the string.</p>
+
+        <h3>Encodings</h3>
+        <ul>
+          <li><code>"utf8"</code> (default) &mdash; multi-byte Unicode. Use for modern text data.</li>
+          <li><code>"ascii"</code> &mdash; 7-bit ASCII, one byte per character. Use for identifiers and tags.</li>
+          <li><code>"latin1"</code> &mdash; ISO-8859-1, one byte per character. Use for legacy Western European text.</li>
+        </ul>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li>Four string kinds: <code>fixed</code>, <code>length_prefixed</code>, <code>null_terminated</code>, <code>field_referenced</code></li>
+            <li><code>const</code> on fixed strings &mdash; validates magic identifiers during decoding</li>
+            <li><code>encoding</code> &mdash; controls byte representation (UTF-8, ASCII, Latin-1)</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Fixed-length ASCII strings with <code>const</code> are ideal as discriminated union conditions: <code>value == 'SIZE'</code>.</li>
+            <li>For UTF-8 strings, the byte length may differ from the character count. Length-prefixed stores byte length, not character count.</li>
+            <li>Null-terminated strings cannot contain null bytes. If your text might contain nulls, use length-prefixed instead.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 7. Conditional & Optional ========== -->
+      <article class="recipe" id="recipe-conditional" hidden>
+        <h2>Conditional &amp; Optional Fields</h2>
+        <p class="recipe-problem">Include fields only when certain conditions are met, or mark fields as optionally present with a presence indicator on the wire.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">conditional</span>
+          <span class="recipe-tag">optional</span>
+          <span class="recipe-tag">bitfield conditions</span>
+        </div>
+
+        <h3>Conditional (no wire overhead)</h3>
+<pre><code class="language-json">{
+  "types": {
+    "Packet": {
+      "sequence": [
+        { "name": "version", "type": "uint8" },
+        { "name": "flags", "type": "bitfield", "size": 8,
+          "bit_order": "msb_first",
+          "fields": [
+            { "name": "has_timestamp", "offset": 0, "size": 1 },
+            { "name": "has_priority", "offset": 1, "size": 1 },
+            { "name": "reserved", "offset": 2, "size": 6 }
+          ]
+        },
+        { "name": "timestamp", "type": "uint64",
+          "conditional": "flags.has_timestamp == 1" },
+        { "name": "priority", "type": "uint8",
+          "conditional": "flags.has_priority == 1" },
+        { "name": "payload", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "uint8" } }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>Optional (with presence byte)</h3>
+<pre><code class="language-json">{
+  "types": {
+    "UserProfile": {
+      "sequence": [
+        { "name": "name", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint8", "encoding": "utf8" },
+        { "name": "nickname", "type": "optional",
+          "value_type": "string", "presence_type": "uint8" },
+        { "name": "age", "type": "optional",
+          "value_type": "uint8", "presence_type": "uint8" }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p><strong>Conditional:</strong> The field exists on the wire only when the condition is true. No presence indicator is written &mdash; the decoder evaluates the condition from previously decoded fields. This adds zero overhead. Conditions can reference bitfield sub-fields using dot notation.</p>
+        <p><strong>Optional:</strong> A 1-byte (or 1-bit) presence indicator is always written. <code>0</code> means absent, <code>1</code> means the value follows. Use this when there's no existing flag or condition to key off of.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>conditional</code> &mdash; field present only when expression is true, no wire overhead</li>
+            <li><code>optional</code> &mdash; presence byte + value pattern, self-describing on the wire</li>
+            <li>Dot-notation conditions (<code>flags.has_timestamp</code>) &mdash; reference bitfield sub-fields</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Prefer <code>conditional</code> when there's already a flags field or version number that determines presence &mdash; no extra bytes on the wire.</li>
+            <li>Use <code>optional</code> when the field is independently present/absent with no external indicator.</li>
+            <li>Conditional fields produce <code>T | undefined</code> in TypeScript, <code>*T</code> (pointer) in Go, <code>Option&lt;T&gt;</code> in Rust.</li>
+            <li>Use <code>"presence_type": "bit"</code> instead of <code>"uint8"</code> for a 1-bit presence flag when packing multiple optionals tightly.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 8. Checksums & Magic Numbers ========== -->
+      <article class="recipe" id="recipe-checksums" hidden>
+        <h2>Checksums &amp; Magic Numbers</h2>
+        <p class="recipe-problem">Validate file integrity with CRC32 checksums and identify file types with magic byte signatures. Used in ZIP, PNG, ELF, and nearly every file format.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">crc32_of</span>
+          <span class="recipe-tag">const arrays</span>
+          <span class="recipe-tag">const integers</span>
+        </div>
+
+        <h3>Magic Number Signature</h3>
+<pre><code class="language-json">{
+  "types": {
+    "PNGFile": {
+      "sequence": [
+        { "name": "signature", "type": "array", "kind": "fixed",
+          "length": 8, "items": { "type": "uint8" },
+          "const": [137, 80, 78, 71, 13, 10, 26, 10] },
+        { "name": "chunks", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "Chunk" } }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>CRC32 Checksum</h3>
+<pre><code class="language-json">{
+  "types": {
+    "DataBlock": {
+      "sequence": [
+        { "name": "length", "type": "uint32",
+          "computed": { "type": "length_of", "target": "body" } },
+        { "name": "body", "type": "array", "kind": "field_referenced",
+          "length_field": "length", "items": { "type": "uint8" } },
+        { "name": "checksum", "type": "uint32",
+          "computed": { "type": "crc32_of", "target": "body" } }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p><strong>Magic numbers:</strong> A fixed-length array with <code>const</code> writes the exact bytes during encoding and validates them during decoding. If the bytes don't match, decoding fails with an error.</p>
+        <p><strong>CRC32:</strong> The <code>crc32_of</code> computed field auto-calculates a CRC32 checksum of the target field during encoding. During decoding, the checksum is read from the wire and can be compared against the decoded data for validation.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>const</code> on fixed arrays &mdash; magic byte signatures validated during decoding</li>
+            <li><code>const</code> on integers &mdash; fixed tag values (e.g., <code>{ "type": "uint32", "const": 67324752 }</code> for ZIP signatures)</li>
+            <li><code>crc32_of</code> &mdash; auto-computed CRC32 checksum of a byte array</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>The <code>crc32_of</code> target must be an array of <code>uint8</code> (byte array).</li>
+            <li>For PNG chunks, the CRC covers the chunk type + data. Model both as fields and use <code>crc32_of</code> targeting the combined range.</li>
+            <li>Integer <code>const</code> fields are also used as discriminators in <code>choice</code> types &mdash; each variant's first field has a unique const value.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 9. Random Access ========== -->
+      <article class="recipe" id="recipe-random-access" hidden>
+        <h2>Random Access &amp; Offset Tables</h2>
+        <p class="recipe-problem">Parse file formats with a table of contents or directory that stores byte offsets to data located elsewhere in the file. Used in ZIP, ELF, PCF fonts, and database files.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">position_of</span>
+          <span class="recipe-tag">instances</span>
+          <span class="recipe-tag">seekable</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "config": { "endianness": "little_endian" },
+  "types": {
+    "TableEntry": {
+      "sequence": [
+        { "name": "type", "type": "uint32" },
+        { "name": "offset", "type": "uint32" },
+        { "name": "size", "type": "uint32" }
+      ]
+    },
+    "DataBlock": {
+      "sequence": [
+        { "name": "data", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "uint8" } }
+      ]
+    },
+    "FileFormat": {
+      "sequence": [
+        { "name": "magic", "type": "uint32", "const": 1346651731 },
+        { "name": "table_count", "type": "uint32",
+          "computed": { "type": "count_of", "target": "table" } },
+        { "name": "table", "type": "array", "kind": "field_referenced",
+          "length_field": "table_count",
+          "items": { "type": "TableEntry" } }
+      ],
+      "instances": [
+        { "name": "first_block", "type": "DataBlock",
+          "position": "table[0].offset", "size": "table[0].size" }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>The file has a sequential header with a table of entries. Each entry stores an <code>offset</code> (byte position) and <code>size</code>. The <code>instances</code> section defines fields that are decoded by seeking to the given position.</p>
+        <p>Instances are lazy &mdash; they're only decoded when accessed. In TypeScript, they become getters; in Go, methods with <code>sync.Once</code> for caching. This avoids reading data you don't need.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>instances</code> &mdash; fields decoded by seeking to an absolute byte position</li>
+            <li><code>position</code> &mdash; can be a number, field reference, or expression</li>
+            <li><code>size</code> &mdash; optional hint for the instance's byte range</li>
+            <li>Lazy evaluation &mdash; instances only decode when accessed</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Instances require seekable input. Use <code>SeekableBitStreamDecoder</code> (TypeScript) instead of the regular streaming decoder.</li>
+            <li>Negative position values count from the end of the file (e.g., <code>"position": -22</code> for ZIP end-of-central-directory).</li>
+            <li>Instance <code>type</code> can be an inline discriminated union for tables that point to different types depending on a flag.</li>
+            <li>Use <code>position_of</code> computed fields to auto-calculate offset values during encoding.</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 10. Variable-Length Integers ========== -->
+      <article class="recipe" id="recipe-varlength" hidden>
+        <h2>Variable-Length Integers</h2>
+        <p class="recipe-problem">Encode integers using a variable number of bytes, using fewer bytes for small values. Different encodings suit different domains.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">varlength</span>
+          <span class="recipe-tag">der</span>
+          <span class="recipe-tag">leb128</span>
+          <span class="recipe-tag">vlq</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "types": {
+    "DERContainer": {
+      "description": "ASN.1 DER tag-length-value",
+      "sequence": [
+        { "name": "tag", "type": "uint8" },
+        { "name": "length", "type": "varlength", "encoding": "der",
+          "computed": { "type": "length_of", "from_after_field": "length" } },
+        { "name": "value", "type": "array", "kind": "field_referenced",
+          "length_field": "length", "items": { "type": "uint8" } }
+      ]
+    },
+    "MIDIEvent": {
+      "description": "MIDI variable-length delta time",
+      "sequence": [
+        { "name": "delta_time", "type": "varlength", "encoding": "vlq" },
+        { "name": "status", "type": "uint8" },
+        { "name": "data1", "type": "uint8" },
+        { "name": "data2", "type": "uint8" }
+      ]
+    },
+    "ProtobufField": {
+      "description": "Protocol Buffers varint",
+      "sequence": [
+        { "name": "field_tag", "type": "varlength", "encoding": "leb128" },
+        { "name": "value", "type": "varlength", "encoding": "leb128" }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>Encodings</h3>
+        <ul>
+          <li><strong><code>der</code></strong> &mdash; ASN.1 DER/BER length encoding. Short form (0-127 = 1 byte), long form (1 + N bytes). Used by Kerberos, X.509, TLS, LDAP, SNMP.</li>
+          <li><strong><code>leb128</code></strong> &mdash; Little Endian Base 128. 7 bits per byte, LSB first. Used by Protocol Buffers, WebAssembly, DWARF debug info.</li>
+          <li><strong><code>vlq</code></strong> &mdash; Variable Length Quantity. 7 bits per byte, MSB first. Used by MIDI files, Git packfiles.</li>
+          <li><strong><code>ebml</code></strong> &mdash; EBML variable-size integer. Leading zeros indicate width. Used by Matroska/WebM containers.</li>
+        </ul>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>varlength</code> type with <code>encoding</code> &mdash; select the right variable-length scheme</li>
+            <li><code>max_bytes</code> (optional) &mdash; limit the maximum encoded size (1-8 bytes)</li>
+            <li>Works with <code>computed</code> fields &mdash; combine with <code>length_of</code> for auto-computed lengths</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>DER is the standard for certificate and security protocols (X.509, Kerberos, TLS handshakes).</li>
+            <li>LEB128 is the best choice for general-purpose compact integers (protobuf, WASM).</li>
+            <li>VLQ is MSB-first &mdash; larger values sort correctly in byte order. Used where sort order matters.</li>
+            <li>Use <code>max_bytes</code> to catch malformed data early (e.g., <code>"max_bytes": 4</code> limits to 28-bit values in VLQ).</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 11. Unknown Handling ========== -->
+      <article class="recipe" id="recipe-unknown-handling" hidden>
+        <h2>Graceful Unknown Handling</h2>
+        <p class="recipe-problem">Parse known types with full structure while safely skipping unknown or future types without crashing. Essential for forwards-compatible formats.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">fallback variant</span>
+          <span class="recipe-tag">byte_budget</span>
+          <span class="recipe-tag">eof_terminated</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "config": { "endianness": "big_endian" },
+  "types": {
+    "KnownPayloadA": {
+      "sequence": [
+        { "name": "x", "type": "uint16" },
+        { "name": "y", "type": "uint16" }
+      ]
+    },
+    "UnknownPayload": {
+      "sequence": [
+        { "name": "raw", "type": "array", "kind": "eof_terminated",
+          "items": { "type": "uint8" } }
+      ]
+    },
+    "Extension": {
+      "sequence": [
+        { "name": "ext_type", "type": "uint16" },
+        { "name": "ext_length", "type": "uint32",
+          "computed": { "type": "length_of", "target": "ext_data" } },
+        { "name": "ext_data", "type": "discriminated_union",
+          "discriminator": { "field": "ext_type" },
+          "byte_budget": { "field": "ext_length" },
+          "variants": [
+            { "when": "value === 0x0001", "type": "KnownPayloadA" },
+            { "type": "UnknownPayload" }
+          ]
+        }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>The key is combining three features:</p>
+        <ol>
+          <li><strong>Fallback variant</strong> (no <code>when</code> condition) &mdash; catches any discriminator value not matched by earlier variants.</li>
+          <li><strong><code>byte_budget</code></strong> &mdash; creates a sub-slice so the decoder advances by exactly <code>ext_length</code> bytes regardless of what the variant reads.</li>
+          <li><strong><code>eof_terminated</code> array</strong> in the fallback &mdash; reads all remaining bytes in the sub-slice, capturing raw data for round-tripping or debugging.</li>
+        </ol>
+        <p>When a new extension type is added to the format, old parsers using this schema will capture the new type's raw bytes instead of failing. The data can be round-tripped (re-encoded) without loss.</p>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li>Fallback variant (no <code>when</code>) &mdash; must be the last variant in the list</li>
+            <li><code>byte_budget</code> &mdash; ensures decoder advances correctly even with unknown data</li>
+            <li><code>eof_terminated</code> array &mdash; reads until sub-slice EOF, capturing all raw bytes</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>The fallback variant must always be last. BinSchema evaluates <code>when</code> conditions in order and falls through to the last variant.</li>
+            <li>Without <code>byte_budget</code>, a fallback <code>eof_terminated</code> would read until the end of the entire stream, not just the current record.</li>
+            <li>This pattern is essential for any format that may be extended in the future (plugin systems, versioned protocols).</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- ========== 12. Cross-Struct References ========== -->
+      <article class="recipe" id="recipe-cross-references" hidden>
+        <h2>Cross-Struct References</h2>
+        <p class="recipe-problem">Handle formats where metadata about one section lives in a different section. For example, ZIP's central directory stores sizes and offsets for local file entries scattered throughout the archive.</p>
+        <div class="recipe-tags">
+          <span class="recipe-tag">parent references</span>
+          <span class="recipe-tag">array selectors</span>
+          <span class="recipe-tag">sum_of_sizes</span>
+        </div>
+
+        <h3>Schema</h3>
+<pre><code class="language-json">{
+  "config": { "endianness": "little_endian" },
+  "types": {
+    "LocalFile": {
+      "sequence": [
+        { "name": "signature", "type": "uint32", "const": 67324752 },
+        { "name": "name", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint16", "encoding": "utf8" },
+        { "name": "data", "type": "array", "kind": "length_prefixed",
+          "length_type": "uint32", "items": { "type": "uint8" } }
+      ]
+    },
+    "CentralDirEntry": {
+      "sequence": [
+        { "name": "signature", "type": "uint32", "const": 33639248 },
+        { "name": "name", "type": "string", "kind": "length_prefixed",
+          "length_type": "uint16", "encoding": "utf8" },
+        { "name": "local_offset", "type": "uint32",
+          "computed": { "type": "position_of",
+            "target": "../sections[corresponding&lt;LocalFile&gt;]" } }
+      ]
+    },
+    "EndOfCentralDir": {
+      "sequence": [
+        { "name": "signature", "type": "uint32", "const": 101010256 },
+        { "name": "dir_size", "type": "uint32",
+          "computed": { "type": "sum_of_sizes",
+            "target": "../sections",
+            "element_type": "CentralDirEntry" } },
+        { "name": "dir_offset", "type": "uint32",
+          "computed": { "type": "position_of",
+            "target": "../sections[first&lt;CentralDirEntry&gt;]" } }
+      ]
+    },
+    "Archive": {
+      "sequence": [
+        { "name": "sections", "type": "array", "kind": "eof_terminated",
+          "items": {
+            "type": "choice",
+            "choices": [
+              { "type": "LocalFile" },
+              { "type": "CentralDirEntry" },
+              { "type": "EndOfCentralDir" }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}</code></pre>
+
+        <h3>How It Works</h3>
+        <p>The archive is a flat stream of sections (local files, central directory entries, end record). Each section type is identified by its <code>const</code> signature via a <code>choice</code> type.</p>
+        <p>Cross-struct references let computed fields reach into the parent struct:</p>
+        <ul>
+          <li><code>../sections[corresponding&lt;LocalFile&gt;]</code> &mdash; finds the Nth <code>LocalFile</code> in the parent's <code>sections</code> array, where N matches the current <code>CentralDirEntry</code>'s position among its peers.</li>
+          <li><code>../sections[first&lt;CentralDirEntry&gt;]</code> &mdash; finds the first <code>CentralDirEntry</code> in the parent's array.</li>
+          <li><code>sum_of_sizes</code> &mdash; sums the encoded byte sizes of all elements matching a specific type.</li>
+        </ul>
+
+        <div class="recipe-features">
+          <h4>Key Features Used</h4>
+          <ul>
+            <li><code>../</code> parent references &mdash; access fields in the enclosing struct</li>
+            <li><code>[corresponding&lt;T&gt;]</code> &mdash; correlate Nth element of one type with Nth of another</li>
+            <li><code>[first&lt;T&gt;]</code> / <code>[last&lt;T&gt;]</code> &mdash; find first/last element of a specific type</li>
+            <li><code>sum_of_sizes</code> &mdash; total encoded size of elements matching a type filter</li>
+            <li><code>choice</code> type &mdash; flat union dispatched by <code>const</code> signature fields</li>
+          </ul>
+        </div>
+
+        <div class="recipe-tips">
+          <h4>Tips</h4>
+          <ul>
+            <li>Parent references use <code>../</code> to go up one level. You can chain them: <code>../../field</code> for grandparent access.</li>
+            <li>Array selectors only work with <code>choice</code> arrays where elements have distinct types.</li>
+            <li><code>position_of</code> computes the absolute byte offset from the start of the stream.</li>
+            <li>This pattern is directly modeled on the ZIP file format &mdash; see the <a href="/#examples">ZIP example</a> for the complete schema.</li>
+          </ul>
+        </div>
+      </article>
+
+    </main>
+  </div>
+
+  <script type="module">
+    import Prism from 'https://esm.sh/prismjs@1.29.0';
+    import 'https://esm.sh/prismjs@1.29.0/components/prism-json.min.js';
+
+    const sidebar = document.getElementById('sidebar');
+    const recipes = document.querySelectorAll('.recipe');
+    const links = document.querySelectorAll('.sidebar-link');
+
+    function showRecipe(id) {
+      // Hide all recipes
+      recipes.forEach(r => r.hidden = true);
+
+      // Show selected
+      const target = document.getElementById('recipe-' + id);
+      if (target) {
+        target.hidden = false;
+      } else if (recipes.length > 0) {
+        // Fallback to first recipe
+        recipes[0].hidden = false;
+        id = recipes[0].id.replace('recipe-', '');
+      }
+
+      // Update sidebar active state
+      links.forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+      });
+
+      // Re-highlight code blocks in the newly visible recipe
+      Prism.highlightAll();
+    }
+
+    // Sidebar click handler
+    sidebar.addEventListener('click', (e) => {
+      const link = e.target.closest('.sidebar-link');
+      if (!link) return;
+      e.preventDefault();
+      const id = link.getAttribute('href').slice(1);
+      history.pushState(null, '', '#' + id);
+      showRecipe(id);
+    });
+
+    // Hash change (back/forward navigation)
+    window.addEventListener('hashchange', () => {
+      const id = location.hash.slice(1) || 'tlv';
+      showRecipe(id);
+    });
+
+    // Initial load
+    const initialId = location.hash.slice(1) || 'tlv';
+    showRecipe(initialId);
+  </script>
+</body>
+</html>
