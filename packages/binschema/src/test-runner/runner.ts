@@ -106,7 +106,7 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
   // Generate TypeScript code
   let generatedCode: string;
   try {
-    generatedCode = generateTypeScript(suite.schema);
+    generatedCode = generateTypeScript(suite.schema, { addEncoderLogs: !!process.env.DEBUG_ENCODE });
   } catch (error) {
     // Don't log immediately - will be shown in Final Results
     result.phase = "generation";

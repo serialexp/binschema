@@ -201,7 +201,7 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
     }
     case "ts": {
       const { generateTypeScript } = await import("../generators/typescript.js");
-      const code = generateTypeScript(schema);
+      const code = generateTypeScript(schema, { debug: command.debug });
       const outputPath = join(absoluteOut, "generated.ts");
       writeFileSync(outputPath, code, "utf-8");
 

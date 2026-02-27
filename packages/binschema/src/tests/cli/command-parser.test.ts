@@ -87,6 +87,9 @@ function expectGenerate(argv: string[], expected: Partial<GenerateCommand>): voi
   if (expected.typeName !== undefined) {
     assert(command.typeName === expected.typeName, `Expected typeName="${expected.typeName}" but got "${command.typeName}"`);
   }
+  if (expected.debug !== undefined) {
+    assert(command.debug === expected.debug, `Expected debug=${expected.debug} but got ${command.debug}`);
+  }
 }
 
 function expectValidate(argv: string[], expected: Partial<ValidateCommand>): void {
@@ -170,6 +173,16 @@ export function runCommandParserTests(): { passed: number; failed: number; check
   expectGenerate(
     ["generate", "--schema", "schema.json", "--out", "./gen", "--language", "go", "--type", "Point"],
     { schemaPath: "schema.json", outputDir: "./gen", language: "go", typeName: "Point", watch: false },
+  );
+
+  expectGenerate(
+    ["generate", "--schema", "schema.json", "--out", "./gen", "--language", "ts", "--debug"],
+    { schemaPath: "schema.json", outputDir: "./gen", language: "ts", debug: true },
+  );
+
+  expectGenerate(
+    ["generate", "--schema", "schema.json", "--out", "./gen", "--language", "ts"],
+    { schemaPath: "schema.json", outputDir: "./gen", language: "ts", debug: false },
   );
 
   expectHelp(["help"], undefined);

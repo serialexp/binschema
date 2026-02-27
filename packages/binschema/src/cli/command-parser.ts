@@ -45,6 +45,7 @@ export interface GenerateCommand {
   readonly outputDir: string;
   readonly watch: boolean;
   readonly typeName?: string;
+  readonly debug: boolean;
 }
 
 export interface ValidateCommand {
@@ -297,6 +298,7 @@ function buildCommand(path: string[], values: Record<string, unknown>): CLIParse
       outputDir: values.outputDir as string,
       watch: values.watch as boolean,
       typeName: values.typeName as string | undefined,
+      debug: values.debug as boolean,
     } satisfies GenerateCommand);
   }
 
@@ -689,6 +691,13 @@ function createRootSpec(): CommandSpec {
         description: "Regenerate when schema files change.",
         defaultValue: false,
         allowNegation: true,
+      },
+      {
+        name: "debug",
+        key: "debug",
+        type: "boolean",
+        description: "Include trace logging in generated code (for debugging encoding/decoding).",
+        defaultValue: false,
       },
     ],
   };

@@ -49,13 +49,19 @@ export type { GeneratedCode };
  * Generate TypeScript code for all types in the schema (class-based style)
  */
 export interface GenerateTypeScriptOptions {
+  /** Include decoder [TRACE] logging in generated code */
   addTraceLogs?: boolean;
+  /** Include encoder field-level logging (logFieldStart/logFieldEnd) in generated code */
+  addEncoderLogs?: boolean;
+  /** Shorthand: enable all debug logging (both encoder and decoder) */
+  debug?: boolean;
 }
 
 export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeScriptOptions): string {
   const globalEndianness = schema.config?.endianness || "big_endian";
   const globalBitOrder = schema.config?.bit_order || "msb_first";
-  const addTraceLogs = options?.addTraceLogs || false;
+  const addTraceLogs = options?.debug || options?.addTraceLogs || false;
+  const addEncoderLogs = options?.debug || options?.addEncoderLogs || false;
 
   // Import runtime library (from same directory)
   let code = `import { BitStreamEncoder, Endianness } from "./bit-stream.js";\n`;
@@ -80,7 +86,7 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
     }
 
     const sanitizedName = sanitizeTypeName(typeName);
-    code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder, addTraceLogs);
+    code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder, addTraceLogs, addEncoderLogs);
     code += "\n\n";
   }
 
@@ -96,7 +102,8 @@ function generateTypeCode(
   schema: BinarySchema,
   globalEndianness: Endianness,
   globalBitOrder: string,
-  addTraceLogs: boolean = false
+  addTraceLogs: boolean = false,
+  addEncoderLogs: boolean = false
 ): string {
   const typeDefAny = typeDef as any;
   const fields = getTypeFields(typeDef);
@@ -132,7 +139,7 @@ function generateTypeCode(
 
   // Composite type - generate interfaces (Input/Output), encoder, and decoder
   const interfaceCode = generateInterfaces(typeName, typeDef, schema);
-  const encoderCode = generateEncoder(typeName, typeDef, schema, globalEndianness, globalBitOrder);
+  const encoderCode = generateEncoder(typeName, typeDef, schema, globalEndianness, globalBitOrder, addEncoderLogs);
   const decoderCode = generateDecoder(typeName, typeDef, schema, globalEndianness, globalBitOrder, addTraceLogs);
 
   const sections = [interfaceCode];
@@ -815,7 +822,8 @@ function generateEncoder(
   typeDef: TypeDef,
   schema: BinarySchema,
   globalEndianness: Endianness,
-  globalBitOrder: string
+  globalBitOrder: string,
+  addTraceLogs: boolean = false
 ): string {
   const fields = getTypeFields(typeDef);
   let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
@@ -1018,7 +1026,7 @@ function generateEncoder(
       continue;
     }
 
-    code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields, baseContextVarForField);
+    code += generateEncodeField(field, schema, globalEndianness, "    ", typeName, fields, baseContextVarForField, addTraceLogs);
 
     // After encoding any array, preserve its iteration info in accumulated context
     // This allows subsequent sibling arrays to access it via corresponding correlation
@@ -1074,7 +1082,8 @@ function generateEncodeField(
   indent: string,
   typeName?: string,
   allFields?: Field[],
-  baseContextVar?: string
+  baseContextVar?: string,
+  addTraceLogs: boolean = false
 ): string {
   if (!('type' in field)) return "";
 
@@ -1098,7 +1107,7 @@ function generateEncodeField(
   const valuePath = `value.${fieldName}`;
 
   // generateEncodeFieldCore handles both conditional and non-conditional fields
-  return generateEncodeFieldCore(field, schema, globalEndianness, valuePath, indent, undefined, undefined, baseContextVar);
+  return generateEncodeFieldCore(field, schema, globalEndianness, valuePath, indent, undefined, undefined, baseContextVar, addTraceLogs);
 }
 
 /**
@@ -1112,7 +1121,8 @@ function generateEncodeFieldCore(
   indent: string,
   typeName?: string,
   containingFields?: Field[],
-  baseContextVar?: string
+  baseContextVar?: string,
+  addTraceLogs: boolean = false
 ): string {
   if (!('type' in field)) return "";
 
@@ -1121,12 +1131,15 @@ function generateEncodeFieldCore(
 
   let code = "";
 
-  // Log field start (only for non-computed, non-const fields to keep logs clean)
-  // Use timestamp to make variable names unique across nested/repeated fields
+  // Log field start/end (only for non-computed, non-const fields to keep logs clean)
   const isSpecialField = fieldAny.computed || fieldAny.const !== undefined;
-  const startPosVar = `${fieldName}_startPos_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const shouldLog = addTraceLogs && !isSpecialField;
+  // Use timestamp to make variable names unique across nested/repeated fields
+  const startPosVar = shouldLog
+    ? `${fieldName}_startPos_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    : "";
 
-  if (!isSpecialField) {
+  if (shouldLog) {
     code += `${indent}const ${startPosVar} = this.byteOffset;\n`;
     code += `${indent}this.logFieldStart("${fieldName}", "${indent}");\n`;
   }
@@ -1163,8 +1176,7 @@ function generateEncodeFieldCore(
     code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, valuePath, indent, undefined, baseContextVar);
   }
 
-  // Log field end (only for non-computed, non-const fields)
-  if (!isSpecialField) {
+  if (shouldLog) {
     code += `${indent}this.logFieldEnd("${fieldName}", ${startPosVar}, "${indent}");\n`;
   }
 
