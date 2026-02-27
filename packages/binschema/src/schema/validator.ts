@@ -914,6 +914,37 @@ function validateDiscriminatedUnion(
     }
   }
 
+  // Validate byte_budget
+  if (field.byte_budget) {
+    const budgetField = field.byte_budget.field;
+    if (parentFields) {
+      const fieldIndex = parentFields.findIndex((f: any) => f.name === field.name);
+      const budgetFieldIndex = parentFields.findIndex((f: any) => f.name === budgetField);
+
+      if (budgetFieldIndex === -1) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `byte_budget.field '${budgetField}' not found in parent struct`
+        });
+      } else if (budgetFieldIndex >= fieldIndex) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `byte_budget.field '${budgetField}' comes after this union (forward reference not allowed)`
+        });
+      } else {
+        // Check the referenced field is numeric
+        const budgetFieldDef = parentFields[budgetFieldIndex] as any;
+        const numericTypes = ["uint8", "uint16", "uint32", "uint64"];
+        if (!numericTypes.includes(budgetFieldDef.type)) {
+          errors.push({
+            path: `${path} (${field.name})`,
+            message: `byte_budget.field '${budgetField}' must be a numeric type (uint8/uint16/uint32/uint64), got '${budgetFieldDef.type}'`
+          });
+        }
+      }
+    }
+  }
+
   // Validate variants
   if (!field.variants || !Array.isArray(field.variants) || field.variants.length === 0) {
     errors.push({
@@ -1438,6 +1469,35 @@ function validateField(
         path: `${path} (${field.name})`,
         message: "Bitfield missing 'fields' array",
       });
+    }
+  }
+
+  // Validate string const
+  if (fieldType === "string" && (field as any).const !== undefined) {
+    const fieldAny = field as any;
+    if (fieldAny.kind !== "fixed") {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `String const is only supported on fixed-length strings (got kind '${fieldAny.kind}')`,
+      });
+    } else {
+      const constStr = fieldAny.const;
+      const fixedLength = fieldAny.length;
+      // Check byte length in declared encoding
+      const encoding = fieldAny.encoding || "utf8";
+      let byteLength: number;
+      if (encoding === "utf8") {
+        byteLength = new TextEncoder().encode(constStr).length;
+      } else {
+        // ASCII/Latin-1: 1 byte per character
+        byteLength = constStr.length;
+      }
+      if (byteLength > fixedLength) {
+        errors.push({
+          path: `${path} (${field.name})`,
+          message: `String const '${constStr}' is ${byteLength} bytes in ${encoding} encoding, exceeds fixed length ${fixedLength}`,
+        });
+      }
     }
   }
 

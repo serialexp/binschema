@@ -1089,6 +1089,9 @@ function generateEncodeField(
   // Handle const fields - write the constant value directly
   if (fieldAny.const !== undefined) {
     const constValue = fieldAny.const;
+    if (fieldAny.type === "string") {
+      return generateEncodeString(field, globalEndianness, JSON.stringify(constValue), indent);
+    }
     return generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent, undefined, baseContextVar);
   }
 
@@ -1138,7 +1141,11 @@ function generateEncodeFieldCore(
   // Handle const fields - write the constant value directly
   else if (fieldAny.const !== undefined) {
     const constValue = fieldAny.const;
-    code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent, undefined, baseContextVar);
+    if (fieldAny.type === "string") {
+      code += generateEncodeString(field, globalEndianness, JSON.stringify(constValue), indent);
+    } else {
+      code += generateEncodeFieldCoreImpl(field, schema, globalEndianness, constValue.toString(), indent, undefined, baseContextVar);
+    }
   }
   // Handle conditional fields
   else if (isFieldConditional(field)) {
@@ -1915,6 +1922,45 @@ function generateDecodeDiscriminatedUnion(
 
   const discriminator = field.discriminator || {};
   const variants = field.variants || [];
+  const byteBudget = field.byte_budget;
+
+  // Helper to generate variant decode code for a single variant
+  function generateVariantDecode(
+    variant: any,
+    resultVar: string,
+    vi: string // inner indent
+  ): string {
+    let c = "";
+    const variantTypeDef = schema.types[variant.type];
+    const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
+    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+
+    if (byteBudget) {
+      // byte_budget mode: decode from sub-slice, don't advance outer byteOffset
+      c += `${vi}const decoder = new ${variant.type}Decoder(new Uint8Array(_budgetSlice), ${baseObject});\n`;
+      c += `${vi}const ${resultVar} = decoder.decode();\n`;
+    } else if (isBackReference) {
+      // Back-reference variant: pass full bytes (may seek to earlier offsets)
+      c += `${vi}const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
+      c += `${vi}decoder.byteOffset = this.byteOffset;\n`;
+      c += `${vi}const ${resultVar} = decoder.decode();\n`;
+      c += `${vi}this.byteOffset = decoder.byteOffset;\n`;
+    } else {
+      // Non-reference variant: pass sliced bytes (standard pattern)
+      c += `${vi}const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+      c += `${vi}const ${resultVar} = decoder.decode();\n`;
+      c += `${vi}this.byteOffset += decoder.byteOffset;\n`;
+    }
+    c += `${vi}${target} = { type: '${variant.type}', value: ${resultVar} };\n`;
+    return c;
+  }
+
+  // If byte_budget, create the sub-slice before variant dispatch
+  if (byteBudget) {
+    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+    code += `${indent}const _budget = ${baseObject}.${byteBudget.field};\n`;
+    code += `${indent}const _budgetSlice = this.bytes.slice(this.byteOffset, this.byteOffset + _budget);\n`;
+  }
 
   // Determine how to read discriminator
   if (discriminator.peek) {
@@ -1931,29 +1977,11 @@ function generateDecodeDiscriminatedUnion(
       const variant = variants[i];
 
       if (variant.when) {
-        // Convert condition to TypeScript (replace 'value' with 'discriminator')
         const condition = variant.when.replace(/\bvalue\b/g, 'discriminator');
         const ifKeyword = i === 0 ? "if" : "else if";
 
         code += `${indent}${ifKeyword} (${condition}) {\n`;
-        // Check if variant type is a back_reference - these need full bytes to seek backwards
-        const variantTypeDef = schema.types[variant.type];
-        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
-        // Determine the base object for context (usually "value" for top-level, or extract from target)
-        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        if (isBackReference) {
-          // Back-reference variant: pass full bytes (may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
-          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
-          code += `${indent}  const decodedValue = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
-        } else {
-          // Non-reference variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
-          code += `${indent}  const decodedValue = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
-        }
-        code += `${indent}  ${target} = { type: '${variant.type}', value: decodedValue };\n`;
+        code += generateVariantDecode(variant, "decodedValue", indent + "  ");
         code += `${indent}}`;
         if (i < variants.length - 1) {
           code += "\n";
@@ -1961,25 +1989,11 @@ function generateDecodeDiscriminatedUnion(
       } else {
         // Fallback variant (no 'when' condition)
         code += ` else {\n`;
-        // Check if variant type is a back_reference - these need full bytes to seek backwards
-        const variantTypeDef = schema.types[variant.type];
-        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
-        // Determine the base object for context (usually "value" for top-level, or extract from target)
-        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        if (isBackReference) {
-          // Back-reference variant: pass full bytes (may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
-          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
-          code += `${indent}  const decodedValue = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
-        } else {
-          // Non-reference variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
-          code += `${indent}  const decodedValue = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
-        }
-        code += `${indent}  ${target} = { type: '${variant.type}', value: decodedValue };\n`;
+        code += generateVariantDecode(variant, "decodedValue", indent + "  ");
         code += `${indent}}\n`;
+        if (byteBudget) {
+          code += `${indent}this.byteOffset += _budget;\n`;
+        }
         return code;
       }
     }
@@ -1993,9 +2007,6 @@ function generateDecodeDiscriminatedUnion(
     // Field-based discriminator (SuperChat pattern)
     const discriminatorField = discriminator.field;
 
-    // Determine the base object for discriminator field reference
-    // If target contains a dot (e.g., "answers_item.rdata"), extract base object name
-    // Otherwise use "value" for top-level fields
     const baseObject = target.includes(".") ? target.split(".")[0] : "value";
     const discriminatorRef = `${baseObject}.${discriminatorField}`;
 
@@ -2004,29 +2015,11 @@ function generateDecodeDiscriminatedUnion(
       const variant = variants[i];
 
       if (variant.when) {
-        // Convert condition to TypeScript (replace 'value' with field reference)
         const condition = variant.when.replace(/\bvalue\b/g, discriminatorRef);
         const ifKeyword = i === 0 ? "if" : "else if";
 
         code += `${indent}${ifKeyword} (${condition}) {\n`;
-        // Determine base object for context
-        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        // Check if variant type is a back_reference - these need full bytes to seek backwards
-        const variantTypeDef = schema.types[variant.type];
-        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
-        if (isBackReference) {
-          // Back-reference variant: pass full bytes (may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
-          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
-          code += `${indent}  const payload = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
-        } else {
-          // Non-reference variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
-          code += `${indent}  const payload = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
-        }
-        code += `${indent}  ${target} = { type: '${variant.type}', value: payload };\n`;
+        code += generateVariantDecode(variant, "payload", indent + "  ");
         code += `${indent}}`;
         if (i < variants.length - 1) {
           code += "\n";
@@ -2034,25 +2027,11 @@ function generateDecodeDiscriminatedUnion(
       } else {
         // Fallback variant
         code += ` else {\n`;
-        // Determine base object for context
-        const baseObject = target.includes(".") ? target.split(".")[0] : "value";
-        // Check if variant type is a back_reference - these need full bytes to seek backwards
-        const variantTypeDef = schema.types[variant.type];
-        const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
-        if (isBackReference) {
-          // Back-reference variant: pass full bytes (may seek to earlier offsets)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
-          code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
-          code += `${indent}  const payload = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
-        } else {
-          // Non-reference variant: pass sliced bytes (standard pattern)
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
-          code += `${indent}  const payload = decoder.decode();\n`;
-          code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
-        }
-        code += `${indent}  ${target} = { type: '${variant.type}', value: payload };\n`;
+        code += generateVariantDecode(variant, "payload", indent + "  ");
         code += `${indent}}\n`;
+        if (byteBudget) {
+          code += `${indent}this.byteOffset += _budget;\n`;
+        }
         return code;
       }
     }
@@ -2061,6 +2040,11 @@ function generateDecodeDiscriminatedUnion(
     code += ` else {\n`;
     code += `${indent}  throw new Error(\`Unknown discriminator value: \${${discriminatorRef}}\`);\n`;
     code += `${indent}}\n`;
+  }
+
+  // After all variants, advance by budget if present
+  if (byteBudget) {
+    code += `${indent}this.byteOffset += _budget;\n`;
   }
 
   return code;

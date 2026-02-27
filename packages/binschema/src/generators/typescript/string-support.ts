@@ -26,7 +26,11 @@ export function generateEncodeString(
   }
 
   // Sanitize variable name (replace dots with underscores)
-  const bytesVarName = valuePath.replace(/\./g, "_") + "_bytes";
+  // If valuePath is a string literal (e.g., JSON.stringify("SIZE")), use the field name for the variable
+  const isLiteral = valuePath.startsWith('"') || valuePath.startsWith("'");
+  const bytesVarName = isLiteral
+    ? `${(field.name || "const_str").replace(/\./g, "_")}_bytes`
+    : valuePath.replace(/\./g, "_") + "_bytes";
 
   // Convert string to bytes
   if (encoding === "utf8") {

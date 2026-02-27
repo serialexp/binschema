@@ -9,6 +9,48 @@ import { ARRAY_ITER_SUFFIX } from "./shared.js";
 import { generateFieldSizeCalculation } from "./size-calculation.js";
 
 /**
+ * Generate size dispatch code for a discriminated_union target field.
+ * Dispatches on .type and calls each variant encoder's calculateSize.
+ * Returns empty string if the field is not a discriminated_union.
+ */
+function generateDiscriminatedUnionSizeDispatch(
+  targetFieldDef: any,
+  targetPath: string,
+  computedVar: string,
+  indent: string
+): string {
+  if (!targetFieldDef || (targetFieldDef as any).type !== 'discriminated_union') {
+    return "";
+  }
+  const variants = (targetFieldDef as any).variants || [];
+  let code = "";
+  for (let i = 0; i < variants.length; i++) {
+    const ifKw = i === 0 ? "if" : "else if";
+    if (variants[i].when) {
+      code += `${indent}${ifKw} (${targetPath}.type === '${variants[i].type}') {\n`;
+    } else {
+      // Fallback variant (no when condition) — use else
+      code += `${indent}else {\n`;
+    }
+    code += `${indent}  const _enc = new ${variants[i].type}Encoder();\n`;
+    code += `${indent}  ${computedVar} = _enc.calculateSize(${targetPath}.value);\n`;
+    code += `${indent}}`;
+    if (i < variants.length - 1) {
+      code += "\n";
+    }
+  }
+  // If no fallback variant, add error else
+  const hasFallback = variants.some((v: any) => !v.when);
+  if (!hasFallback) {
+    code += ` else {\n`;
+    code += `${indent}  throw new Error(\`Unknown variant type: \${${targetPath}.type}\`);\n`;
+    code += `${indent}}`;
+  }
+  code += "\n";
+  return code;
+}
+
+/**
  * Generate a unique variable name for a computed field.
  * When nested types are inlined, multiple fields with the same name (e.g., "length")
  * would create variable name collisions. This adds a unique suffix to prevent that.
@@ -892,20 +934,25 @@ export function generateEncodeComputedField(
           targetFieldDef = containingFields.find(f => (f as any).name === targetFieldName);
         }
 
-        const isCompositeType = targetFieldDef &&
-                                (targetFieldDef as any).type &&
-                                schema.types[(targetFieldDef as any).type] !== undefined &&
-                                (targetFieldDef as any).type !== 'array';
-
-        if (isCompositeType) {
-          const typeName = (targetFieldDef as any).type;
-          code += `${indent}{\n`;
-          code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
-          code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
-          code += `${indent}}\n`;
+        const duDispatch = generateDiscriminatedUnionSizeDispatch(targetFieldDef, targetPath, computedVar, indent);
+        if (duDispatch) {
+          code += duDispatch;
         } else {
-          // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
-          code += `${indent}${computedVar} = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
+          const isCompositeType = targetFieldDef &&
+                                  (targetFieldDef as any).type &&
+                                  schema.types[(targetFieldDef as any).type] !== undefined &&
+                                  (targetFieldDef as any).type !== 'array';
+
+          if (isCompositeType) {
+            const typeName = (targetFieldDef as any).type;
+            code += `${indent}{\n`;
+            code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+            code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
+            code += `${indent}}\n`;
+          } else {
+            // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
+            code += `${indent}${computedVar} = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
+          }
         }
 
         // Apply offset if specified
@@ -941,20 +988,25 @@ export function generateEncodeComputedField(
           targetFieldDef = containingFields.find(f => (f as any).name === targetFieldName);
         }
 
-        const isCompositeType = targetFieldDef &&
-                                (targetFieldDef as any).type &&
-                                schema.types[(targetFieldDef as any).type] !== undefined &&
-                                (targetFieldDef as any).type !== 'array';
-
-        if (isCompositeType) {
-          const typeName = (targetFieldDef as any).type;
-          code += `${indent}{\n`;
-          code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
-          code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
-          code += `${indent}}\n`;
+        const duDispatch = generateDiscriminatedUnionSizeDispatch(targetFieldDef, targetPath, computedVar, indent);
+        if (duDispatch) {
+          code += duDispatch;
         } else {
-          // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
-          code += `${computedVar} = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
+          const isCompositeType = targetFieldDef &&
+                                  (targetFieldDef as any).type &&
+                                  schema.types[(targetFieldDef as any).type] !== undefined &&
+                                  (targetFieldDef as any).type !== 'array';
+
+          if (isCompositeType) {
+            const typeName = (targetFieldDef as any).type;
+            code += `${indent}{\n`;
+            code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+            code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
+            code += `${indent}}\n`;
+          } else {
+            // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
+            code += `${computedVar} = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
+          }
         }
 
         // Apply offset if specified
@@ -998,23 +1050,29 @@ export function generateEncodeComputedField(
           targetFieldDef = containingFields.find(f => (f as any).name === targetFieldName);
         }
 
-        // Check if target is a composite type (custom type in schema.types)
-        const isCompositeType = targetFieldDef &&
-                                (targetFieldDef as any).type &&
-                                schema.types[(targetFieldDef as any).type] !== undefined &&
-                                (targetFieldDef as any).type !== 'array';
-
-        if (isCompositeType) {
-          // For composite types, use calculateSize()
-          const typeName = (targetFieldDef as any).type;
-          code += `${indent}{\n`;
-          code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
-          code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
-          code += `${indent}}\n`;
+        // Check if target is a discriminated_union (inline type, not in schema.types)
+        const duDispatch = generateDiscriminatedUnionSizeDispatch(targetFieldDef, targetPath, computedVar, indent);
+        if (duDispatch) {
+          code += duDispatch;
         } else {
-          // Array element count, string character count, or scalar value
-          // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
-          code += `${indent}${computedVar} = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
+          // Check if target is a composite type (custom type in schema.types)
+          const isCompositeType = targetFieldDef &&
+                                  (targetFieldDef as any).type &&
+                                  schema.types[(targetFieldDef as any).type] !== undefined &&
+                                  (targetFieldDef as any).type !== 'array';
+
+          if (isCompositeType) {
+            // For composite types, use calculateSize()
+            const typeName = (targetFieldDef as any).type;
+            code += `${indent}{\n`;
+            code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+            code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
+            code += `${indent}}\n`;
+          } else {
+            // Array element count, string character count, or scalar value
+            // For scalars (numbers/bigints), use the value directly; for arrays/strings, use .length
+            code += `${indent}${computedVar} = (typeof ${targetPath} === 'number' || typeof ${targetPath} === 'bigint') ? ${targetPath} : ${targetPath}.length;\n`;
+          }
         }
 
         // Apply offset if specified

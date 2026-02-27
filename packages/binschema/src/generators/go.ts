@@ -441,6 +441,16 @@ function generateComputedValue(
         return `${goType}(${baseExpr})`;
       }
 
+      // Check if target is a discriminated_union (inline, calculates size via variant dispatch)
+      if (containingFields) {
+        const targetField = containingFields.find(f => f.name === target);
+        if (targetField && (targetField as any).type === 'discriminated_union') {
+          // For discriminated_union, we need to dispatch on variant type
+          // This is complex inline code, handled by generateComputedFieldEncoding
+          return `__DU_LENGTH_OF__`;
+        }
+      }
+
       // Check if target is a type that has CalculateSize method
       // This includes: structs (have sequence), string type aliases, type aliases to other structs
       if (containingFields && schema) {
@@ -1529,8 +1539,10 @@ function generateDiscriminatedUnion(name: string, typeDef: any, defaultEndiannes
       if (variant.when) {
         // Parse the condition (e.g., "value == 0x01" -> "discriminator == 0x01")
         // Also convert JavaScript operators to Go (=== to ==, !== to !=)
+        // Convert JS single-quoted strings to Go double-quoted strings
         let condition = variant.when.replace(/\bvalue\b/g, 'discriminator');
         condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
+        condition = condition.replace(/'([^']*)'/g, '"$1"');
         const ifKeyword = isFirst ? "if" : "} else if";
         isFirst = false;
 
@@ -1542,7 +1554,7 @@ function generateDiscriminatedUnion(name: string, typeDef: any, defaultEndiannes
 
     if (!isFirst) {
       lines.push(`\t} else {`);
-      lines.push(`\t\treturn nil, fmt.Errorf("unknown discriminator: %d", discriminator)`);
+      lines.push(`\t\treturn nil, fmt.Errorf("unknown discriminator: %v", discriminator)`);
       lines.push(`\t}`);
     }
   } else if (discriminator.field) {
@@ -2131,6 +2143,10 @@ function generateFieldSizeCalculationImpl(field: Field, schema: BinarySchema, in
 
   // Handle const fields (fixed size)
   if (fieldAny.const !== undefined) {
+    if (fieldType === "string" && fieldAny.kind === "fixed") {
+      lines.push(`${indent}size += ${fieldAny.length} // ${fieldName} (string const)`);
+      return lines;
+    }
     return generatePrimitiveFieldSize(fieldType, fieldName, indent, "(const)");
   }
 
@@ -2272,6 +2288,9 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
         lines.push(`${indent}size += ${prefixSize} + len(${valueExpr}) // ${fieldName} (length-prefixed string)`);
       } else if (kind === "field_referenced") {
         lines.push(`${indent}size += len(${valueExpr}) // ${fieldName} (field-referenced string)`);
+      } else if (kind === "fixed") {
+        const fixedLength = fieldAny.length || 0;
+        lines.push(`${indent}size += ${fixedLength} // ${fieldName} (fixed-length string)`);
       } else {
         lines.push(`${indent}size += len(${valueExpr}) // ${fieldName} (string)`);
       }
@@ -2282,10 +2301,11 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
       break;
     }
     case "discriminated_union": {
-      // Inline discriminated union - need to handle via type switch
-      // For size calculation, we need to encode and measure
-      lines.push(`${indent}// ${fieldName}: inline discriminated union (encode to measure)`);
-      lines.push(`${indent}if ${valueExpr} != nil {`);
+      // Inline discriminated union - use CalculateSize if available, fallback to Encode
+      lines.push(`${indent}// ${fieldName}: inline discriminated union`);
+      lines.push(`${indent}if sizable, ok := ${valueExpr}.(interface{ CalculateSize() int }); ok {`);
+      lines.push(`${indent}\tsize += sizable.CalculateSize()`);
+      lines.push(`${indent}} else if ${valueExpr} != nil {`);
       lines.push(`${indent}\t${fieldName}_bytes, _ := ${valueExpr}.(interface{ Encode() ([]byte, error) }).Encode()`);
       lines.push(`${indent}\tsize += len(${fieldName}_bytes)`);
       lines.push(`${indent}}`);
@@ -2770,6 +2790,32 @@ function generateEncodeField(
   // Handle const fields - write the constant value directly
   if (fieldAny.const !== undefined) {
     const constValue = fieldAny.const;
+    if (fieldAny.type === "string") {
+      // For string consts, generate inline byte-writing code using field.name as variable prefix
+      const goStringLiteral = `"${String(constValue).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      const lines: string[] = [];
+      const encoding = fieldAny.encoding || "utf8";
+      const bytesVar = `${toGoFieldName(field.name)}_const_bytes`;
+      if (encoding === "latin1" || encoding === "ascii") {
+        lines.push(`${indent}${bytesVar} := make([]byte, 0, len(${goStringLiteral}))`);
+        lines.push(`${indent}for _, r := range ${goStringLiteral} {`);
+        lines.push(`${indent}\t${bytesVar} = append(${bytesVar}, byte(r))`);
+        lines.push(`${indent}}`);
+      } else {
+        lines.push(`${indent}${bytesVar} := []byte(${goStringLiteral})`);
+      }
+      if (fieldAny.kind === "fixed") {
+        const fixedLength = fieldAny.length || 0;
+        lines.push(`${indent}for i := 0; i < ${fixedLength}; i++ {`);
+        lines.push(`${indent}\tif i < len(${bytesVar}) {`);
+        lines.push(`${indent}\t\tencoder.WriteUint8(${bytesVar}[i])`);
+        lines.push(`${indent}\t} else {`);
+        lines.push(`${indent}\t\tencoder.WriteUint8(0)`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}}`);
+      }
+      return lines;
+    }
     return generateEncodeFieldImpl(field, constValue.toString(), endianness, runtimeEndianness, indent);
   }
 
@@ -2800,6 +2846,29 @@ function generateEncodeField(
       currentFieldIndex,
       schema
     );
+
+    // Handle discriminated_union length_of: use CalculateSize interface assertion
+    if (computedValue === '__DU_LENGTH_OF__') {
+      const lines: string[] = [];
+      const targetFieldName = computed.target;
+      const goTargetField = toGoFieldName(targetFieldName);
+      const goType = mapPrimitiveToGoType(field.type);
+      const offset = computed.offset || 0;
+      const computedVarName = `${toGoFieldName(field.name)}_computed`;
+
+      lines.push(`${indent}// Compute length_of discriminated_union field '${targetFieldName}'`);
+      lines.push(`${indent}var ${computedVarName} ${goType}`);
+      lines.push(`${indent}if sizable, ok := m.${goTargetField}.(interface{ CalculateSize() int }); ok {`);
+      lines.push(`${indent}\t${computedVarName} = ${goType}(sizable.CalculateSize())`);
+      lines.push(`${indent}}`);
+
+      if (offset !== 0) {
+        lines.push(`${indent}${computedVarName} += ${offset}`);
+      }
+
+      return [...lines, ...generateEncodeFieldImpl(field, computedVarName, endianness, runtimeEndianness, indent)];
+    }
+
     return generateEncodeFieldImpl(field, computedValue, endianness, runtimeEndianness, indent);
   }
 
@@ -4835,6 +4904,10 @@ function generateDecodeInlineDiscriminatedUnion(
   const lines: string[] = [];
   const discriminator = field.discriminator || {};
   const variants = field.variants || [];
+  const byteBudget = field.byte_budget;
+
+  // Determine which decoder variable to use in variant decode calls
+  const decoderVar = byteBudget ? "subDecoder" : "decoder";
 
   // Helper to generate variant decode call - uses context if variant needs it
   function generateVariantDecodeCall(variant: any, innerIndent: string): string[] {
@@ -4864,15 +4937,27 @@ function generateDecodeInlineDiscriminatedUnion(
         }
       }
       result.push(`${innerIndent}}`);
-      result.push(`${innerIndent}variantValue, err := decode${variantTypeName}WithDecoderAndContext(decoder, variantCtx)`);
+      result.push(`${innerIndent}variantValue, err := decode${variantTypeName}WithDecoderAndContext(${decoderVar}, variantCtx)`);
     } else {
-      result.push(`${innerIndent}variantValue, err := decode${variantTypeName}WithDecoder(decoder)`);
+      result.push(`${innerIndent}variantValue, err := decode${variantTypeName}WithDecoder(${decoderVar})`);
     }
     result.push(`${innerIndent}if err != nil {`);
     result.push(`${innerIndent}\treturn nil, fmt.Errorf("failed to decode ${variant.type} variant: %w", err)`);
     result.push(`${innerIndent}}`);
     result.push(`${innerIndent}result.${fieldName} = variantValue`);
     return result;
+  }
+
+  // If byte_budget, create a sub-decoder from a budget-sized slice
+  if (byteBudget) {
+    const budgetFieldName = toGoFieldName(byteBudget.field);
+    lines.push(`${indent}// byte_budget: read exactly result.${budgetFieldName} bytes for variant decoding`);
+    lines.push(`${indent}budgetSlice, err := decoder.ReadBytesSlice(int(result.${budgetFieldName}))`);
+    lines.push(`${indent}if err != nil {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("failed to read byte budget for ${field.name || 'union'}: %w", err)`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}subDecoder := runtime.NewBitStreamDecoder(budgetSlice, runtime.MSBFirst)`);
+    lines.push(``);
   }
 
   if (discriminator.peek) {
@@ -4900,14 +4985,19 @@ function generateDecodeInlineDiscriminatedUnion(
     lines.push(`${indent}}`);
     lines.push(``);
 
+    // Find fallback variant (no 'when' condition)
+    const peekFallbackVariant = variants.find((v: any) => !v.when);
+
     // Generate if-else chain for each variant
     let isFirst = true;
     for (const variant of variants) {
       if (variant.when) {
         // Convert condition: replace 'value' with 'discriminator'
         // Also convert JavaScript operators to Go (=== to ==, !== to !=)
+        // Convert JS single-quoted strings to Go double-quoted strings
         let condition = variant.when.replace(/\bvalue\b/g, 'discriminator');
         condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
+        condition = condition.replace(/'([^']*)'/g, '"$1"');
         const ifKeyword = isFirst ? "if" : "} else if";
         isFirst = false;
 
@@ -4918,7 +5008,11 @@ function generateDecodeInlineDiscriminatedUnion(
 
     if (!isFirst) {
       lines.push(`${indent}} else {`);
-      lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value: %d", discriminator)`);
+      if (peekFallbackVariant) {
+        lines.push(...generateVariantDecodeCall(peekFallbackVariant, indent + "\t"));
+      } else {
+        lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value: %v", discriminator)`);
+      }
       lines.push(`${indent}}`);
     }
   } else if (discriminator.field) {
@@ -4926,14 +5020,19 @@ function generateDecodeInlineDiscriminatedUnion(
     const fieldPath = toGoFieldPath(discriminator.field);
     const discriminatorVar = `result.${fieldPath}`;
 
+    // Find fallback variant (no 'when' condition)
+    const fieldFallbackVariant = variants.find((v: any) => !v.when);
+
     // Generate if-else chain for each variant
     let isFirst = true;
     for (const variant of variants) {
       if (variant.when) {
         // Convert condition: replace 'value' with the discriminator variable
         // Also convert JavaScript operators to Go (=== to ==, !== to !=)
+        // Convert JS single-quoted strings to Go double-quoted strings
         let condition = variant.when.replace(/\bvalue\b/g, discriminatorVar);
         condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
+        condition = condition.replace(/'([^']*)'/g, '"$1"');
         const ifKeyword = isFirst ? "if" : "} else if";
         isFirst = false;
 
@@ -4944,7 +5043,11 @@ function generateDecodeInlineDiscriminatedUnion(
 
     if (!isFirst) {
       lines.push(`${indent}} else {`);
-      lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
+      if (fieldFallbackVariant) {
+        lines.push(...generateVariantDecodeCall(fieldFallbackVariant, indent + "\t"));
+      } else {
+        lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
+      }
       lines.push(`${indent}}`);
     }
   } else {

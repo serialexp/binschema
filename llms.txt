@@ -169,6 +169,7 @@ Strings have a `type` of `"string"` and require a `kind` to specify how their le
 ```json5
 { "name": "chunk_type", "type": "string", "kind": "fixed", "length": 4, "encoding": "ascii" }
 ```
+Fixed-length strings support an optional `const` property (see [Constant Fields](#constant-fields)).
 
 **Length-prefixed** (count prefix, then characters):
 ```json5
@@ -369,12 +370,36 @@ Field-based (uses a previously decoded field):
 ```
 
 **Variant conditions** (`when` expressions):
-- `"value === 0x01"` - Exact match
+- `"value === 0x01"` - Exact match (numeric)
+- `"value == 'SIZE'"` - Exact match (string literal, for ASCII chunk IDs)
 - `"value >= 0x80"` - Range check
 - `"value >= 128 && value <= 143"` - Range
 - `"value === 0x01 || value === 0x02"` - Multiple values
 
 The last variant may omit `when` to act as a fallback/default.
+
+**Byte budget** (`byte_budget`):
+
+Limits variant decoding to a fixed number of bytes from a previously decoded field. This is essential for RIFF-style chunk formats where each chunk declares its content size, and the decoder must advance by exactly that many bytes regardless of what the variant actually reads.
+
+```json5
+{
+  "name": "content",
+  "type": "discriminated_union",
+  "discriminator": { "field": "chunk_id" },
+  "byte_budget": { "field": "content_size" },
+  "variants": [
+    { "when": "value == 'SIZE'", "type": "SizeData" },
+    { "type": "RawBytes" }  // Fallback: reads remaining bytes via eof_terminated
+  ]
+}
+```
+
+The `byte_budget.field` must reference a numeric field (`uint8`, `uint16`, `uint32`, `uint64`) that appears earlier in the same sequence. During decoding, a sub-slice of exactly that many bytes is created, and the variant is decoded from the sub-slice. After decoding, the main decoder advances by the full budget regardless of how many bytes the variant consumed.
+
+This pairs naturally with `eof_terminated` arrays in fallback variants — the sub-slice EOF boundary becomes the byte budget boundary, so unknown chunks can safely read all remaining bytes.
+
+The byte budget field works with `length_of` computed fields: during encoding, `length_of` targeting a discriminated_union with byte_budget computes the encoded size of the variant payload.
 
 ### `choice` - Flat Union (No Wrapper)
 
@@ -482,6 +507,12 @@ Any `uint8`, `uint16`, or `uint32` field can have a `const` value. Constant fiel
 { "name": "signature", "type": "uint32", "const": 67324752 }
 { "name": "tag", "type": "uint8", "const": 0x30 }
 ```
+
+Fixed-length strings also support `const` for ASCII identifiers (e.g., RIFF chunk IDs):
+```json5
+{ "name": "chunk_id", "type": "string", "kind": "fixed", "length": 4, "encoding": "ascii", "const": "SIZE" }
+```
+The const string's byte length (in the declared encoding) must not exceed the fixed length. The const value is written during encoding and validated during decoding.
 
 Fixed-length arrays also support `const` for magic byte sequences:
 ```json5

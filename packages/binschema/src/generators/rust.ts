@@ -1621,8 +1621,14 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
         const fieldName = toRustFieldName(field.name);
         const fieldEndianness = field.endianness ? mapEndianness(field.endianness) : rustEndianness;
 
-        // Handle computed fields - compute value inline rather than reading from struct
+        // Handle const fields - write the constant value directly
         const fieldAny = field as any;
+        if (fieldAny.const != null) {
+          lines.push(...generateEncodeConstField(field, fieldAny.const, defaultEndianness, "                "));
+          continue;
+        }
+
+        // Handle computed fields - compute value inline rather than reading from struct
         if (fieldAny.computed) {
           const computed = fieldAny.computed;
           const target = computed.target as string | undefined;
@@ -1639,7 +1645,10 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
               const targetType = targetField?.type as string | undefined;
               const isCompositeTarget = targetType && schema.types && schema.types[targetType] && targetType !== "array";
 
-              if (isCompositeTarget) {
+              if (targetType === "discriminated_union") {
+                // Discriminated union - encode variant to get byte length
+                lines.push(`                let ${computedVarName} = v.${targetRust}.encode()?.len();`);
+              } else if (isCompositeTarget) {
                 // Composite type - convert Output to Input and encode to measure byte length
                 const compositeRustName = toRustTypeName(targetType!);
                 const compositeNeedsSuffix = typeNeedsInputOutputSuffix(targetType!, schema);
@@ -3593,7 +3602,10 @@ function generateEncodeComputedField(
 
     lines.push(`${indent}// Computed field '${fieldName}': length_of '${target}'`);
 
-    if (isString && (stringEncoding === "latin1" || stringEncoding === "ascii")) {
+    if (targetField && (targetField.type as string) === "discriminated_union") {
+      // Discriminated union - encode variant to get byte length
+      lines.push(`${indent}let ${computedVarName} = ${targetPath}.encode()?.len();`);
+    } else if (isString && (stringEncoding === "latin1" || stringEncoding === "ascii")) {
       // Latin-1/ASCII: char count equals byte count
       lines.push(`${indent}let ${computedVarName} = ${targetPath}.chars().count();`);
     } else if (targetField && schema && schema.types && schema.types[targetField.type as string]) {
@@ -4029,6 +4041,32 @@ function generateEncodeConstField(field: Field, constValue: any, defaultEndianne
     case "int64":
       lines.push(`${indent}encoder.write_int64(${value}, Endianness::${rustEndianness});`);
       break;
+    case "string": {
+      // String const - write the const string value as fixed-length bytes
+      const fieldAny = field as any;
+      const kind = fieldAny.kind || "fixed";
+      const encoding = fieldAny.encoding || "utf8";
+      const constStr = JSON.stringify(value); // Rust string literal
+
+      if (kind === "fixed") {
+        const length = fieldAny.length || 0;
+        if (encoding === "latin1" || encoding === "ascii") {
+          lines.push(`${indent}let const_str_bytes: Vec<u8> = ${constStr}.chars().map(|c| c as u8).collect();`);
+        } else {
+          lines.push(`${indent}let const_str_bytes: &[u8] = ${constStr}.as_bytes();`);
+        }
+        lines.push(`${indent}for i in 0..${length} {`);
+        lines.push(`${indent}    if i < const_str_bytes.len() {`);
+        lines.push(`${indent}        encoder.write_uint8(const_str_bytes[i]);`);
+        lines.push(`${indent}    } else {`);
+        lines.push(`${indent}        encoder.write_uint8(0);`);
+        lines.push(`${indent}    }`);
+        lines.push(`${indent}}`);
+      } else {
+        throw new Error(`Unsupported string const kind: ${kind} (field: ${field.name})`);
+      }
+      break;
+    }
     default:
       throw new Error(`Unsupported const field type: ${field.type} (field: ${field.name})`);
   }
@@ -5393,22 +5431,106 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
         throw new Error(`Inline discriminated union field '${field.name}' has no variants`);
       }
       const enumName = inlineEnumName(containingTypeName, field.name || "");
+      const discriminator = fieldAny.discriminator || {};
+      const byteBudget = fieldAny.byte_budget;
 
       // Check if any variant needs context
       const typesNeedingContext = getTypesNeedingDecodeContext(schema);
       const needsCtx = variants.some((v: any) => typesNeedingContext.has(v.type));
 
-      if (needsCtx) {
-        // Build context from all fields decoded so far and pass it to the union
+      // If byte_budget, create a sub-decoder from budget-sized slice
+      const decoderVarForVariants = byteBudget ? "sub_decoder" : "decoder";
+      if (byteBudget) {
+        const budgetFieldName = toRustFieldName(byteBudget.field);
+        lines.push(`${indent}// byte_budget: read exactly ${byteBudget.field} bytes for variant decoding`);
+        lines.push(`${indent}let budget_slice = decoder.read_bytes_vec(${budgetFieldName} as usize)?;`);
+        lines.push(`${indent}let mut sub_decoder = BitStreamDecoder::new(budget_slice, BitOrder::${mapBitOrder(fieldAny.bit_order || schema.config?.bit_order || "msb_first")});`);
+      }
+
+      if (discriminator.field) {
+        // Field-based discriminator - generate inline if-else chain
+        // Generates: let varName = if cond { Enum::Variant(decode...) } else { ... };
+        const discriminatorFieldName = toRustFieldName(discriminator.field);
+        const fallbackVariant = variants.find((v: any) => !v.when);
+        const conditionalVariants = variants.filter((v: any) => v.when);
+
+        // Helper to generate variant decode expression
+        function rustVariantDecodeExpr(variant: any, vi: string): string[] {
+          const vTypeName = toRustTypeName(variant.type);
+          const vNeedsSuffix = typeNeedsInputOutputSuffix(variant.type, schema);
+          const vDecodeTypeName = vNeedsSuffix ? `${vTypeName}Output` : vTypeName;
+          const vNeedsCtx = typesNeedingContext.has(variant.type);
+
+          if (needsCtx && vNeedsCtx) {
+            // Need context for this variant
+            const ctxLines: string[] = [];
+            ctxLines.push(`${vi}let mut union_ctx: HashMap<String, u64> = HashMap::new();`);
+            if (allFields) {
+              for (const prevField of allFields) {
+                if (prevField.name === field.name) break;
+                if (!prevField.name) continue;
+                const rustPrevFieldName = toRustFieldName(prevField.name);
+                if (["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64"].includes(prevField.type as string)) {
+                  ctxLines.push(`${vi}union_ctx.insert("${prevField.name}".to_string(), ${rustPrevFieldName} as u64);`);
+                }
+              }
+            }
+            const decoderArg = byteBudget ? `&mut ${decoderVarForVariants}` : decoderVarForVariants;
+            ctxLines.push(`${vi}${enumName}::${vTypeName}(${vDecodeTypeName}::decode_with_decoder_and_context(${decoderArg}, Some(&union_ctx))?)`);
+            return ctxLines;
+          } else {
+            const decoderArg = byteBudget ? `&mut ${decoderVarForVariants}` : decoderVarForVariants;
+            return [`${vi}${enumName}::${vTypeName}(${vDecodeTypeName}::decode_with_decoder(${decoderArg})?)`];
+          }
+        }
+
+        // Generate the if-else expression
+        for (let i = 0; i < conditionalVariants.length; i++) {
+          const variant = conditionalVariants[i];
+
+          // Convert condition: replace 'value' with discriminator variable, fix JS operators
+          let condition = variant.when.replace(/\bvalue\b/g, discriminatorFieldName);
+          condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
+          // Convert single-quoted strings to Rust string literals
+          condition = condition.replace(/'([^']*)'/g, '"$1"');
+
+          if (i === 0) {
+            lines.push(`${indent}let ${varName} = if ${condition} {`);
+          } else {
+            lines.push(`${indent}} else if ${condition} {`);
+          }
+          lines.push(...rustVariantDecodeExpr(variant, indent + "    "));
+        }
+
+        // Handle fallback or error in the else branch
+        if (fallbackVariant) {
+          if (conditionalVariants.length > 0) {
+            lines.push(`${indent}} else {`);
+          } else {
+            // Only fallback, no conditions - just decode directly
+            lines.push(...rustVariantDecodeExpr(fallbackVariant, indent));
+            // No closing brace needed
+          }
+          if (conditionalVariants.length > 0) {
+            lines.push(...rustVariantDecodeExpr(fallbackVariant, indent + "    "));
+            lines.push(`${indent}};`);
+          }
+        } else {
+          if (conditionalVariants.length > 0) {
+            lines.push(`${indent}} else {`);
+            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("unknown discriminator value: {:?}", ${discriminatorFieldName})));`);
+            lines.push(`${indent}};`);
+          }
+        }
+      } else if (needsCtx) {
+        // Peek-based with context - delegate to enum
         lines.push(`${indent}// Build context for discriminated union variants`);
         lines.push(`${indent}let mut union_ctx: HashMap<String, u64> = HashMap::new();`);
-        // Add all previously decoded primitive fields to the context
         if (allFields) {
           for (const prevField of allFields) {
-            if (prevField.name === field.name) break; // Stop at current field
+            if (prevField.name === field.name) break;
             if (!prevField.name) continue;
             const rustFieldName = toRustFieldName(prevField.name);
-            // Only add primitive numeric types to context
             if (["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64"].includes(prevField.type as string)) {
               lines.push(`${indent}union_ctx.insert("${prevField.name}".to_string(), ${rustFieldName} as u64);`);
             }
@@ -5416,6 +5538,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
         }
         lines.push(`${indent}let ${varName} = ${enumName}::decode_with_decoder_and_context(decoder, Some(&union_ctx))?;`);
       } else {
+        // Peek-based without context - delegate to enum
         lines.push(`${indent}let ${varName} = ${enumName}::decode_with_decoder(decoder)?;`);
       }
       break;
@@ -5433,22 +5556,31 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
   if (fieldAny2.const != null) {
     const constVal = fieldAny2.const;
     const expectedType = field.type as string;
-    // Generate appropriate literal suffix for the comparison
-    let rustConstExpr: string;
-    switch (expectedType) {
-      case "uint8": rustConstExpr = `${constVal}u8`; break;
-      case "uint16": rustConstExpr = `${constVal}u16`; break;
-      case "uint32": rustConstExpr = `${constVal}u32`; break;
-      case "uint64": rustConstExpr = `${constVal}u64`; break;
-      case "int8": rustConstExpr = `${constVal}i8`; break;
-      case "int16": rustConstExpr = `${constVal}i16`; break;
-      case "int32": rustConstExpr = `${constVal}i32`; break;
-      case "int64": rustConstExpr = `${constVal}i64`; break;
-      default: rustConstExpr = `${constVal}`; break;
+
+    if (expectedType === "string") {
+      // String const validation - compare decoded string to expected value
+      const rustStrLiteral = JSON.stringify(constVal);
+      lines.push(`${indent}if ${varName} != ${rustStrLiteral} {`);
+      lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("const string mismatch: expected ${constVal}, got {}", ${varName})));`);
+      lines.push(`${indent}}`);
+    } else {
+      // Generate appropriate literal suffix for the comparison
+      let rustConstExpr: string;
+      switch (expectedType) {
+        case "uint8": rustConstExpr = `${constVal}u8`; break;
+        case "uint16": rustConstExpr = `${constVal}u16`; break;
+        case "uint32": rustConstExpr = `${constVal}u32`; break;
+        case "uint64": rustConstExpr = `${constVal}u64`; break;
+        case "int8": rustConstExpr = `${constVal}i8`; break;
+        case "int16": rustConstExpr = `${constVal}i16`; break;
+        case "int32": rustConstExpr = `${constVal}i32`; break;
+        case "int64": rustConstExpr = `${constVal}i64`; break;
+        default: rustConstExpr = `${constVal}`; break;
+      }
+      lines.push(`${indent}if ${varName} != ${rustConstExpr} {`);
+      lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(${varName} as u64));`);
+      lines.push(`${indent}}`);
     }
-    lines.push(`${indent}if ${varName} != ${rustConstExpr} {`);
-    lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(${varName} as u64));`);
-    lines.push(`${indent}}`);
   }
 
   return lines;
@@ -5831,7 +5963,9 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     throw new Error(`Array field ${field.name} missing items definition`);
   }
 
-  const itemType = mapFieldToRustType(items, schema, containingTypeName);
+  // Add array field's name to items so inline enum names resolve correctly
+  const itemsWithName = { ...items, name: field.name };
+  const itemType = mapFieldToRustType(itemsWithName, schema, containingTypeName);
 
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";

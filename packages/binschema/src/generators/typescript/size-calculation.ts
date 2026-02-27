@@ -182,6 +182,11 @@ export function generateFieldSizeCalculation(
       case "float64":
         code += `${indent}size += 8; // ${fieldName} (const)\n`;
         return code;
+      case "string":
+        if (fieldAny.kind === "fixed") {
+          code += `${indent}size += ${fieldAny.length}; // ${fieldName} (string const)\n`;
+        }
+        return code;
       default:
         // Unknown const type, shouldn't happen
         code += `${indent}size += 1; // ${fieldName} (const, assuming 1 byte)\n`;
@@ -374,6 +379,31 @@ export function generateFieldSizeCalculation(
         } else {
           code += `${indent}throw new Error("Array items not defined for ${fieldName}");\n`;
         }
+      }
+      break;
+    }
+
+    case "discriminated_union": {
+      // Dispatch on variant .type and call each variant's calculateSize
+      const variants = fieldAny.variants || [];
+      const duPath = `${valuePrefix}${fieldName}`;
+      for (let i = 0; i < variants.length; i++) {
+        const v = variants[i];
+        const ifKw = i === 0 ? "if" : "else if";
+        if (v.when) {
+          code += `${indent}${ifKw} (${duPath}.type === '${v.type}') {\n`;
+        } else {
+          code += `${indent}else {\n`;
+        }
+        code += `${indent}  const _enc = new ${v.type}Encoder();\n`;
+        code += `${indent}  size += _enc.calculateSize(${duPath}.value);\n`;
+        code += `${indent}}\n`;
+      }
+      const hasFallback = variants.some((v: any) => !v.when);
+      if (!hasFallback) {
+        code += `${indent}else {\n`;
+        code += `${indent}  throw new Error(\`Unknown variant type for ${fieldName}: \${${duPath}.type}\`);\n`;
+        code += `${indent}}\n`;
       }
       break;
     }

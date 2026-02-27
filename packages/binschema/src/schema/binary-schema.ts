@@ -1046,10 +1046,15 @@ const DiscriminatorSchema = z.union([
  */
 const DiscriminatedUnionElementSchema = z.object({
   type: z.literal("discriminated_union").meta({
-    description: "Field type (always 'discriminated_union')"  
+    description: "Field type (always 'discriminated_union')"
   }),
   discriminator: DiscriminatorSchema,
   variants: z.array(DiscriminatedUnionVariantSchema).min(1),
+  byte_budget: z.object({
+    field: z.string()
+  }).optional().meta({
+    description: "Byte budget: limits variant decoding to the number of bytes specified by referenced field"
+  }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
@@ -1435,6 +1440,7 @@ const StringFieldSchema = z.discriminatedUnion("kind", [
   StringFieldBaseSchema.extend({
     kind: z.literal("fixed"),
     length: z.number().int().min(1),
+    const: z.string().optional(),
   }).strict(),
 
   // Length-prefixed string (encoder writes length automatically)
@@ -1476,12 +1482,14 @@ const StringFieldSchema = z.discriminatedUnion("kind", [
   notes: [
     "Length-prefixed is most common for variable-length strings",
     "Fixed-length strings are padded/truncated to exact size",
+    "Fixed-length strings support **const** for constant identifiers (e.g., RIFF chunk IDs). Const value byte length must not exceed the fixed length.",
     "Null-terminated strings read until 0x00 byte"
   ],
   examples: [
     { name: "nickname", type: "string", kind: "length_prefixed", length_type: "uint8" },
     { name: "username", type: "string", kind: "length_prefixed", length_type: "uint16", encoding: "utf8" },
-    { name: "code", type: "string", kind: "fixed", length: 8, encoding: "ascii" }
+    { name: "code", type: "string", kind: "fixed", length: 8, encoding: "ascii" },
+    { name: "chunk_id", type: "string", kind: "fixed", length: 4, encoding: "ascii", const: "SIZE" }
   ]
 });
 
@@ -1494,10 +1502,15 @@ const DiscriminatedUnionFieldSchema = z.object({
     description: "Field name"
   }),
   type: z.literal("discriminated_union").meta({
-    description: "Field type (always 'discriminated_union')"  
+    description: "Field type (always 'discriminated_union')"
   }),
   discriminator: DiscriminatorSchema,
   variants: z.array(DiscriminatedUnionVariantSchema).min(1),
+  byte_budget: z.object({
+    field: z.string()
+  }).optional().meta({
+    description: "Byte budget: limits variant decoding to the number of bytes specified by referenced field"
+  }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
@@ -1524,7 +1537,11 @@ const DiscriminatedUnionFieldSchema = z.object({
   notes: [
     "Peek-based: Reads discriminator without consuming bytes (useful for tag-first protocols)",
     "Field-based: Uses value from earlier field (useful for header-based protocols)",
-    "Each variant has a 'when' condition (e.g., 'value == 0x01') that determines if it matches"
+    "Each variant has a **when** condition (e.g., `value == 0x01`) that determines if it matches",
+    "Conditions support **string literals** (e.g., `value == 'SIZE'`) for matching ASCII chunk IDs",
+    "The last variant may omit **when** to act as a **fallback/default** for unrecognized discriminator values",
+    "**byte_budget**: Limits variant decoding to N bytes from a referenced numeric field. Creates a sub-slice for the variant decoder; main decoder advances by the full budget. Essential for RIFF/IFF-style chunk formats.",
+    "byte_budget pairs naturally with **eof_terminated** arrays in fallback variants — the sub-slice EOF boundary becomes the byte budget boundary"
   ],
   examples: [
     {
@@ -1534,6 +1551,16 @@ const DiscriminatedUnionFieldSchema = z.object({
       variants: [
         { when: "value == 0x01", type: "QueryMessage" },
         { when: "value == 0x02", type: "ResponseMessage" }
+      ]
+    },
+    {
+      name: "content",
+      type: "discriminated_union",
+      discriminator: { field: "chunk_id" },
+      byte_budget: { field: "content_size" },
+      variants: [
+        { when: "value == 'SIZE'", type: "SizeData" },
+        { type: "RawBytes" }
       ]
     }
   ]
@@ -1736,6 +1763,11 @@ const InlineDiscriminatedUnionSchema = z.object({
   }),
   variants: z.array(DiscriminatedUnionVariantSchema).min(1).meta({
     description: "List of possible types with conditions"
+  }),
+  byte_budget: z.object({
+    field: z.string()
+  }).optional().meta({
+    description: "Byte budget: limits variant decoding to the number of bytes specified by referenced field"
   }),
 });
 
