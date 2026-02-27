@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0 (2026-02-27)
+
+### Features
+
+- add recipes page with 12 common binary format patterns
+
+### Bug Fixes
+
+- add recipes.html to Vite build entry points
+- normalize JSON formatting in recipes and use local Prism
+
+### Refactoring
+
+- share site header across all pages via header.js
+
+### Chores
+
+- mark website package as private
+
 ## 0.3.0 (2026-02-18)
 
 ### Features
