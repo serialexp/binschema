@@ -1142,8 +1142,16 @@
   </div>
 
   <script type="module">
-    import Prism from 'https://esm.sh/prismjs@1.29.0';
-    import 'https://esm.sh/prismjs@1.29.0/components/prism-json.min.js';
+    import Prism from 'prismjs';
+    import 'prismjs/components/prism-json';
+
+    // Normalize all JSON code blocks to consistent 2-space formatting
+    document.querySelectorAll('code.language-json').forEach(block => {
+      try {
+        const parsed = JSON.parse(block.textContent);
+        block.textContent = JSON.stringify(parsed, null, 2);
+      } catch {}
+    });
 
     const sidebar = document.getElementById('sidebar');
     const recipes = document.querySelectorAll('.recipe');
