@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 (2026-02-27)
+
+### Features
+
+- add string const, byte_budget, and string literal conditions
+
 ## 0.3.0 (2026-02-18)
 
 ### Features
