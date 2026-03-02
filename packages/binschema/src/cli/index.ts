@@ -177,7 +177,10 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
 
   // If schema has a protocol section, transform it into binary types (Frame + MessageCode)
   if (schema.protocol) {
-    schema = transformProtocolToBinary(schema);
+    schema = transformProtocolToBinary(schema, {
+      combinedTypeName: schema.protocol.frame_type_name,
+      messageCodeTypeName: schema.protocol.message_code_type_name,
+    });
   }
 
   const absoluteOut = resolve(process.cwd(), command.outputDir);

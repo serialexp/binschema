@@ -1877,13 +1877,40 @@ const CompositeTypeSchema = z.object({
 });
 
 /**
- * Type definition - either composite or type alias
+ * Enum type - named integer values
+ *
+ * An enum maps variant names to integer values, backed by a fixed-width unsigned integer
+ * representation (repr). On the wire, the enum is just its repr integer. In generated code,
+ * it becomes a proper language-native enum (TypeScript enum, Go typed const, Rust #[repr] enum).
+ *
+ * This is different from the `choice` type (tagged unions for polymorphic structs with payloads).
+ * Enums are simple named integer values with no payload.
+ */
+const EnumTypeSchema = z.object({
+  type: z.literal("enum"),
+  repr: z.enum(["uint8", "uint16", "uint32"]),
+  variants: z.record(z.string(), z.number().int().min(0)),
+  description: z.string().optional(),
+});
+
+/**
+ * Check if a type definition is an enum type
+ */
+export function isEnumType(typeDef: any): boolean {
+  return typeDef && typeof typeDef === 'object' && typeDef.type === 'enum' && 'variants' in typeDef;
+}
+
+/**
+ * Type definition - composite, enum, or type alias
  *
  * A type can be:
  * 1. Composite type: Has a 'sequence' of named types that appear in order on the wire
  *    Example: AuthRequest is a sequence of [String nickname, String password]
  *
- * 2. Type alias: Directly references a type/primitive without wrapping
+ * 2. Enum type: Has 'type: "enum"' with named integer variants
+ *    Example: Direction has variants North=0, East=1, South=2, West=3
+ *
+ * 3. Type alias: Directly references a type/primitive without wrapping
  *    Example: String IS a length-prefixed array of uint8, not a struct containing one
  *
  * This distinction clarifies that binary schemas represent wire format (ordered byte sequences),
@@ -1891,6 +1918,7 @@ const CompositeTypeSchema = z.object({
  */
 export const TypeDefSchema = z.union([
   CompositeTypeSchema,
+  EnumTypeSchema,
   // Type alias - any element type (primitive, array, etc) with optional description
   ElementTypeSchema.and(z.object({
     description: z.string().optional()
@@ -1986,6 +2014,8 @@ const ProtocolDefinitionSchema = z.object({
   message_groups: z.array(MessageGroupSchema).optional(), // Group messages into categories
   constants: z.record(z.string(), ProtocolConstantSchema).optional(), // Protocol constants/enums
   notes: z.array(z.string()).optional(), // General protocol notes
+  frame_type_name: z.string().optional(), // Custom name for generated Frame type (default: "Frame")
+  message_code_type_name: z.string().optional(), // Custom name for generated MessageCode enum (default: "MessageCode")
 });
 export type ProtocolDefinition = z.infer<typeof ProtocolDefinitionSchema>;
 
