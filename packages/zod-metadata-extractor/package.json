@@ -1,6 +1,6 @@
 {
   "name": "zod-metadata-extractor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Extract and work with metadata from Zod v4 schemas",
   "type": "module",
   "main": "./dist/index.js",
