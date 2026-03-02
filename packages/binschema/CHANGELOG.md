@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 (2026-03-02)
+
+### Features
+
+- add string const, byte_budget, and string literal conditions
+- make encoder trace logging conditional via --debug flag
+- add MessageCode enum generation and wire protocol transform into CLI
+
 ## 0.3.0 (2026-02-18)
 
 ### Features

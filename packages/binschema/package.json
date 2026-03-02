@@ -1,6 +1,6 @@
 {
   "name": "binschema",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Bit-level binary serialization schema and code generator",
   "type": "module",
   "bin": {
