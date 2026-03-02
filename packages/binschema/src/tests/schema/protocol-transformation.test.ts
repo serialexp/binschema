@@ -35,6 +35,8 @@ interface TransformTestCase {
       variants: Record<string, number>;
       description: string;
     } | null;
+    // Custom name for the message code enum (default: "MessageCode")
+    messageCodeEnumName?: string;
   };
   shouldSucceed: boolean;
   expectedError?: string; // If shouldSucceed=false, error substring
@@ -863,6 +865,55 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
     }
   },
 
+  {
+    description: "Allow custom message code enum name via options",
+    shouldSucceed: true,
+    protocolSchema: {
+      protocol: {
+        name: "Custom Enum Protocol",
+        version: "1.0",
+        types_schema: "types.json",
+        header_format: "FrameHeader",
+        discriminator_field: "message_type",
+        messages: [
+          { code: "0x01", name: "HELLO", direction: "client_to_server", payload_type: "Payload", description: "Hello" },
+          { code: "0x02", name: "GOODBYE", direction: "client_to_server", payload_type: "Payload", description: "Goodbye" },
+        ]
+      }
+    },
+    binarySchema: {
+      types: {
+        "FrameHeader": { sequence: [{ name: "message_type", type: "uint8" }] },
+        "Payload": { sequence: [{ name: "data", type: "uint8" }] },
+      }
+    },
+    expectedOutput: {
+      combinedTypeName: "Frame",
+      combinedType: {
+        sequence: [
+          { name: "message_type", type: "MsgType" },
+          {
+            name: "payload",
+            type: "discriminated_union",
+            discriminator: { field: "message_type" },
+            variants: [
+              { when: "value == 0x01", type: "Payload" },
+              { when: "value == 0x02", type: "Payload" },
+            ]
+          }
+        ],
+        description: "Auto-generated combined frame type for Custom Enum Protocol"
+      },
+      messageCodeEnumName: "MsgType",
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { HELLO: 1, GOODBYE: 2 },
+        description: "Message type codes for Custom Enum Protocol"
+      }
+    }
+  },
+
   // ==========================================================================
   // No Header Format (Edge Case)
   // ==========================================================================
@@ -910,10 +961,14 @@ export function runProtocolTransformationTests(): { passed: number; failed: numb
 
   for (const tc of TRANSFORM_TEST_CASES) {
     try {
-      // Custom combined type name for specific test
-      const options = tc.expectedOutput.combinedTypeName !== "Frame"
-        ? { combinedTypeName: tc.expectedOutput.combinedTypeName }
-        : undefined;
+      // Custom type names for specific tests
+      const options: Record<string, string> = {};
+      if (tc.expectedOutput.combinedTypeName !== "Frame") {
+        options.combinedTypeName = tc.expectedOutput.combinedTypeName;
+      }
+      if (tc.expectedOutput.messageCodeEnumName) {
+        options.messageCodeTypeName = tc.expectedOutput.messageCodeEnumName;
+      }
 
       // Merge protocol schema and binary schema into unified schema
       // Map old field names to new ones for backward compatibility with tests
@@ -1003,7 +1058,8 @@ export function runProtocolTransformationTests(): { passed: number; failed: numb
 
       // Verify MessageCode enum if expected
       if (tc.expectedOutput.messageCodeEnum !== undefined) {
-        const actualEnum = result.types["MessageCode"];
+        const enumName = tc.expectedOutput.messageCodeEnumName || "MessageCode";
+        const actualEnum = result.types[enumName];
         if (tc.expectedOutput.messageCodeEnum === null) {
           // Should NOT be generated
           if (actualEnum) {

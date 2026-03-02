@@ -17,6 +17,8 @@ import { normalizeMessageCode } from "./protocol-schema";
 export interface ProtocolTransformOptions {
   /** Custom name for the generated combined type (default: "Frame") */
   combinedTypeName?: string;
+  /** Custom name for the generated message code enum (default: "MessageCode") */
+  messageCodeTypeName?: string;
 }
 
 /**
@@ -37,6 +39,7 @@ export function transformProtocolToBinary(
 
   const protocol = schema.protocol;
   const combinedTypeName = options?.combinedTypeName || "Frame";
+  const messageCodeTypeName = options?.messageCodeTypeName || "MessageCode";
 
   // 1. Validate protocol has at least one message
   if (protocol.messages.length === 0) {
@@ -120,8 +123,8 @@ export function transformProtocolToBinary(
 
   if (protocol.discriminator && protocol.header) {
     const discriminatorRepr = resolveDiscriminatorRepr(headerFields, protocol.discriminator);
-    if (discriminatorRepr && !schema.types["MessageCode"]) {
-      messageCodeEnumName = "MessageCode";
+    if (discriminatorRepr && !schema.types[messageCodeTypeName]) {
+      messageCodeEnumName = messageCodeTypeName;
 
       const enumVariants: Record<string, number> = {};
       for (const msg of protocol.messages) {
