@@ -87,10 +87,10 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
       combinedTypeName: "Frame", // Default combined type name
       combinedType: {
         sequence: [
-          // Flattened header fields
+          // Flattened header fields (discriminator replaced with MessageCode enum)
           { name: "length", type: "uint32", endianness: "big_endian" },
           { name: "version", type: "uint8" },
-          { name: "message_type", type: "uint8" },
+          { name: "message_type", type: "MessageCode" },
           { name: "flags", type: "uint8" },
           // Auto-generated discriminated union
           {
@@ -149,7 +149,7 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
       combinedType: {
         sequence: [
           { name: "length", type: "uint32", endianness: "big_endian" },
-          { name: "message_type", type: "uint8" },
+          { name: "message_type", type: "MessageCode" },
           {
             name: "payload",
             type: "discriminated_union",
@@ -269,7 +269,7 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           { name: "magic", type: "uint32", endianness: "big_endian" },
           { name: "length", type: "uint32", endianness: "big_endian" },
           { name: "version", type: "uint8" },
-          { name: "msg_type", type: "uint8" },
+          { name: "msg_type", type: "MessageCode" },
           { name: "flags", type: "uint16", endianness: "little_endian" },
           { name: "sequence_number", type: "uint32", endianness: "big_endian" },
           // Discriminated union with 3 variants
@@ -674,7 +674,7 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
       combinedTypeName: "Frame",
       combinedType: {
         sequence: [
-          { name: "message_type", type: "uint8" },
+          { name: "message_type", type: "MessageCode" },
           {
             name: "payload",
             type: "discriminated_union",
@@ -736,7 +736,7 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
         sequence: [
           { name: "length", type: "uint32", endianness: "big_endian" },
           { name: "metadata", type: "Metadata" }, // Flattened as-is (type reference)
-          { name: "message_type", type: "uint8" },
+          { name: "message_type", type: "MessageCode" },
           {
             name: "payload",
             type: "discriminated_union",
@@ -790,7 +790,7 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
       combinedTypeName: "Frame",
       combinedType: {
         sequence: [
-          { name: "message_type", type: "uint8" },
+          { name: "message_type", type: "MessageCode" },
           {
             name: "payload",
             type: "discriminated_union",
@@ -842,7 +842,7 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
       combinedTypeName: "CustomFrame", // Custom name from options
       combinedType: {
         sequence: [
-          { name: "message_type", type: "uint8" },
+          { name: "message_type", type: "MessageCode" },
           {
             name: "payload",
             type: "discriminated_union",

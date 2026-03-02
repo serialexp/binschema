@@ -114,10 +114,38 @@ export function transformProtocolToBinary(
     }
   }
 
-  // 7. Build combined type
-  const combinedFields: any[] = [...headerFields];
+  // 7. Determine if MessageCode enum will be generated
+  const additionalTypes: Record<string, any> = {};
+  let messageCodeEnumName: string | null = null;
 
-  // 8. Add payload field (discriminated union or direct reference)
+  if (protocol.discriminator && protocol.header) {
+    const discriminatorRepr = resolveDiscriminatorRepr(headerFields, protocol.discriminator);
+    if (discriminatorRepr && !schema.types["MessageCode"]) {
+      messageCodeEnumName = "MessageCode";
+
+      const enumVariants: Record<string, number> = {};
+      for (const msg of protocol.messages) {
+        enumVariants[msg.name] = Number(msg.code);
+      }
+
+      additionalTypes[messageCodeEnumName] = {
+        type: "enum",
+        repr: discriminatorRepr,
+        variants: enumVariants,
+        description: `Message type codes for ${protocol.name}`
+      };
+    }
+  }
+
+  // 8. Build combined fields from header, replacing discriminator type with enum
+  const combinedFields: any[] = headerFields.map(f => {
+    if (messageCodeEnumName && f.name === protocol.discriminator) {
+      return { ...f, type: messageCodeEnumName };
+    }
+    return f;
+  });
+
+  // 9. Add payload field (discriminated union or direct reference)
   if (protocol.messages.length === 1 && !protocol.discriminator) {
     // Single message without discriminator: direct type reference
     combinedFields.push({
@@ -154,34 +182,11 @@ export function transformProtocolToBinary(
     });
   }
 
-  // 9. Create combined type
+  // 10. Create combined type
   const combinedType = {
     sequence: combinedFields,
     description: `Auto-generated combined frame type for ${protocol.name}`
   };
-
-  // 10. Build MessageCode enum from protocol messages
-  const additionalTypes: Record<string, any> = {};
-
-  if (protocol.discriminator && protocol.header) {
-    const discriminatorRepr = resolveDiscriminatorRepr(headerFields, protocol.discriminator);
-    if (discriminatorRepr) {
-      const enumVariants: Record<string, number> = {};
-      for (const msg of protocol.messages) {
-        enumVariants[msg.name] = Number(msg.code);
-      }
-
-      const messageCodeEnumName = "MessageCode";
-      if (!schema.types[messageCodeEnumName]) {
-        additionalTypes[messageCodeEnumName] = {
-          type: "enum",
-          repr: discriminatorRepr,
-          variants: enumVariants,
-          description: `Message type codes for ${protocol.name}`
-        };
-      }
-    }
-  }
 
   // 11. Return schema with combined type and MessageCode enum added
   return {
