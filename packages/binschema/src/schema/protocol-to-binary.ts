@@ -8,6 +8,7 @@
  * 2. Auto-generating discriminated unions for message payloads
  * 3. Validating field name uniqueness across header and payloads
  * 4. Generating 'when' conditions from message codes
+ * 5. Injecting a MessageCode enum type from protocol message definitions
  */
 
 import { BinarySchema } from "./binary-schema";
@@ -159,11 +160,35 @@ export function transformProtocolToBinary(
     description: `Auto-generated combined frame type for ${protocol.name}`
   };
 
-  // 10. Return schema with combined type added
+  // 10. Build MessageCode enum from protocol messages
+  const additionalTypes: Record<string, any> = {};
+
+  if (protocol.discriminator && protocol.header) {
+    const discriminatorRepr = resolveDiscriminatorRepr(headerFields, protocol.discriminator);
+    if (discriminatorRepr) {
+      const enumVariants: Record<string, number> = {};
+      for (const msg of protocol.messages) {
+        enumVariants[msg.name] = Number(msg.code);
+      }
+
+      const messageCodeEnumName = "MessageCode";
+      if (!schema.types[messageCodeEnumName]) {
+        additionalTypes[messageCodeEnumName] = {
+          type: "enum",
+          repr: discriminatorRepr,
+          variants: enumVariants,
+          description: `Message type codes for ${protocol.name}`
+        };
+      }
+    }
+  }
+
+  // 11. Return schema with combined type and MessageCode enum added
   return {
     ...schema,
     types: {
       ...schema.types,
+      ...additionalTypes,
       [combinedTypeName]: combinedType
     }
   };
@@ -173,4 +198,26 @@ export function transformProtocolToBinary(
 function getFieldsFromType(typeDef: any): any[] {
   if (typeDef.sequence) return typeDef.sequence;
   return [];
+}
+
+/** Helper: Resolve discriminator field's type to a valid enum repr */
+function resolveDiscriminatorRepr(
+  headerFields: any[],
+  discriminator: string
+): "uint8" | "uint16" | "uint32" | null {
+  const validReprTypes = ["uint8", "uint16", "uint32"];
+
+  // Dot notation (bitfield sub-field) - can't directly map to enum repr
+  if (discriminator.includes('.')) {
+    return null;
+  }
+
+  const field = headerFields.find((f: any) => f.name === discriminator);
+  if (!field) return null;
+
+  if (validReprTypes.includes(field.type)) {
+    return field.type as "uint8" | "uint16" | "uint32";
+  }
+
+  return null;
 }

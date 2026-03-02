@@ -14,6 +14,7 @@ import {
   ValidateCommand,
 } from "./command-parser.js";
 import type { BinarySchema } from "../schema/binary-schema.js";
+import { transformProtocolToBinary } from "../schema/protocol-to-binary.js";
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -172,7 +173,13 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
     console.warn("Watch mode for code generation is not implemented yet; proceeding with a single build.");
   }
 
-  const schema = loadSchema(command.schemaPath);
+  let schema = loadSchema(command.schemaPath);
+
+  // If schema has a protocol section, transform it into binary types (Frame + MessageCode)
+  if (schema.protocol) {
+    schema = transformProtocolToBinary(schema);
+  }
+
   const absoluteOut = resolve(process.cwd(), command.outputDir);
 
   // Validate that --out is not an existing file (it must be a directory)
@@ -192,7 +199,7 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
         throw new Error("Schema does not define any types; cannot generate Go code.");
       }
       await runGoGenerator({
-        schemaPath: resolve(process.cwd(), command.schemaPath),
+        schema,
         typeName,
         outputDir: absoluteOut,
       });
@@ -249,13 +256,11 @@ function resolveTypeName(schema: BinarySchema, explicit?: string): string | unde
   return names.length > 0 ? names.sort()[0] : undefined;
 }
 
-async function runGoGenerator(opts: { schemaPath: string; typeName: string; outputDir: string }): Promise<void> {
+async function runGoGenerator(opts: { schema: BinarySchema; typeName: string; outputDir: string }): Promise<void> {
   mkdirSync(opts.outputDir, { recursive: true });
 
-  // Use TypeScript generator directly
   const { generateGo } = await import("../generators/go.js");
-  const schema = loadSchema(opts.schemaPath);
-  const result = generateGo(schema, opts.typeName);
+  const result = generateGo(opts.schema, opts.typeName);
 
   const outputPath = join(opts.outputDir, "generated.go");
   writeFileSync(outputPath, result.code);

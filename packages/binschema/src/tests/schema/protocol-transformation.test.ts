@@ -28,6 +28,13 @@ interface TransformTestCase {
     // The auto-generated combined type
     combinedTypeName: string;
     combinedType: any; // What the combined type should look like
+    // Expected MessageCode enum type (null = should not be generated)
+    messageCodeEnum?: {
+      type: "enum";
+      repr: "uint8" | "uint16" | "uint32";
+      variants: Record<string, number>;
+      description: string;
+    } | null;
   };
   shouldSucceed: boolean;
   expectedError?: string; // If shouldSucceed=false, error substring
@@ -99,6 +106,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Simple Protocol"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { LOGIN: 1, LOGOUT: 2 },
+        description: "Message type codes for Simple Protocol"
       }
     }
   },
@@ -150,6 +163,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Numeric Codes"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { PING: 16, PONG: 144 },
+        description: "Message type codes for Numeric Codes"
       }
     }
   },
@@ -199,7 +218,8 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           { name: "payload", type: "OnlyPayload" }
         ],
         description: "Auto-generated combined frame type for Single Message Protocol"
-      }
+      },
+      messageCodeEnum: null  // No discriminator → no enum
     }
   },
 
@@ -265,6 +285,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Complex Protocol"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { MSG_A: 16, MSG_B: 32, MSG_C: 48 },
+        description: "Message type codes for Complex Protocol"
       }
     }
   },
@@ -661,6 +687,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Shared Payload Protocol"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { MSG1: 1, MSG2: 2, MSG3: 3 },
+        description: "Message type codes for Shared Payload Protocol"
       }
     }
   },
@@ -715,6 +747,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Nested Header Protocol"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { MSG: 1 },
+        description: "Message type codes for Nested Header Protocol"
       }
     }
   },
@@ -765,6 +803,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Hex Format Protocol"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { MSG1: 1, MSG2: 10, MSG3: 255 },
+        description: "Message type codes for Hex Format Protocol"
       }
     }
   },
@@ -809,6 +853,12 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           }
         ],
         description: "Auto-generated combined frame type for Custom Name Protocol"
+      },
+      messageCodeEnum: {
+        type: "enum",
+        repr: "uint8",
+        variants: { MSG: 1 },
+        description: "Message type codes for Custom Name Protocol"
       }
     }
   },
@@ -844,7 +894,8 @@ const TRANSFORM_TEST_CASES: TransformTestCase[] = [
           { name: "payload", type: "Payload" }
         ],
         description: "Auto-generated combined frame type for No Header Protocol"
-      }
+      },
+      messageCodeEnum: null  // No header → no discriminator to resolve
     }
   },
 ];
@@ -948,6 +999,45 @@ export function runProtocolTransformationTests(): { passed: number; failed: numb
           message: `Combined type mismatch:\nExpected:\n${expectedJson}\n\nActual:\n${actualJson}`
         });
         continue;
+      }
+
+      // Verify MessageCode enum if expected
+      if (tc.expectedOutput.messageCodeEnum !== undefined) {
+        const actualEnum = result.types["MessageCode"];
+        if (tc.expectedOutput.messageCodeEnum === null) {
+          // Should NOT be generated
+          if (actualEnum) {
+            failed++;
+            checks.push({
+              description: `${tc.description} (MessageCode enum should not exist)`,
+              passed: false,
+              message: `MessageCode enum was generated but should not have been: ${JSON.stringify(actualEnum, null, 2)}`
+            });
+            continue;
+          }
+        } else {
+          // Should be generated with specific shape
+          if (!actualEnum) {
+            failed++;
+            checks.push({
+              description: `${tc.description} (MessageCode enum)`,
+              passed: false,
+              message: `MessageCode enum not found in output types`
+            });
+            continue;
+          }
+          const actualEnumJson = JSON.stringify(actualEnum, null, 2);
+          const expectedEnumJson = JSON.stringify(tc.expectedOutput.messageCodeEnum, null, 2);
+          if (actualEnumJson !== expectedEnumJson) {
+            failed++;
+            checks.push({
+              description: `${tc.description} (MessageCode enum)`,
+              passed: false,
+              message: `MessageCode enum mismatch:\nExpected:\n${expectedEnumJson}\n\nActual:\n${actualEnumJson}`
+            });
+            continue;
+          }
+        }
       }
 
       passed++;
