@@ -544,6 +544,20 @@ fn generate_value_construction(
     current_type_name: &str,
     test_description: &str,
 ) -> String {
+    // Check if the type is an enum — construct via from_value
+    if let Some(TypeDef::Enum { repr, .. }) = schema.types.get(current_type_name) {
+        let rust_repr = match repr.as_str() {
+            "uint8" => "u8",
+            "uint16" => "u16",
+            "uint32" => "u32",
+            _ => "u8",
+        };
+        if let serde_json::Value::Number(n) = value {
+            let val = n.as_u64().unwrap_or(0);
+            return format!("            let {} = {}::from_value({} as {}).unwrap();\n", var_name, type_name, val, rust_repr);
+        }
+    }
+
     // Handle non-object values (e.g., string for newtype wrappers)
     let value_map = match value {
         serde_json::Value::Object(map) => map,
@@ -858,6 +872,21 @@ fn format_value_with_field_and_suffix(
                 // Direct type reference (newtype wrapper like String, InlineString)
                 return format_value_as_newtype(value, field_type, prefix, schema);
             }
+            TypeDef::Enum { repr, .. } => {
+                // Enum type — construct via from_value
+                let rust_repr = match repr.as_str() {
+                    "uint8" => "u8",
+                    "uint16" => "u16",
+                    "uint32" => "u32",
+                    _ => "u8",
+                };
+                let prefixed_type = format!("{}_{}", prefix, to_pascal_case(field_type));
+                if let serde_json::Value::Number(n) = value {
+                    let val = n.as_u64().unwrap_or(0);
+                    return format!("{}::from_value({} as {}).unwrap()", prefixed_type, val, rust_repr);
+                }
+                return format!("{}::from_value(0).unwrap()", prefixed_type);
+            }
         }
     }
 
@@ -944,6 +973,20 @@ fn format_conditional_inner_value(
             }
             TypeDef::Direct { .. } => {
                 return format_value_as_newtype(value, field_type, prefix, schema);
+            }
+            TypeDef::Enum { repr, .. } => {
+                let rust_repr = match repr.as_str() {
+                    "uint8" => "u8",
+                    "uint16" => "u16",
+                    "uint32" => "u32",
+                    _ => "u8",
+                };
+                let prefixed_type = format!("{}_{}", prefix, to_pascal_case(field_type));
+                if let serde_json::Value::Number(n) = value {
+                    let val = n.as_u64().unwrap_or(0);
+                    return format!("{}::from_value({} as {}).unwrap()", prefixed_type, val, rust_repr);
+                }
+                return format!("{}::from_value(0).unwrap()", prefixed_type);
             }
         }
     }

@@ -38,6 +38,14 @@ pub enum TypeDef {
         #[serde(default)]
         description: Option<String>,
     },
+    Enum {
+        #[serde(rename = "type")]
+        type_name: String,  // Should be "enum"
+        repr: String,  // "uint8", "uint16", "uint32"
+        variants: HashMap<String, u64>,
+        #[serde(default)]
+        description: Option<String>,
+    },
     DiscriminatedUnion {
         #[serde(rename = "type")]
         type_name: String,  // Should be "discriminated_union"

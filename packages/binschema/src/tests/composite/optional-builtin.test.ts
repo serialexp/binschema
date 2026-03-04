@@ -279,3 +279,102 @@ export const optionalBuiltinStringTestSuite = defineTestSuite({
     },
   ]
 });
+
+/**
+ * Test 6: Optional with inline value_type (no named type needed)
+ */
+export const optionalBuiltinInlineStringTestSuite = defineTestSuite({
+  name: "optional_builtin_inline_string",
+  description: "Built-in optional with inline value_type object (no separate named type)",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "Message": {
+        sequence: [
+          { name: "id", type: "uint8" },
+          {
+            name: "name",
+            type: "optional",
+            value_type: {
+              type: "string",
+              kind: "length_prefixed",
+              length_type: "uint8",
+              encoding: "utf8",
+            }
+          },
+        ]
+      }
+    }
+  },
+
+  test_type: "Message",
+
+  test_cases: [
+    {
+      description: "Name not present",
+      value: { id: 42 },
+      bytes: [0x2A, 0x00],
+    },
+    {
+      description: "Name present",
+      value: { id: 42, name: "Alice" },
+      bytes: [
+        0x2A,       // id = 42
+        0x01,       // name presence = 1
+        0x05,       // string length = 5
+        0x41, 0x6c, 0x69, 0x63, 0x65, // "Alice"
+      ],
+    },
+  ]
+});
+
+/**
+ * Test 7: Optional with inline uint16 value_type
+ */
+export const optionalBuiltinInlineUint16TestSuite = defineTestSuite({
+  name: "optional_builtin_inline_uint16",
+  description: "Built-in optional with inline uint16 value_type",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "Measurement": {
+        sequence: [
+          { name: "sensor_id", type: "uint8" },
+          {
+            name: "temperature",
+            type: "optional",
+            value_type: {
+              type: "uint16",
+              endianness: "little_endian",
+            }
+          },
+        ]
+      }
+    }
+  },
+
+  test_type: "Measurement",
+
+  test_cases: [
+    {
+      description: "Temperature not present",
+      value: { sensor_id: 1 },
+      bytes: [0x01, 0x00],
+    },
+    {
+      description: "Temperature present (300 in LE)",
+      value: { sensor_id: 1, temperature: 300 },
+      bytes: [
+        0x01,       // sensor_id = 1
+        0x01,       // temperature presence = 1
+        0x2C, 0x01, // temperature = 300 (little-endian)
+      ],
+    },
+  ]
+});

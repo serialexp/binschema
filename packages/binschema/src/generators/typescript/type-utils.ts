@@ -1,7 +1,7 @@
 // ABOUTME: Utility functions for working with schema types
 // ABOUTME: Includes type checking, name sanitization, and field extraction
 
-import { TypeDef, Field } from "../../schema/binary-schema.js";
+import { TypeDef, Field, isEnumType } from "../../schema/binary-schema.js";
 import { TS_RESERVED_TYPES, JS_RESERVED_KEYWORDS, BACK_REFERENCE_TYPE_NAMES } from "./shared.js";
 
 /**
@@ -15,8 +15,13 @@ export function isTypeAlias(typeDef: TypeDef): boolean {
     return false;
   }
 
-  // Standalone array and string types need encoder/decoder functions
-  if (typeDefAny.type === 'array' || typeDefAny.type === 'string') {
+  // Enum types are their own category, not aliases
+  if (isEnumType(typeDef)) {
+    return false;
+  }
+
+  // Standalone array, bytes, and string types need encoder/decoder functions
+  if (typeDefAny.type === 'array' || typeDefAny.type === 'bytes' || typeDefAny.type === 'string') {
     return false;
   }
 

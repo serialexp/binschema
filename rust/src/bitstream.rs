@@ -24,15 +24,41 @@ pub struct BitStreamEncoder {
 }
 
 impl BitStreamEncoder {
+    #[inline]
     pub fn new(bit_order: BitOrder) -> Self {
         Self {
-            buffer: Vec::new(),
+            buffer: Vec::with_capacity(64),
             current_byte: 0,
             bit_position: 0,
             bit_order,
         }
     }
 
+    #[inline]
+    pub fn with_capacity(capacity: usize, bit_order: BitOrder) -> Self {
+        Self {
+            buffer: Vec::with_capacity(capacity),
+            current_byte: 0,
+            bit_position: 0,
+            bit_order,
+        }
+    }
+
+    /// Reset the encoder for reuse without deallocating the internal buffer.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.current_byte = 0;
+        self.bit_position = 0;
+    }
+
+    /// Returns a reference to the encoded bytes so far.
+    #[inline]
+    pub fn buffer(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    #[inline]
     pub fn write_bits(&mut self, value: u64, num_bits: u8) {
         if num_bits == 0 || num_bits > 64 {
             return;
@@ -68,6 +94,7 @@ impl BitStreamEncoder {
         }
     }
 
+    #[inline]
     fn write_single_bit(&mut self, bit: u8) {
         let bit_index = match self.bit_order {
             BitOrder::MsbFirst => 7 - self.bit_position,
@@ -85,12 +112,14 @@ impl BitStreamEncoder {
         }
     }
 
+    #[inline]
     fn flush_byte(&mut self) {
         self.buffer.push(self.current_byte);
         self.current_byte = 0;
         self.bit_position = 0;
     }
 
+    #[inline]
     pub fn write_uint8(&mut self, value: u8) {
         if self.bit_position == 0 {
             // Byte-aligned: write directly (same as TypeScript fast path)
@@ -106,6 +135,7 @@ impl BitStreamEncoder {
         }
     }
 
+    #[inline]
     pub fn write_uint16(&mut self, value: u16, endianness: Endianness) {
         if self.bit_position == 0 {
             let bytes = match endianness {
@@ -127,6 +157,7 @@ impl BitStreamEncoder {
         }
     }
 
+    #[inline]
     pub fn write_uint32(&mut self, value: u32, endianness: Endianness) {
         if self.bit_position == 0 {
             let bytes = match endianness {
@@ -152,6 +183,7 @@ impl BitStreamEncoder {
         }
     }
 
+    #[inline]
     pub fn write_uint64(&mut self, value: u64, endianness: Endianness) {
         if self.bit_position == 0 {
             let bytes = match endianness {
@@ -173,32 +205,86 @@ impl BitStreamEncoder {
         }
     }
 
+    #[inline]
     pub fn write_int8(&mut self, value: i8) {
         self.write_uint8(value as u8);
     }
 
+    #[inline]
     pub fn write_int16(&mut self, value: i16, endianness: Endianness) {
         self.write_uint16(value as u16, endianness);
     }
 
+    #[inline]
     pub fn write_int32(&mut self, value: i32, endianness: Endianness) {
         self.write_uint32(value as u32, endianness);
     }
 
+    #[inline]
     pub fn write_int64(&mut self, value: i64, endianness: Endianness) {
         self.write_uint64(value as u64, endianness);
     }
 
+    #[inline]
     pub fn write_float32(&mut self, value: f32, endianness: Endianness) {
         self.write_uint32(value.to_bits(), endianness);
     }
 
+    #[inline]
     pub fn write_float64(&mut self, value: f64, endianness: Endianness) {
         self.write_uint64(value.to_bits(), endianness);
     }
 
+    // --- Byte-aligned fast-path methods ---
+    // These skip the bit_position check and endianness branch.
+    // The generator emits these when it can prove at code-gen time
+    // that the stream is byte-aligned.
+
+    #[inline]
+    pub fn write_byte(&mut self, value: u8) {
+        debug_assert_eq!(self.bit_position, 0, "write_byte called when not byte-aligned");
+        self.buffer.push(value);
+    }
+
+    #[inline]
+    pub fn write_u16_le(&mut self, value: u16) {
+        debug_assert_eq!(self.bit_position, 0, "write_u16_le called when not byte-aligned");
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[inline]
+    pub fn write_u16_be(&mut self, value: u16) {
+        debug_assert_eq!(self.bit_position, 0, "write_u16_be called when not byte-aligned");
+        self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
+    #[inline]
+    pub fn write_u32_le(&mut self, value: u32) {
+        debug_assert_eq!(self.bit_position, 0, "write_u32_le called when not byte-aligned");
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[inline]
+    pub fn write_u32_be(&mut self, value: u32) {
+        debug_assert_eq!(self.bit_position, 0, "write_u32_be called when not byte-aligned");
+        self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
+    #[inline]
+    pub fn write_u64_le(&mut self, value: u64) {
+        debug_assert_eq!(self.bit_position, 0, "write_u64_le called when not byte-aligned");
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[inline]
+    pub fn write_u64_be(&mut self, value: u64) {
+        debug_assert_eq!(self.bit_position, 0, "write_u64_be called when not byte-aligned");
+        self.buffer.extend_from_slice(&value.to_be_bytes());
+    }
+
     /// Write variable-length integer with specified encoding
     /// Supported encodings: "der", "leb128", "ebml", "vlq"
+    #[inline]
     pub fn write_varlength(&mut self, value: u64, encoding: &str) -> Result<()> {
         match encoding {
             "der" => self.write_varlength_der(value),
@@ -210,6 +296,7 @@ impl BitStreamEncoder {
     }
 
     /// DER encoding: Short form (0-127) or long form (0x80+N followed by N bytes)
+    #[inline]
     fn write_varlength_der(&mut self, value: u64) -> Result<()> {
         if value < 128 {
             self.write_uint8(value as u8);
@@ -234,6 +321,7 @@ impl BitStreamEncoder {
     }
 
     /// LEB128 encoding: 7 bits per byte, continuation bit in MSB, little-endian
+    #[inline]
     fn write_varlength_leb128(&mut self, value: u64) -> Result<()> {
         let mut val = value;
         loop {
@@ -251,6 +339,7 @@ impl BitStreamEncoder {
     }
 
     /// EBML encoding: Leading zeros indicate width, self-synchronizing
+    #[inline]
     fn write_varlength_ebml(&mut self, value: u64) -> Result<()> {
         // Determine width needed (1-8 bytes)
         // Width 1: values 0-126 (7 data bits, marker at bit 7)
@@ -280,6 +369,7 @@ impl BitStreamEncoder {
     }
 
     /// VLQ encoding (MIDI style): 7 bits per byte, continuation bit in MSB, big-endian
+    #[inline]
     fn write_varlength_vlq(&mut self, value: u64) -> Result<()> {
         if value > 0x0FFFFFFF {
             return Err(BinSchemaError::InvalidValue(format!("VLQ value {} exceeds maximum (0x0FFFFFFF)", value)));
@@ -307,10 +397,12 @@ impl BitStreamEncoder {
     }
 
     /// Get the current byte offset (number of complete bytes written)
+    #[inline]
     pub fn byte_offset(&self) -> usize {
         self.buffer.len()
     }
 
+    #[inline]
     pub fn finish(mut self) -> Vec<u8> {
         if self.bit_position > 0 {
             self.flush_byte();
@@ -320,15 +412,16 @@ impl BitStreamEncoder {
 }
 
 /// Decoder for reading bit-level data from a byte stream
-pub struct BitStreamDecoder {
-    bytes: Vec<u8>,
+pub struct BitStreamDecoder<'a> {
+    bytes: &'a [u8],
     byte_offset: usize,
     bit_offset: u8,
     bit_order: BitOrder,
 }
 
-impl BitStreamDecoder {
-    pub fn new(bytes: Vec<u8>, bit_order: BitOrder) -> Self {
+impl<'a> BitStreamDecoder<'a> {
+    #[inline]
+    pub fn new(bytes: &'a [u8], bit_order: BitOrder) -> Self {
         Self {
             bytes,
             byte_offset: 0,
@@ -337,6 +430,7 @@ impl BitStreamDecoder {
         }
     }
 
+    #[inline]
     pub fn read_bits(&mut self, num_bits: u8) -> Result<u64> {
         if num_bits == 0 || num_bits > 64 {
             return Err(BinSchemaError::InvalidValue("Invalid number of bits".to_string()));
@@ -395,6 +489,7 @@ impl BitStreamDecoder {
         Ok(result)
     }
 
+    #[inline]
     fn read_single_bit(&mut self) -> Result<u8> {
         if self.byte_offset >= self.bytes.len() {
             return Err(BinSchemaError::UnexpectedEof);
@@ -419,6 +514,7 @@ impl BitStreamDecoder {
 
     /// Reads `n` bytes as a slice, advancing the byte offset.
     /// Only valid when byte-aligned.
+    #[inline]
     pub fn read_bytes_vec(&mut self, n: usize) -> Result<Vec<u8>> {
         if self.bit_offset != 0 {
             return Err(BinSchemaError::InvalidValue("read_bytes_vec requires byte alignment".to_string()));
@@ -431,6 +527,7 @@ impl BitStreamDecoder {
         Ok(vec)
     }
 
+    #[inline]
     pub fn read_uint8(&mut self) -> Result<u8> {
         if self.bit_offset == 0 {
             // Byte-aligned: read directly (same as TypeScript fast path)
@@ -453,6 +550,7 @@ impl BitStreamDecoder {
         }
     }
 
+    #[inline]
     pub fn read_uint16(&mut self, endianness: Endianness) -> Result<u16> {
         if self.bit_offset == 0 {
             if self.byte_offset + 2 > self.bytes.len() {
@@ -482,6 +580,7 @@ impl BitStreamDecoder {
         }
     }
 
+    #[inline]
     pub fn read_uint32(&mut self, endianness: Endianness) -> Result<u32> {
         if self.bit_offset == 0 {
             if self.byte_offset + 4 > self.bytes.len() {
@@ -519,6 +618,7 @@ impl BitStreamDecoder {
         }
     }
 
+    #[inline]
     pub fn read_uint64(&mut self, endianness: Endianness) -> Result<u64> {
         if self.bit_offset == 0 {
             if self.byte_offset + 8 > self.bytes.len() {
@@ -548,32 +648,133 @@ impl BitStreamDecoder {
         }
     }
 
+    #[inline]
     pub fn read_int8(&mut self) -> Result<i8> {
         Ok(self.read_uint8()? as i8)
     }
 
+    #[inline]
     pub fn read_int16(&mut self, endianness: Endianness) -> Result<i16> {
         Ok(self.read_uint16(endianness)? as i16)
     }
 
+    #[inline]
     pub fn read_int32(&mut self, endianness: Endianness) -> Result<i32> {
         Ok(self.read_uint32(endianness)? as i32)
     }
 
+    #[inline]
     pub fn read_int64(&mut self, endianness: Endianness) -> Result<i64> {
         Ok(self.read_uint64(endianness)? as i64)
     }
 
+    #[inline]
     pub fn read_float32(&mut self, endianness: Endianness) -> Result<f32> {
         Ok(f32::from_bits(self.read_uint32(endianness)?))
     }
 
+    #[inline]
     pub fn read_float64(&mut self, endianness: Endianness) -> Result<f64> {
         Ok(f64::from_bits(self.read_uint64(endianness)?))
     }
 
+    // --- Byte-aligned fast-path methods ---
+    // These skip the bit_offset check and endianness branch.
+    // The generator emits these when it can prove at code-gen time
+    // that the stream is byte-aligned.
+
+    #[inline]
+    pub fn read_byte(&mut self) -> Result<u8> {
+        debug_assert_eq!(self.bit_offset, 0, "read_byte called when not byte-aligned");
+        if self.byte_offset >= self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let value = self.bytes[self.byte_offset];
+        self.byte_offset += 1;
+        Ok(value)
+    }
+
+    #[inline]
+    pub fn read_u16_le(&mut self) -> Result<u16> {
+        debug_assert_eq!(self.bit_offset, 0, "read_u16_le called when not byte-aligned");
+        if self.byte_offset + 2 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let v = u16::from_le_bytes([self.bytes[self.byte_offset], self.bytes[self.byte_offset + 1]]);
+        self.byte_offset += 2;
+        Ok(v)
+    }
+
+    #[inline]
+    pub fn read_u16_be(&mut self) -> Result<u16> {
+        debug_assert_eq!(self.bit_offset, 0, "read_u16_be called when not byte-aligned");
+        if self.byte_offset + 2 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let v = u16::from_be_bytes([self.bytes[self.byte_offset], self.bytes[self.byte_offset + 1]]);
+        self.byte_offset += 2;
+        Ok(v)
+    }
+
+    #[inline]
+    pub fn read_u32_le(&mut self) -> Result<u32> {
+        debug_assert_eq!(self.bit_offset, 0, "read_u32_le called when not byte-aligned");
+        if self.byte_offset + 4 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let bytes: [u8; 4] = [
+            self.bytes[self.byte_offset],
+            self.bytes[self.byte_offset + 1],
+            self.bytes[self.byte_offset + 2],
+            self.bytes[self.byte_offset + 3],
+        ];
+        self.byte_offset += 4;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    #[inline]
+    pub fn read_u32_be(&mut self) -> Result<u32> {
+        debug_assert_eq!(self.bit_offset, 0, "read_u32_be called when not byte-aligned");
+        if self.byte_offset + 4 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let bytes: [u8; 4] = [
+            self.bytes[self.byte_offset],
+            self.bytes[self.byte_offset + 1],
+            self.bytes[self.byte_offset + 2],
+            self.bytes[self.byte_offset + 3],
+        ];
+        self.byte_offset += 4;
+        Ok(u32::from_be_bytes(bytes))
+    }
+
+    #[inline]
+    pub fn read_u64_le(&mut self) -> Result<u64> {
+        debug_assert_eq!(self.bit_offset, 0, "read_u64_le called when not byte-aligned");
+        if self.byte_offset + 8 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&self.bytes[self.byte_offset..self.byte_offset + 8]);
+        self.byte_offset += 8;
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    #[inline]
+    pub fn read_u64_be(&mut self) -> Result<u64> {
+        debug_assert_eq!(self.bit_offset, 0, "read_u64_be called when not byte-aligned");
+        if self.byte_offset + 8 > self.bytes.len() {
+            return Err(BinSchemaError::UnexpectedEof);
+        }
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&self.bytes[self.byte_offset..self.byte_offset + 8]);
+        self.byte_offset += 8;
+        Ok(u64::from_be_bytes(bytes))
+    }
+
     /// Reads a variable-length integer with specified encoding
     /// Supported encodings: "der", "leb128", "ebml", "vlq"
+    #[inline]
     pub fn read_varlength(&mut self, encoding: &str) -> Result<u64> {
         match encoding {
             "der" => self.read_varlength_der(),
@@ -585,6 +786,7 @@ impl BitStreamDecoder {
     }
 
     /// DER encoding: Short form (0-127) or long form (0x80+N followed by N bytes)
+    #[inline]
     fn read_varlength_der(&mut self) -> Result<u64> {
         let first = self.read_uint8()?;
         if first < 128 {
@@ -603,6 +805,7 @@ impl BitStreamDecoder {
     }
 
     /// LEB128 encoding: 7 bits per byte, continuation bit in MSB, little-endian
+    #[inline]
     fn read_varlength_leb128(&mut self) -> Result<u64> {
         let mut result = 0u64;
         let mut shift = 0u32;
@@ -624,6 +827,7 @@ impl BitStreamDecoder {
     }
 
     /// EBML encoding: Leading zeros indicate width, self-synchronizing
+    #[inline]
     fn read_varlength_ebml(&mut self) -> Result<u64> {
         let first_byte = self.read_uint8()?;
 
@@ -652,6 +856,7 @@ impl BitStreamDecoder {
     }
 
     /// VLQ encoding (MIDI style): 7 bits per byte, continuation bit in MSB, big-endian
+    #[inline]
     fn read_varlength_vlq(&mut self) -> Result<u64> {
         let mut result = 0u64;
         let mut bytes_read = 0u8;
@@ -677,17 +882,20 @@ impl BitStreamDecoder {
     }
 
     /// Returns the current byte position in the stream
+    #[inline]
     pub fn position(&self) -> usize {
         self.byte_offset
     }
 
     /// Returns the total number of bytes in the stream
+    #[inline]
     pub fn bytes_len(&self) -> usize {
         self.bytes.len()
     }
 
     /// Seeks to a specific byte position in the stream
     /// Note: This resets the bit offset to 0
+    #[inline]
     pub fn seek(&mut self, pos: usize) -> Result<()> {
         if pos > self.bytes.len() {
             return Err(BinSchemaError::InvalidValue(format!("Seek position {} is past end of data", pos)));
@@ -698,6 +906,7 @@ impl BitStreamDecoder {
     }
 
     /// Peeks at the next byte without consuming it
+    #[inline]
     pub fn peek_uint8(&self) -> Result<u8> {
         if self.byte_offset >= self.bytes.len() {
             return Err(BinSchemaError::UnexpectedEof);
@@ -710,6 +919,7 @@ impl BitStreamDecoder {
     }
 
     /// Peeks at the next 2 bytes as uint16 without consuming them
+    #[inline]
     pub fn peek_uint16(&self, endianness: Endianness) -> Result<u16> {
         if self.byte_offset + 2 > self.bytes.len() {
             return Err(BinSchemaError::UnexpectedEof);
@@ -732,6 +942,7 @@ impl BitStreamDecoder {
     }
 
     /// Peeks at the next 4 bytes as uint32 without consuming them
+    #[inline]
     pub fn peek_uint32(&self, endianness: Endianness) -> Result<u32> {
         if self.byte_offset + 4 > self.bytes.len() {
             return Err(BinSchemaError::UnexpectedEof);
@@ -770,7 +981,7 @@ mod tests {
         encoder.write_uint8(0);
 
         let bytes = encoder.finish();
-        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::MsbFirst);
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
 
         assert_eq!(decoder.read_uint8().unwrap(), 42);
         assert_eq!(decoder.read_uint8().unwrap(), 255);
@@ -785,7 +996,7 @@ mod tests {
         let bytes = encoder.finish();
         assert_eq!(bytes, vec![0x12, 0x34]);
 
-        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::MsbFirst);
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
         assert_eq!(decoder.read_uint16(Endianness::BigEndian).unwrap(), 0x1234);
     }
 
@@ -796,9 +1007,96 @@ mod tests {
         encoder.write_float32(f32::NEG_INFINITY, Endianness::BigEndian);
 
         let bytes = encoder.finish();
-        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::MsbFirst);
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
 
         assert_eq!(decoder.read_float32(Endianness::BigEndian).unwrap(), f32::INFINITY);
         assert_eq!(decoder.read_float32(Endianness::BigEndian).unwrap(), f32::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_encoder_with_capacity() {
+        let mut encoder = BitStreamEncoder::with_capacity(16, BitOrder::MsbFirst);
+        encoder.write_uint32(0x12345678, Endianness::LittleEndian);
+        let bytes = encoder.finish();
+        assert_eq!(bytes, vec![0x78, 0x56, 0x34, 0x12]);
+    }
+
+    #[test]
+    fn test_encoder_clear() {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        encoder.write_uint8(42);
+        encoder.clear();
+        encoder.write_uint8(99);
+        let bytes = encoder.finish();
+        assert_eq!(bytes, vec![99]);
+    }
+
+    #[test]
+    fn test_byte_aligned_write_byte() {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        encoder.write_byte(0x42);
+        encoder.write_byte(0xFF);
+        let bytes = encoder.finish();
+        assert_eq!(bytes, vec![0x42, 0xFF]);
+
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
+        assert_eq!(decoder.read_byte().unwrap(), 0x42);
+        assert_eq!(decoder.read_byte().unwrap(), 0xFF);
+    }
+
+    #[test]
+    fn test_byte_aligned_u16() {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        encoder.write_u16_le(0x1234);
+        encoder.write_u16_be(0x5678);
+        let bytes = encoder.finish();
+        assert_eq!(bytes, vec![0x34, 0x12, 0x56, 0x78]);
+
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
+        assert_eq!(decoder.read_u16_le().unwrap(), 0x1234);
+        assert_eq!(decoder.read_u16_be().unwrap(), 0x5678);
+    }
+
+    #[test]
+    fn test_byte_aligned_u32() {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        encoder.write_u32_le(0x12345678);
+        encoder.write_u32_be(0xDEADBEEF);
+        let bytes = encoder.finish();
+        assert_eq!(bytes, vec![0x78, 0x56, 0x34, 0x12, 0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
+        assert_eq!(decoder.read_u32_le().unwrap(), 0x12345678);
+        assert_eq!(decoder.read_u32_be().unwrap(), 0xDEADBEEF);
+    }
+
+    #[test]
+    fn test_byte_aligned_u64() {
+        let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+        encoder.write_u64_le(0x0102030405060708);
+        encoder.write_u64_be(0x0102030405060708);
+        let bytes = encoder.finish();
+
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
+        assert_eq!(decoder.read_u64_le().unwrap(), 0x0102030405060708);
+        assert_eq!(decoder.read_u64_be().unwrap(), 0x0102030405060708);
+    }
+
+    #[test]
+    fn test_byte_aligned_matches_generic() {
+        // Verify byte-aligned methods produce identical output to generic methods
+        let mut enc_aligned = BitStreamEncoder::new(BitOrder::MsbFirst);
+        enc_aligned.write_byte(0x42);
+        enc_aligned.write_u16_le(0x1234);
+        enc_aligned.write_u32_be(0xDEADBEEF);
+        enc_aligned.write_u64_le(0x0102030405060708);
+
+        let mut enc_generic = BitStreamEncoder::new(BitOrder::MsbFirst);
+        enc_generic.write_uint8(0x42);
+        enc_generic.write_uint16(0x1234, Endianness::LittleEndian);
+        enc_generic.write_uint32(0xDEADBEEF, Endianness::BigEndian);
+        enc_generic.write_uint64(0x0102030405060708, Endianness::LittleEndian);
+
+        assert_eq!(enc_aligned.finish(), enc_generic.finish());
     }
 }

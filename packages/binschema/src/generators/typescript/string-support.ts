@@ -1,10 +1,19 @@
 /**
  * String encoding and decoding support.
  * Handles various string kinds: fixed, length_prefixed, null_terminated, field_referenced.
+ * Supports encodings: utf8, ascii, latin1, utf16.
  */
 
 import { Endianness } from "../../schema/binary-schema.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
+
+/**
+ * Resolve the effective endianness for a string field.
+ * UTF-16 strings use field-level endianness if specified, otherwise global.
+ */
+function resolveStringEndianness(field: any, globalEndianness: Endianness): Endianness {
+  return field.endianness || globalEndianness;
+}
 
 /**
  * Generate encoding code for string field (class-based style).
@@ -17,6 +26,7 @@ export function generateEncodeString(
   indent: string
 ): string {
   const encoding = field.encoding || "utf8";
+  const endianness = resolveStringEndianness(field, globalEndianness);
   let kind = field.kind;
   let code = "";
 
@@ -33,7 +43,23 @@ export function generateEncodeString(
     : valuePath.replace(/\./g, "_") + "_bytes";
 
   // Convert string to bytes
-  if (encoding === "utf8") {
+  if (encoding === "utf16") {
+    // UTF-16: convert to array of bytes (2 per code unit) with endianness
+    const unitsVarName = bytesVarName.replace(/_bytes$/, "_units");
+    code += `${indent}const ${unitsVarName}: number[] = [];\n`;
+    code += `${indent}for (let i = 0; i < ${valuePath}.length; i++) {\n`;
+    code += `${indent}  ${unitsVarName}.push(${valuePath}.charCodeAt(i));\n`;
+    code += `${indent}}\n`;
+    // Convert code units to bytes with endianness
+    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
+    code += `${indent}for (const cu of ${unitsVarName}) {\n`;
+    if (endianness === "big_endian") {
+      code += `${indent}  ${bytesVarName}.push((cu >> 8) & 0xFF, cu & 0xFF);\n`;
+    } else {
+      code += `${indent}  ${bytesVarName}.push(cu & 0xFF, (cu >> 8) & 0xFF);\n`;
+    }
+    code += `${indent}}\n`;
+  } else if (encoding === "utf8") {
     code += `${indent}const ${bytesVarName} = new TextEncoder().encode(${valuePath});\n`;
   } else if (encoding === "ascii" || encoding === "latin1") {
     // ASCII and Latin-1 both use direct byte mapping (charCodeAt gives codepoint, which equals byte value for 0-255)
@@ -42,7 +68,7 @@ export function generateEncodeString(
 
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
-    // Write length prefix
+    // Write length prefix (always byte count, even for UTF-16)
     switch (lengthType) {
       case "uint8":
         code += `${indent}this.writeUint8(${bytesVarName}.length);\n`;
@@ -66,8 +92,13 @@ export function generateEncodeString(
     code += `${indent}for (const byte of ${bytesVarName}) {\n`;
     code += `${indent}  this.writeUint8(byte);\n`;
     code += `${indent}}\n`;
-    // Write null terminator
-    code += `${indent}this.writeUint8(0);\n`;
+    // Write null terminator (2 bytes for UTF-16, 1 byte for others)
+    if (encoding === "utf16") {
+      code += `${indent}this.writeUint8(0);\n`;
+      code += `${indent}this.writeUint8(0);\n`;
+    } else {
+      code += `${indent}this.writeUint8(0);\n`;
+    }
   } else if (kind === "fixed") {
     const fixedLength = field.length || 0;
     // Write bytes (padded or truncated to fixed length)
@@ -97,6 +128,7 @@ export function generateDecodeString(
   getTargetPath: (fieldName: string) => string
 ): string {
   const encoding = field.encoding || "utf8";
+  const endianness = resolveStringEndianness(field, globalEndianness);
   let kind = field.kind;
   const target = getTargetPath(fieldName);
   let code = "";
@@ -140,26 +172,42 @@ export function generateDecodeString(
     code += `${indent}const ${bytesVarName} = this.readBytesSlice(${lengthVarName});\n`;
 
     // Convert bytes to string
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(${bytesVarName});\n`;
-    } else if (encoding === "ascii" || encoding === "latin1") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
-    }
+    code += generateBytesToString(encoding, endianness, bytesVarName, target, indent);
   } else if (kind === "null_terminated") {
-    // Read bytes until null terminator
-    const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
-    code += `${indent}const ${bytesVarName}: number[] = [];\n`;
-    code += `${indent}while (true) {\n`;
-    code += `${indent}  const byte = this.readUint8();\n`;
-    code += `${indent}  if (byte === 0) break;\n`;
-    code += `${indent}  ${bytesVarName}.push(byte);\n`;
-    code += `${indent}}\n`;
+    if (encoding === "utf16") {
+      // UTF-16 null terminator is two zero bytes (0x0000 code unit)
+      const unitsVarName = fieldName.replace(/\./g, "_") + "_units";
+      code += `${indent}const ${unitsVarName}: number[] = [];\n`;
+      code += `${indent}while (true) {\n`;
+      if (endianness === "big_endian") {
+        code += `${indent}  const hi = this.readUint8();\n`;
+        code += `${indent}  const lo = this.readUint8();\n`;
+        code += `${indent}  const codeUnit = (hi << 8) | lo;\n`;
+      } else {
+        code += `${indent}  const lo = this.readUint8();\n`;
+        code += `${indent}  const hi = this.readUint8();\n`;
+        code += `${indent}  const codeUnit = (hi << 8) | lo;\n`;
+      }
+      code += `${indent}  if (codeUnit === 0) break;\n`;
+      code += `${indent}  ${unitsVarName}.push(codeUnit);\n`;
+      code += `${indent}}\n`;
+      code += `${indent}${target} = String.fromCharCode(...${unitsVarName});\n`;
+    } else {
+      // Single-byte null terminator
+      const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
+      code += `${indent}const ${bytesVarName}: number[] = [];\n`;
+      code += `${indent}while (true) {\n`;
+      code += `${indent}  const byte = this.readUint8();\n`;
+      code += `${indent}  if (byte === 0) break;\n`;
+      code += `${indent}  ${bytesVarName}.push(byte);\n`;
+      code += `${indent}}\n`;
 
-    // Convert bytes to string
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
-    } else if (encoding === "ascii" || encoding === "latin1") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
+      // Convert bytes to string
+      if (encoding === "utf8") {
+        code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+      } else if (encoding === "ascii" || encoding === "latin1") {
+        code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
+      }
     }
   } else if (kind === "fixed") {
     const fixedLength = field.length || 0;
@@ -168,15 +216,31 @@ export function generateDecodeString(
     const bytesVarName = fieldName.replace(/\./g, "_") + "_bytes";
     code += `${indent}const ${bytesVarName} = this.readBytesSlice(${fixedLength});\n`;
 
-    // Find actual string length (before first null byte)
-    code += `${indent}let actualLength = ${bytesVarName}.indexOf(0);\n`;
-    code += `${indent}if (actualLength === -1) actualLength = ${bytesVarName}.length;\n`;
+    if (encoding === "utf16") {
+      // UTF-16: find actual string length by looking for null code unit (two zero bytes)
+      const unitsVarName = fieldName.replace(/\./g, "_") + "_units";
+      code += `${indent}const ${unitsVarName}: number[] = [];\n`;
+      code += `${indent}for (let i = 0; i + 1 < ${bytesVarName}.length; i += 2) {\n`;
+      if (endianness === "big_endian") {
+        code += `${indent}  const codeUnit = (${bytesVarName}[i] << 8) | ${bytesVarName}[i + 1];\n`;
+      } else {
+        code += `${indent}  const codeUnit = (${bytesVarName}[i + 1] << 8) | ${bytesVarName}[i];\n`;
+      }
+      code += `${indent}  if (codeUnit === 0) break;\n`;
+      code += `${indent}  ${unitsVarName}.push(codeUnit);\n`;
+      code += `${indent}}\n`;
+      code += `${indent}${target} = String.fromCharCode(...${unitsVarName});\n`;
+    } else {
+      // Find actual string length (before first null byte)
+      code += `${indent}let actualLength = ${bytesVarName}.indexOf(0);\n`;
+      code += `${indent}if (actualLength === -1) actualLength = ${bytesVarName}.length;\n`;
 
-    // Convert bytes to string (only up to first null)
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(${bytesVarName}.subarray(0, actualLength));\n`;
-    } else if (encoding === "ascii" || encoding === "latin1") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.subarray(0, actualLength));\n`;
+      // Convert bytes to string (only up to first null)
+      if (encoding === "utf8") {
+        code += `${indent}${target} = new TextDecoder().decode(${bytesVarName}.subarray(0, actualLength));\n`;
+      } else if (encoding === "ascii" || encoding === "latin1") {
+        code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.subarray(0, actualLength));\n`;
+      }
     }
   } else if (kind === "field_referenced") {
     // Length comes from a previously-decoded field
@@ -216,12 +280,39 @@ export function generateDecodeString(
     code += `${indent}const ${bytesVarName} = this.readBytesSlice(${lengthVarName});\n`;
 
     // Convert bytes to string
-    if (encoding === "utf8") {
-      code += `${indent}${target} = new TextDecoder().decode(${bytesVarName});\n`;
-    } else if (encoding === "ascii" || encoding === "latin1") {
-      code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
-    }
+    code += generateBytesToString(encoding, endianness, bytesVarName, target, indent);
   }
 
+  return code;
+}
+
+/**
+ * Helper: generate code to convert a byte array variable to a string,
+ * handling all encoding types including UTF-16.
+ */
+function generateBytesToString(
+  encoding: string,
+  endianness: Endianness,
+  bytesVarName: string,
+  target: string,
+  indent: string
+): string {
+  let code = "";
+  if (encoding === "utf16") {
+    const unitsVarName = bytesVarName.replace(/_bytes$/, "_units");
+    code += `${indent}const ${unitsVarName}: number[] = [];\n`;
+    code += `${indent}for (let i = 0; i + 1 < ${bytesVarName}.length; i += 2) {\n`;
+    if (endianness === "big_endian") {
+      code += `${indent}  ${unitsVarName}.push((${bytesVarName}[i] << 8) | ${bytesVarName}[i + 1]);\n`;
+    } else {
+      code += `${indent}  ${unitsVarName}.push((${bytesVarName}[i + 1] << 8) | ${bytesVarName}[i]);\n`;
+    }
+    code += `${indent}}\n`;
+    code += `${indent}${target} = String.fromCharCode(...${unitsVarName});\n`;
+  } else if (encoding === "utf8") {
+    code += `${indent}${target} = new TextDecoder().decode(${bytesVarName});\n`;
+  } else if (encoding === "ascii" || encoding === "latin1") {
+    code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
+  }
   return code;
 }

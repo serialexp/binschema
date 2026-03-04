@@ -1,4 +1,4 @@
-import { BinarySchema, TypeDef, Field, Endianness } from "../schema/binary-schema.js";
+import { BinarySchema, TypeDef, Field, Endianness, isEnumType } from "../schema/binary-schema.js";
 import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
 import { ARRAY_ITER_SUFFIX } from "./typescript/shared.js";
 import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName } from "./typescript/type-utils.js";
@@ -131,6 +131,11 @@ function generateTypeCode(
     return code;
   }
 
+  // Handle enum types - generate TypeScript enum + encoder/decoder
+  if (isEnumType(typeDef)) {
+    return generateEnumTypeCode(typeName, typeDefAny, schema, globalEndianness, globalBitOrder);
+  }
+
   // Check if this is a type alias or composite type
   if (isTypeAlias(typeDef)) {
     // Type alias - generate type alias, encoder, and decoder
@@ -158,6 +163,101 @@ function generateTypeCode(
   sections.push(encoderCode, decoderCode);
 
   return sections.filter(Boolean).join("\n\n");
+}
+
+/**
+ * Generate code for an enum type definition
+ */
+function generateEnumTypeCode(
+  typeName: string,
+  typeDef: any,
+  schema: BinarySchema,
+  globalEndianness: Endianness,
+  globalBitOrder: string
+): string {
+  const variants = typeDef.variants as Record<string, number>;
+  const repr = typeDef.repr as string;
+
+  // Generate TypeScript enum
+  let code = `export enum ${typeName} {\n`;
+  for (const [name, value] of Object.entries(variants)) {
+    code += `  ${sanitizeEnumMemberName(name)} = ${value},\n`;
+  }
+  code += `}\n\n`;
+
+  // Generate reverse lookup map for decoding
+  const reverseMapName = `${typeName}_fromValue`;
+  code += `const ${reverseMapName} = new Map<number, ${typeName}>([\n`;
+  for (const [name, value] of Object.entries(variants)) {
+    code += `  [${value}, ${typeName}.${sanitizeEnumMemberName(name)}],\n`;
+  }
+  code += `]);\n\n`;
+
+  // Generate encoder class
+  code += `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  code += `  constructor() { super("${globalBitOrder}"); }\n\n`;
+  code += `  encode(value: ${typeName}): Uint8Array {\n`;
+  code += generateEnumEncodeBody(repr, "value", "    ", globalEndianness);
+  code += `    return this.finish();\n`;
+  code += `  }\n`;
+  code += `}\n\n`;
+
+  // Generate decoder class
+  code += `export class ${typeName}Decoder extends SeekableBitStreamDecoder {\n`;
+  code += `  constructor(input: Uint8Array | number[] | string, private context?: any) {\n`;
+  code += `    const reader = createReader(input);\n`;
+  code += `    super(reader, "${globalBitOrder}");\n`;
+  code += `  }\n\n`;
+  code += `  decode(): ${typeName} {\n`;
+  code += generateEnumDecodeBody(typeName, reverseMapName, repr, "    ", globalEndianness);
+  code += `  }\n`;
+  code += `}\n`;
+
+  return code;
+}
+
+/**
+ * Generate the encode body for an enum repr value
+ */
+function generateEnumEncodeBody(repr: string, valuePath: string, indent: string, endianness: Endianness): string {
+  switch (repr) {
+    case "uint8":
+      return `${indent}this.writeUint8(${valuePath});\n`;
+    case "uint16":
+      return `${indent}this.writeUint16(${valuePath}, "${endianness}");\n`;
+    case "uint32":
+      return `${indent}this.writeUint32(${valuePath}, "${endianness}");\n`;
+    default:
+      throw new Error(`Unsupported enum repr: ${repr}`);
+  }
+}
+
+/**
+ * Generate the decode body for an enum repr value with validation
+ */
+function generateEnumDecodeBody(typeName: string, reverseMapName: string, repr: string, indent: string, endianness: Endianness): string {
+  let readExpr: string;
+  switch (repr) {
+    case "uint8":
+      readExpr = `this.readUint8()`;
+      break;
+    case "uint16":
+      readExpr = `this.readUint16("${endianness}")`;
+      break;
+    case "uint32":
+      readExpr = `this.readUint32("${endianness}")`;
+      break;
+    default:
+      throw new Error(`Unsupported enum repr: ${repr}`);
+  }
+
+  let code = `${indent}const rawValue = ${readExpr};\n`;
+  code += `${indent}const enumValue = ${reverseMapName}.get(rawValue);\n`;
+  code += `${indent}if (enumValue === undefined) {\n`;
+  code += `${indent}  throw new Error(\`Invalid ${typeName} value: \${rawValue}\`);\n`;
+  code += `${indent}}\n`;
+  code += `${indent}return enumValue;\n`;
+  return code;
 }
 
 /**
@@ -407,12 +507,16 @@ function getElementTypeScriptType(element: any, schema: BinarySchema): string {
       case "float32":
       case "float64":
         return "number";
+      case "bool":
+        return "boolean";
       case "uint64":
       case "int64":
         return "bigint";
       case "array":
         const itemType = getElementTypeScriptType(element.items, schema);
         return `${itemType}[]`;
+      case "bytes":
+        return "number[]";
       case "string":
         return "string";
       case "discriminated_union":
@@ -675,12 +779,16 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
       case "float32":
       case "float64":
         return "number";
+      case "bool":
+        return "boolean";
       case "uint64":
       case "int64":
         return "bigint";
       case "array":
         const itemType = getFieldTypeScriptType(field.items as Field, schema);
         return `${itemType}[]`;
+      case "bytes":
+        return "number[]";
       case "string":
         return "string";
       case "bitfield":
@@ -692,10 +800,14 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
       case "back_reference":
         // Pointer is transparent - just the target type
         return resolveTypeReference((field as any).target_type, schema);
-      case "optional":
+      case "optional": {
         // Optional field - generate T | undefined
-        const valueType = resolveTypeReference((field as any).value_type, schema);
+        const vt = (field as any).value_type;
+        const valueType = typeof vt === "object"
+          ? getFieldTypeScriptType(vt as Field, schema)
+          : resolveTypeReference(vt, schema);
         return `${valueType} | undefined`;
+      }
       default:
         // Type reference (e.g., "Point", "Optional<uint64>")
         return resolveTypeReference(field.type, schema);
@@ -1208,6 +1320,9 @@ function generateEncodeFieldCoreImpl(
     case "uint8":
       return `${indent}this.writeUint8(${valuePath});\n`;
 
+    case "bool":
+      return `${indent}this.writeUint8(${valuePath} ? 1 : 0);\n`;
+
     case "uint16":
       return `${indent}this.writeUint16(${valuePath}, "${endianness}");\n`;
 
@@ -1249,6 +1364,10 @@ function generateEncodeFieldCoreImpl(
 
     case "array":
       return generateEncodeArray(field, schema, globalEndianness, valuePath, indent, generateEncodeFieldCoreImpl, baseContextVar || 'context');
+
+    case "bytes":
+      // Delegate to array encoding with implicit uint8 items
+      return generateEncodeArray({ ...field, type: "array", items: { type: "uint8" } }, schema, globalEndianness, valuePath, indent, generateEncodeFieldCoreImpl, baseContextVar || 'context');
 
     case "string":
       return generateEncodeString(field, globalEndianness, valuePath, indent);
@@ -1522,10 +1641,10 @@ function generateEncodeOptional(
   }
 
   // Write value - create a synthetic field with value_type
-  const syntheticField: any = {
-    type: valueType,
-    name: field.name
-  };
+  // If value_type is an inline object, spread it; otherwise use it as a type reference
+  const syntheticField: any = typeof valueType === "object"
+    ? { name: field.name, ...valueType }
+    : { type: valueType, name: field.name };
 
   // Preserve endianness if it's a multi-byte type
   if (field.endianness) {
@@ -1591,6 +1710,11 @@ function generateEncodeTypeReference(
   }
 
   const typeDefAny = typeDef as any;
+
+  // Handle enum types - write the underlying repr value
+  if (isEnumType(typeDef)) {
+    return generateEnumEncodeBody(typeDefAny.repr, valuePath, indent, globalEndianness);
+  }
 
   // Handle standalone string types - encode using the aliased string type
   if (typeDefAny.type === 'string') {
@@ -1835,6 +1959,9 @@ function generateDecodeFieldCoreImpl(
     case "uint8":
       return `${indent}${target} = this.readUint8();\n`;
 
+    case "bool":
+      return `${indent}${target} = this.readUint8() !== 0;\n`;
+
     case "uint16":
       return `${indent}${target} = this.readUint16("${endianness}");\n`;
 
@@ -1876,6 +2003,10 @@ function generateDecodeFieldCoreImpl(
 
     case "array":
       return generateDecodeArray(field, schema, globalEndianness, fieldName, indent, addTraceLogs, getTargetPath, generateDecodeFieldCore);
+
+    case "bytes":
+      // Delegate to array decoding with implicit uint8 items
+      return generateDecodeArray({ ...field, type: "array", items: { type: "uint8" } }, schema, globalEndianness, fieldName, indent, addTraceLogs, getTargetPath, generateDecodeFieldCore);
 
     case "string":
       return generateDecodeString(field, globalEndianness, fieldName, indent, addTraceLogs, getTargetPath);
@@ -2171,10 +2302,10 @@ function generateDecodeOptional(
   code += `${indent}if (${presentVar} !== 0) {\n`;
 
   // Create synthetic field for value type
-  const syntheticField: any = {
-    type: valueType,
-    name: fieldName
-  };
+  // If value_type is an inline object, spread it; otherwise use it as a type reference
+  const syntheticField: any = typeof valueType === "object"
+    ? { name: fieldName, ...valueType }
+    : { type: valueType, name: fieldName };
 
   // Preserve endianness if specified
   if (field.endianness) {
@@ -2217,6 +2348,8 @@ function generateDecodeValueField(
   switch (fieldType) {
     case "uint8":
       return `${indent}${targetPath} = this.readUint8();\n`;
+    case "bool":
+      return `${indent}${targetPath} = this.readUint8() !== 0;\n`;
     case "uint16":
       return `${indent}${targetPath} = this.readUint16("${globalEndianness}");\n`;
     case "uint32":
@@ -2305,6 +2438,35 @@ function generateDecodeTypeReference(
   }
 
   const typeDefAny = typeDef as any;
+
+  // Handle enum types - read repr value and validate
+  if (isEnumType(typeDef)) {
+    const reverseMapName = `${typeRef}_fromValue`;
+    let code = '';
+    let readExpr: string;
+    switch (typeDefAny.repr) {
+      case "uint8":
+        readExpr = `this.readUint8()`;
+        break;
+      case "uint16":
+        readExpr = `this.readUint16("${globalEndianness}")`;
+        break;
+      case "uint32":
+        readExpr = `this.readUint32("${globalEndianness}")`;
+        break;
+      default:
+        throw new Error(`Unsupported enum repr: ${typeDefAny.repr}`);
+    }
+    code += `${indent}{\n`;
+    code += `${indent}  const rawValue = ${readExpr};\n`;
+    code += `${indent}  const enumValue = ${reverseMapName}.get(rawValue);\n`;
+    code += `${indent}  if (enumValue === undefined) {\n`;
+    code += `${indent}    throw new Error(\`Invalid ${typeRef} value: \${rawValue}\`);\n`;
+    code += `${indent}  }\n`;
+    code += `${indent}  ${target} = enumValue;\n`;
+    code += `${indent}}\n`;
+    return code;
+  }
 
   // Handle standalone string types - decode using the aliased string type
   if (typeDefAny.type === 'string') {

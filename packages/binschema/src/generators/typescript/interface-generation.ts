@@ -1,4 +1,4 @@
-import { BinarySchema, TypeDef, Field } from "../../schema/binary-schema.js";
+import { BinarySchema, TypeDef, Field, isEnumType } from "../../schema/binary-schema.js";
 import { getTypeFields, sanitizeTypeName } from "./type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./documentation.js";
 
@@ -93,12 +93,16 @@ export function getFieldTypeScriptType(
       case "float32":
       case "float64":
         return "number";
+      case "bool":
+        return "boolean";
       case "uint64":
       case "int64":
         return "bigint";
       case "array":
         const itemType = getFieldTypeScriptType(field.items as Field, schema, useInputTypes);
         return `${itemType}[]`;
+      case "bytes":
+        return "number[]";
       case "string":
         return "string";
       case "bitfield":
@@ -110,10 +114,14 @@ export function getFieldTypeScriptType(
       case "back_reference":
         // Pointer is transparent - just the target type
         return resolveTypeReference((field as any).target_type, schema, useInputTypes);
-      case "optional":
+      case "optional": {
         // Optional field - generate T | undefined
-        const valueType = resolveTypeReference((field as any).value_type, schema, useInputTypes);
+        const vt = (field as any).value_type;
+        const valueType = typeof vt === "object"
+          ? getFieldTypeScriptType(vt as Field, schema, useInputTypes)
+          : resolveTypeReference(vt, schema, useInputTypes);
         return `${valueType} | undefined`;
+      }
       default:
         // Type reference (e.g., "Point", "Optional<uint64>")
         return resolveTypeReference(field.type, schema, useInputTypes);
@@ -158,6 +166,10 @@ function resolveTypeReference(typeRef: string | undefined, schema: BinarySchema,
 
   // Regular type reference - append Input/Output suffix if it's a custom type
   if (schema.types[typeRef]) {
+    // Enum types don't have Input/Output variants
+    if (isEnumType(schema.types[typeRef])) {
+      return typeRef;
+    }
     const suffix = useInputTypes ? "Input" : "Output";
     return `${typeRef}${suffix}`;
   }

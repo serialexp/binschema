@@ -1,7 +1,7 @@
 // ABOUTME: Generates Go encoder/decoder code from BinSchema definitions
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript runtime
 
-import type { BinarySchema, Field, Endianness } from "../schema/binary-schema.js";
+import { type BinarySchema, type Field, type Endianness, isEnumType } from "../schema/binary-schema.js";
 
 /**
  * Get all field names for a type (only for struct types with sequence)
@@ -79,6 +79,38 @@ function hasParentReferenceComputedFields(schema: BinarySchema): boolean {
 
       // length_of and count_of require reflect for the default slice case
       if (computed.type === "length_of" || computed.type === "count_of") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if any string fields use utf16 encoding, which requires the unicode/utf16 import
+ */
+function hasUTF16Strings(schema: BinarySchema): boolean {
+  for (const typeDef of Object.values(schema.types)) {
+    if (!("sequence" in typeDef)) {
+      // Check standalone string type
+      if ((typeDef as any).type === "string" && (typeDef as any).encoding === "utf16") {
+        return true;
+      }
+      continue;
+    }
+    for (const field of typeDef.sequence) {
+      if ((field as any).type === "string" && (field as any).encoding === "utf16") {
+        return true;
+      }
+      // Check optional value_type
+      if ((field as any).type === "optional") {
+        const vt = (field as any).value_type;
+        if (typeof vt === "object" && vt.type === "string" && vt.encoding === "utf16") {
+          return true;
+        }
+      }
+      // Check array items
+      if ((field as any).type === "array" && (field as any).items?.type === "string" && (field as any).items?.encoding === "utf16") {
         return true;
       }
     }
@@ -462,9 +494,22 @@ function generateComputedValue(
             const typeDef = schema.types?.[targetType];
             if (typeDef) {
               const typeDefType = (typeDef as any).type;
-              // String type alias (type: "string") - has CalculateSize
+              // String type alias (type: "string") - compute size inline
               if (typeDefType === "string") {
-                const baseExpr = `m.${goFieldName}.CalculateSize()`;
+                const strTypeDef = typeDef as any;
+                const kind = strTypeDef.kind || "null_terminated";
+                let baseExpr: string;
+                if (kind === "fixed") {
+                  baseExpr = `${strTypeDef.length || 0}`;
+                } else if (kind === "length_prefixed") {
+                  const prefixType = strTypeDef.length_type || "uint8";
+                  const prefixSize = prefixType === "uint8" ? 1 : prefixType === "uint16" ? 2 : prefixType === "uint32" ? 4 : 8;
+                  baseExpr = `${prefixSize} + len([]byte(m.${goFieldName}))`;
+                } else if (kind === "null_terminated") {
+                  baseExpr = `len([]byte(m.${goFieldName})) + 1`;
+                } else {
+                  baseExpr = `len([]byte(m.${goFieldName}))`;
+                }
                 if (offset !== 0) {
                   return `${goType}(${baseExpr} + ${offset})`;
                 }
@@ -1173,6 +1218,7 @@ function generateComputedFieldEncoding(
 function mapPrimitiveToGoType(typeName: string): string {
   switch (typeName) {
     case "uint8": return "uint8";
+    case "bool": return "bool";
     case "uint16": return "uint16";
     case "uint32": return "uint32";
     case "uint64": return "uint64";
@@ -1393,6 +1439,9 @@ export function generateGo(
   // Check if we need reflect import (for parent reference computed fields)
   const needsReflectImport = hasParentReferenceComputedFields(schema);
 
+  // Check if we need unicode/utf16 import (for UTF-16 string encoding)
+  const needsUTF16Import = hasUTF16Strings(schema);
+
   // Package and imports
   lines.push(`package ${pkg}`);
   lines.push(``);
@@ -1403,6 +1452,9 @@ export function generateGo(
   }
   if (needsReflectImport) {
     lines.push(`\t"reflect"`);
+  }
+  if (needsUTF16Import) {
+    lines.push(`\t"unicode/utf16"`);
   }
   lines.push(`\t"${runtimePkg}"`);
   lines.push(`)`);
@@ -1424,6 +1476,9 @@ export function generateGo(
       lines.push(...generateEncodeMethod(name, typeDef.sequence, defaultEndianness, defaultBitOrder, schema));
       lines.push(...generateCalculateSizeMethod(name, typeDef.sequence, schema));
       lines.push(...generateDecodeFunction(name, typeDef.sequence, defaultEndianness, schema, defaultBitOrder, instances));
+    } else if (isEnumType(typeDef)) {
+      // Enum type - generate Go typed constants
+      lines.push(...generateGoEnumType(name, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ("type" in typeDef) {
       // Type alias or discriminated union
       if ((typeDef as any).type === "discriminated_union") {
@@ -1451,20 +1506,130 @@ export function generateGo(
 }
 
 /**
+ * Generates a Go enum type (typed constants with encode/decode)
+ */
+function generateGoEnumType(name: string, typeDef: any, defaultEndianness: string, defaultBitOrder: string): string[] {
+  const lines: string[] = [];
+  const goName = toGoTypeName(name);
+  const variants = typeDef.variants as Record<string, number>;
+  const repr = typeDef.repr as string;
+  const runtimeEndianness = mapEndianness(defaultEndianness);
+  const runtimeBitOrder = mapBitOrder(defaultBitOrder);
+
+  // Size in bytes for CalculateSize
+  const sizeBytes = repr === "uint8" ? 1 : repr === "uint16" ? 2 : 4;
+
+  // Type definition
+  lines.push(`// ${goName} is an enum type`);
+  lines.push(`type ${goName} ${repr}`);
+  lines.push(``);
+
+  // Constants
+  lines.push(`const (`);
+  for (const [variantName, value] of Object.entries(variants)) {
+    lines.push(`\t${goName}${toGoFieldName(variantName)} ${goName} = ${value}`);
+  }
+  lines.push(`)`);
+  lines.push(``);
+
+  // String method for debugging
+  lines.push(`func (e ${goName}) String() string {`);
+  lines.push(`\tswitch e {`);
+  for (const [variantName, value] of Object.entries(variants)) {
+    lines.push(`\tcase ${value}:`);
+    lines.push(`\t\treturn "${variantName}"`);
+  }
+  lines.push(`\tdefault:`);
+  lines.push(`\t\treturn fmt.Sprintf("${goName}(%d)", e)`);
+  lines.push(`\t}`);
+  lines.push(`}`);
+  lines.push(``);
+
+  // Encode method (standalone)
+  lines.push(`func (m ${goName}) Encode() ([]byte, error) {`);
+  lines.push(`\treturn m.EncodeWithContext(runtime.NewEncodingContext())`);
+  lines.push(`}`);
+  lines.push(``);
+
+  // EncodeWithContext method (for struct field encoding)
+  lines.push(`func (m ${goName}) EncodeWithContext(ctx *runtime.EncodingContext) ([]byte, error) {`);
+  lines.push(`\tencoder := runtime.NewBitStreamEncoder(runtime.${runtimeBitOrder})`);
+  if (repr === "uint8") {
+    lines.push(`\tencoder.WriteUint8(uint8(m))`);
+  } else if (repr === "uint16") {
+    lines.push(`\tencoder.WriteUint16(uint16(m), runtime.${runtimeEndianness})`);
+  } else {
+    lines.push(`\tencoder.WriteUint32(uint32(m), runtime.${runtimeEndianness})`);
+  }
+  lines.push(`\treturn encoder.Finish(), nil`);
+  lines.push(`}`);
+  lines.push(``);
+
+  // CalculateSize method
+  lines.push(`func (m ${goName}) CalculateSize() int {`);
+  lines.push(`\treturn ${sizeBytes}`);
+  lines.push(`}`);
+  lines.push(``);
+
+  // Decode function (standalone, from bytes)
+  lines.push(`func Decode${goName}(data []byte) (*${goName}, error) {`);
+  lines.push(`\tdecoder := runtime.NewBitStreamDecoder(data, runtime.${runtimeBitOrder})`);
+  lines.push(`\treturn decode${goName}WithDecoder(decoder)`);
+  lines.push(`}`);
+  lines.push(``);
+
+  // Decode function (from decoder, used by struct decode)
+  lines.push(`func decode${goName}WithDecoder(decoder *runtime.BitStreamDecoder) (*${goName}, error) {`);
+  if (repr === "uint8") {
+    lines.push(`\tval, err := decoder.ReadUint8()`);
+  } else if (repr === "uint16") {
+    lines.push(`\tval, err := decoder.ReadUint16(runtime.${runtimeEndianness})`);
+  } else {
+    lines.push(`\tval, err := decoder.ReadUint32(runtime.${runtimeEndianness})`);
+  }
+  lines.push(`\tif err != nil {`);
+  lines.push(`\t\treturn nil, fmt.Errorf("failed to decode ${goName}: %w", err)`);
+  lines.push(`\t}`);
+  // Validate and convert: use combined case clause with type conversion
+  // The batch prefixer's typeConvRegex handles Direction(val) -> prefix_Direction(val)
+  const allValues = Object.values(variants).join(", ");
+  lines.push(`\tswitch val {`);
+  lines.push(`\tcase ${allValues}:`);
+  lines.push(`\t\tresult := ${goName}(val)`);
+  lines.push(`\t\treturn &result, nil`);
+  lines.push(`\tdefault:`);
+  lines.push(`\t\treturn nil, fmt.Errorf("invalid ${goName} value: %d", val)`);
+  lines.push(`\t}`);
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
+}
+
+/**
  * Generates a type alias
  */
 function generateTypeAlias(name: string, typeDef: any, defaultEndianness: string, schema: BinarySchema, defaultBitOrder: string = "msb_first"): string[] {
   const lines: string[] = [];
 
-  // For now, treat type aliases as a struct with a single field "Value"
-  // This allows the alias to have its own Encode/Decode methods
+  // String types become transparent type aliases — encoding/decoding is inlined at call sites
+  // (unless they're used as discriminated union variants, which need struct with methods)
+  if (typeDef.type === "string" && isStringTypeAlias(name, schema)) {
+    const goName = toGoTypeName(name);
+    lines.push(`// ${goName} is a type alias for string (encoding config used inline at call sites)`);
+    lines.push(`type ${goName} = string`);
+    lines.push(``);
+    return lines;
+  }
+
+  // Non-string type aliases: wrap in struct with a single field "Value"
   const field: Field = {
     name: "value",
     type: typeDef.type,
     ...typeDef
   };
 
-  lines.push(...generateStruct(name, [field]));
+  lines.push(...generateStruct(name, [field], undefined, schema));
   lines.push(...generateEncodeMethod(name, [field], defaultEndianness, defaultBitOrder, schema));
   lines.push(...generateCalculateSizeMethod(name, [field], schema));
   lines.push(...generateDecodeFunction(name, [field], defaultEndianness, schema, defaultBitOrder));
@@ -1654,7 +1819,7 @@ function generateStruct(name: string, fields: Field[], instances?: any[], schema
     if (field.type === "padding") {
       continue;
     }
-    const goType = mapFieldToGoType(field, name);
+    const goType = mapFieldToGoType(field, name, schema);
     const fieldName = toGoFieldName(field.name);
     lines.push(`\t${fieldName} ${goType}`);
   }
@@ -1743,6 +1908,8 @@ function hasNestedStructFields(fields: Field[]): boolean {
       case "bitfield":
       case "varlength":
       case "string":
+      case "bool":
+      case "bytes":
       case "padding":
         continue;
       case "array": {
@@ -1952,7 +2119,25 @@ function generateEncodeMethod(name: string, fields: Field[], defaultEndianness: 
         } else {
           // Variable-size field - need to compute dynamically
           const goName = toGoFieldName(precedingField.name);
-          dynamicOffsetParts.push(`m.${goName}.CalculateSize()`);
+          const precedingType = (precedingField as any).type;
+          if (schema && typeof precedingType === "string" && isStringTypeAlias(precedingType, schema)) {
+            // String type alias — inline size calculation
+            const strDef = schema.types[precedingType] as any;
+            const strKind = strDef.kind || "null_terminated";
+            if (strKind === "fixed") {
+              dynamicOffsetParts.push(`${strDef.length || 0}`);
+            } else if (strKind === "length_prefixed") {
+              const prefixType = strDef.length_type || "uint8";
+              const prefixSize = prefixType === "uint8" ? 1 : prefixType === "uint16" ? 2 : prefixType === "uint32" ? 4 : 8;
+              dynamicOffsetParts.push(`${prefixSize} + len([]byte(m.${goName}))`);
+            } else if (strKind === "null_terminated") {
+              dynamicOffsetParts.push(`len([]byte(m.${goName})) + 1`);
+            } else {
+              dynamicOffsetParts.push(`len([]byte(m.${goName}))`);
+            }
+          } else {
+            dynamicOffsetParts.push(`m.${goName}.CalculateSize()`);
+          }
         }
       }
       // Build the offset expression
@@ -2152,13 +2337,32 @@ function generateFieldSizeCalculationImpl(field: Field, schema: BinarySchema, in
 
   // Handle optional fields
   if (fieldType === "optional") {
-    const innerType = fieldAny.inner_type || "uint8";
+    const vt = fieldAny.value_type;
+    let innerType: string;
+    let innerFieldAny: any;
+    if (typeof vt === "object") {
+      // Inline type object
+      innerType = vt.type;
+      innerFieldAny = vt;
+    } else if (schema && isStringTypeAlias(vt, schema)) {
+      // String type alias — inline the string config
+      const typeDef = schema.types[vt] as any;
+      innerType = "string";
+      innerFieldAny = typeDef;
+    } else {
+      innerType = vt || "uint8";
+      innerFieldAny = fieldAny;
+    }
     const presenceType = fieldAny.presence_type || "uint8";
     lines.push(`${indent}if m.${fieldName} != nil {`);
     // Size of presence indicator (1 = present)
     lines.push(...generatePrimitiveFieldSize(presenceType, fieldName, indent + "\t", "(presence)"));
     // Size of actual value
-    lines.push(...generateFieldSizeForType(innerType, `*m.${fieldName}`, schema, indent + "\t", fieldAny));
+    // For primitives and strings, dereference the pointer to get the value (e.g., *m.Name for len())
+    // For composite types (structs, unions), use the pointer directly — Go auto-dereferences for method calls
+    const isPrimitiveOrString = isPrimitiveType(innerType) || innerType === "string";
+    const sizeValueExpr = isPrimitiveOrString ? `*m.${fieldName}` : `m.${fieldName}`;
+    lines.push(...generateFieldSizeForType(innerType, sizeValueExpr, schema, indent + "\t", innerFieldAny));
     lines.push(`${indent}} else {`);
     // Size of presence indicator (0 = absent)
     lines.push(...generatePrimitiveFieldSize(presenceType, fieldName, indent + "\t", "(absence)"));
@@ -2195,6 +2399,7 @@ function generatePrimitiveFieldSize(fieldType: string, fieldName: string, indent
   switch (fieldType) {
     case "uint8":
     case "int8":
+    case "bool":
       lines.push(`${indent}size += 1${commentSuffix}`);
       break;
     case "uint16":
@@ -2236,6 +2441,7 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
   switch (fieldType) {
     case "uint8":
     case "int8":
+    case "bool":
       lines.push(`${indent}size += 1 // ${fieldName}`);
       break;
     case "uint16":
@@ -2252,6 +2458,12 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
     case "float64":
       lines.push(`${indent}size += 8 // ${fieldName}`);
       break;
+    case "bytes": {
+      // Bytes is sugar for array<uint8> - delegate to array size calculation
+      const syntheticArrayField = { ...fieldAny, type: "array", items: { type: "uint8" } };
+      lines.push(...generateArraySizeCalculation(syntheticArrayField, valueExpr, schema, indent));
+      break;
+    }
     case "bit":
     case "int": {
       // Bitfields - size depends on bit count, converted to bytes
@@ -2315,6 +2527,18 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
       // Assume custom composite type - call its CalculateSize method
       if (schema.types[fieldType]) {
         const typeDef = schema.types[fieldType] as any;
+        // Check if this is a string type alias — inline size calc
+        if (!('sequence' in typeDef) && typeDef.type === 'string') {
+          const syntheticField = { name: fieldType, ...typeDef };
+          lines.push(...generateFieldSizeForType('string', valueExpr, schema, indent, syntheticField));
+          break;
+        }
+        // Check if this is an enum type - inline the fixed size
+        if (isEnumType(typeDef)) {
+          const reprSize = typeDef.repr === "uint8" ? 1 : typeDef.repr === "uint16" ? 2 : 4;
+          lines.push(`${indent}size += ${reprSize} // ${fieldName} (enum)`);
+          break;
+        }
         // Check if this is a discriminated union
         if (typeDef.type === "discriminated_union" || typeDef.variants) {
           // Discriminated union interface - encode to measure
@@ -2383,9 +2607,18 @@ function generateArraySizeCalculation(fieldAny: any, valueExpr: string, schema: 
       } else {
         // Composite type items
         const itemVar = fieldName.replace(/\./g, "_") + "_item";
-        lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
-        lines.push(`${indent}\t${itemsSizeVar} += ${itemVar}.CalculateSize()`);
-        lines.push(`${indent}}`);
+        if (schema && typeof itemType === "string" && isStringTypeAlias(itemType, schema)) {
+          // String type alias — inline size calc
+          const typeDef = schema.types[itemType] as any;
+          const syntheticField = { name: itemType, ...typeDef };
+          lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
+          lines.push(...generateFieldSizeForType('string', itemVar, schema, indent + "\t", syntheticField));
+          lines.push(`${indent}}`);
+        } else {
+          lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
+          lines.push(`${indent}\t${itemsSizeVar} += ${itemVar}.CalculateSize()`);
+          lines.push(`${indent}}`);
+        }
       }
     }
 
@@ -2439,9 +2672,18 @@ function generateArraySizeCalculation(fieldAny: any, valueExpr: string, schema: 
     } else {
       // Composite type items - call CalculateSize
       const itemVar = fieldName.replace(/\./g, "_") + "_item";
-      lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
-      lines.push(`${indent}\tsize += ${itemVar}.CalculateSize()`);
-      lines.push(`${indent}}`);
+      if (schema && typeof itemType === "string" && isStringTypeAlias(itemType, schema)) {
+        // String type alias — inline size calc
+        const typeDef = schema.types[itemType] as any;
+        const syntheticField = { name: itemType, ...typeDef };
+        lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
+        lines.push(...generateFieldSizeForType('string', itemVar, schema, indent + "\t", syntheticField));
+        lines.push(`${indent}}`);
+      } else {
+        lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
+        lines.push(`${indent}\tsize += ${itemVar}.CalculateSize()`);
+        lines.push(`${indent}}`);
+      }
     }
   }
 
@@ -2816,7 +3058,7 @@ function generateEncodeField(
       }
       return lines;
     }
-    return generateEncodeFieldImpl(field, constValue.toString(), endianness, runtimeEndianness, indent);
+    return generateEncodeFieldImpl(field, constValue.toString(), endianness, runtimeEndianness, indent, schema);
   }
 
   // Handle computed fields - compute the value instead of reading from struct
@@ -2866,10 +3108,10 @@ function generateEncodeField(
         lines.push(`${indent}${computedVarName} += ${offset}`);
       }
 
-      return [...lines, ...generateEncodeFieldImpl(field, computedVarName, endianness, runtimeEndianness, indent)];
+      return [...lines, ...generateEncodeFieldImpl(field, computedVarName, endianness, runtimeEndianness, indent, schema)];
     }
 
-    return generateEncodeFieldImpl(field, computedValue, endianness, runtimeEndianness, indent);
+    return generateEncodeFieldImpl(field, computedValue, endianness, runtimeEndianness, indent, schema);
   }
 
   const fieldName = `m.${toGoFieldName(field.name)}`;
@@ -2878,7 +3120,7 @@ function generateEncodeField(
   if (fieldAny.conditional) {
     const condition = convertConditionalToGo(fieldAny.conditional);
     lines.push(`${indent}if ${condition} {`);
-    const innerLines = generateEncodeFieldImpl(field, fieldName, endianness, runtimeEndianness, indent + "\t");
+    const innerLines = generateEncodeFieldImpl(field, fieldName, endianness, runtimeEndianness, indent + "\t", schema);
     lines.push(...innerLines);
     lines.push(`${indent}}`);
     return lines;
@@ -2886,7 +3128,7 @@ function generateEncodeField(
 
   // Handle optional fields
   if (field.type === "optional") {
-    return generateEncodeOptional(field as any, fieldName, endianness, runtimeEndianness, indent);
+    return generateEncodeOptional(field as any, fieldName, endianness, runtimeEndianness, indent, schema);
   }
 
   // Handle choice arrays that need corresponding tracking
@@ -2916,7 +3158,7 @@ function generateEncodeField(
     }
   }
 
-  return generateEncodeFieldImpl(field, fieldName, endianness, runtimeEndianness, indent);
+  return generateEncodeFieldImpl(field, fieldName, endianness, runtimeEndianness, indent, schema);
 }
 
 /**
@@ -3224,7 +3466,7 @@ function generateEncodeArrayWithBackReference(
 /**
  * Generates encoding implementation for a field (without conditional/optional wrapper)
  */
-function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: string, runtimeEndianness: string, indent: string): string[] {
+function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: string, runtimeEndianness: string, indent: string, schema?: BinarySchema): string[] {
   const lines: string[] = [];
 
   switch (field.type) {
@@ -3300,12 +3542,25 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
       break;
     }
 
+    case "bool":
+      lines.push(`${indent}if ${fieldName} {`);
+      lines.push(`${indent}\tencoder.WriteUint8(1)`);
+      lines.push(`${indent}} else {`);
+      lines.push(`${indent}\tencoder.WriteUint8(0)`);
+      lines.push(`${indent}}`);
+      break;
+
+    case "bytes":
+      // Delegate to array encoding with synthetic array<uint8> field
+      lines.push(...generateEncodeArray({ ...field, type: "array", items: { type: "uint8" } }, fieldName, endianness, runtimeEndianness, indent, schema));
+      break;
+
     case "string":
       lines.push(...generateEncodeString(field as any, fieldName, endianness, indent));
       break;
 
     case "array":
-      lines.push(...generateEncodeArray(field as any, fieldName, endianness, runtimeEndianness, indent));
+      lines.push(...generateEncodeArray(field as any, fieldName, endianness, runtimeEndianness, indent, schema));
       break;
 
     case "choice":
@@ -3324,8 +3579,15 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
       break;
 
     default:
-      // Type reference - nested struct
-      lines.push(...generateEncodeNestedStruct(field, fieldName, indent));
+      // Check if this is a string type alias — inline encoding
+      if (schema && isStringTypeAlias(field.type, schema)) {
+        const typeDef = schema.types[field.type] as any;
+        const syntheticField = { name: field.name, ...typeDef };
+        lines.push(...generateEncodeString(syntheticField, fieldName, endianness, indent));
+      } else {
+        // Type reference - nested struct
+        lines.push(...generateEncodeNestedStruct(field, fieldName, indent));
+      }
       break;
   }
 
@@ -3335,7 +3597,7 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
 /**
  * Generates encoding code for optional field
  */
-function generateEncodeOptional(field: any, fieldName: string, endianness: string, runtimeEndianness: string, indent: string): string[] {
+function generateEncodeOptional(field: any, fieldName: string, endianness: string, runtimeEndianness: string, indent: string, schema?: BinarySchema): string[] {
   const lines: string[] = [];
   const presenceType = field.presence_type || "uint8";
 
@@ -3349,11 +3611,22 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
   }
 
   // Write value (dereference pointer)
-  const valueField: Field = {
-    name: "",
-    type: field.value_type
-  };
-  const innerLines = generateEncodeFieldImpl(valueField, `*${fieldName}`, endianness, runtimeEndianness, indent + "\t");
+  const valueType = field.value_type;
+  let valueField: Field;
+  if (typeof valueType === "object") {
+    // Inline type object — spread all properties
+    valueField = { name: "", ...valueType };
+  } else if (schema && isStringTypeAlias(valueType, schema)) {
+    // String type alias — inline the string encoding config
+    const typeDef = schema.types[valueType] as any;
+    valueField = { name: "", ...typeDef };
+  } else {
+    valueField = { name: "", type: valueType };
+  }
+  // Use field-level endianness from inline object if available
+  const valueEndianness = (valueField as any).endianness || endianness;
+  const valueRuntimeEndianness = mapEndianness(valueEndianness);
+  const innerLines = generateEncodeFieldImpl(valueField, `*${fieldName}`, valueEndianness, valueRuntimeEndianness, indent + "\t", schema);
   lines.push(...innerLines);
 
   lines.push(`${indent}} else {`);
@@ -3380,6 +3653,74 @@ function generateEncodeString(field: any, fieldName: string, endianness: string,
   // Strip leading * (dereference) for variable naming
   const cleanFieldName = fieldName.replace(/^\*/, "");
   const bytesVar = `${cleanFieldName.replace(/\./g, "_")}_bytes`;
+
+  // UTF-16: convert string to code units, write each as uint16
+  if (encoding === "utf16") {
+    const stringEndianness = field.endianness || endianness;
+    const runtimeEnd = mapEndianness(stringEndianness);
+    const unitsVar = `${cleanFieldName.replace(/\./g, "_")}_units`;
+    lines.push(`${indent}${unitsVar} := utf16.Encode([]rune(${fieldName}))`);
+
+    switch (kind) {
+      case "length_prefixed": {
+        const lengthType = field.length_type || "uint8";
+        // Length prefix is byte count (code units * 2)
+        switch (lengthType) {
+          case "uint8":
+            lines.push(`${indent}encoder.WriteUint8(uint8(len(${unitsVar}) * 2))`);
+            break;
+          case "uint16":
+            lines.push(`${indent}encoder.WriteUint16(uint16(len(${unitsVar}) * 2), runtime.${mapEndianness(endianness)})`);
+            break;
+          case "uint32":
+            lines.push(`${indent}encoder.WriteUint32(uint32(len(${unitsVar}) * 2), runtime.${mapEndianness(endianness)})`);
+            break;
+          case "uint64":
+            lines.push(`${indent}encoder.WriteUint64(uint64(len(${unitsVar}) * 2), runtime.${mapEndianness(endianness)})`);
+            break;
+        }
+        // Write code units
+        lines.push(`${indent}for _, cu := range ${unitsVar} {`);
+        lines.push(`${indent}\tencoder.WriteUint16(cu, runtime.${runtimeEnd})`);
+        lines.push(`${indent}}`);
+        break;
+      }
+
+      case "null_terminated":
+        // Write code units then null terminator (0x0000)
+        lines.push(`${indent}for _, cu := range ${unitsVar} {`);
+        lines.push(`${indent}\tencoder.WriteUint16(cu, runtime.${runtimeEnd})`);
+        lines.push(`${indent}}`);
+        lines.push(`${indent}encoder.WriteUint16(0, runtime.${runtimeEnd})`);
+        break;
+
+      case "fixed": {
+        const length = field.length || 0;
+        const numUnits = Math.floor(length / 2);
+        // Write code units (padded or truncated to fixed byte length)
+        lines.push(`${indent}for i := 0; i < ${numUnits}; i++ {`);
+        lines.push(`${indent}\tif i < len(${unitsVar}) {`);
+        lines.push(`${indent}\t\tencoder.WriteUint16(${unitsVar}[i], runtime.${runtimeEnd})`);
+        lines.push(`${indent}\t} else {`);
+        lines.push(`${indent}\t\tencoder.WriteUint16(0, runtime.${runtimeEnd})`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}}`);
+        break;
+      }
+
+      case "field_referenced":
+        // Just write code units (length was already written by another field)
+        lines.push(`${indent}for _, cu := range ${unitsVar} {`);
+        lines.push(`${indent}\tencoder.WriteUint16(cu, runtime.${runtimeEnd})`);
+        lines.push(`${indent}}`);
+        break;
+
+      default:
+        throw new Error(`Unknown string kind: ${kind}`);
+    }
+
+    return lines;
+  }
 
   // Convert string to bytes (encoding-dependent)
   if (encoding === "latin1" || encoding === "ascii") {
@@ -3458,7 +3799,7 @@ function generateEncodeString(field: any, fieldName: string, endianness: string,
 /**
  * Generates encoding code for array field
  */
-function generateEncodeArray(field: any, fieldName: string, endianness: string, runtimeEndianness: string, indent: string): string[] {
+function generateEncodeArray(field: any, fieldName: string, endianness: string, runtimeEndianness: string, indent: string, schema?: BinarySchema): string[] {
   const lines: string[] = [];
   const kind = field.kind;
   const items = field.items;
@@ -3564,29 +3905,39 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
 
     lines.push(`${indent}for _, ${itemVar} := range ${fieldName} {`);
 
-    // For primitive types, write fixed-size length prefix and encode inline
-    if (isPrimitiveType(itemType)) {
-      const primitiveSize = getPrimitiveSize(itemType);
+    // Check if item type is a string type alias — treat as primitive (inline encoding)
+    const isItemStringAlias = schema && typeof itemType === "string" && isStringTypeAlias(itemType, schema);
 
-      // Write item length
-      switch (itemLengthType) {
-        case "uint8":
-          lines.push(`${indent}\tencoder.WriteUint8(${primitiveSize})`);
-          break;
-        case "uint16":
-          lines.push(`${indent}\tencoder.WriteUint16(${primitiveSize}, runtime.${runtimeEndianness})`);
-          break;
-        case "uint32":
-          lines.push(`${indent}\tencoder.WriteUint32(${primitiveSize}, runtime.${runtimeEndianness})`);
-          break;
-        case "uint64":
-          lines.push(`${indent}\tencoder.WriteUint64(${primitiveSize}, runtime.${runtimeEndianness})`);
-          break;
+    // For primitive types (and string aliases), write fixed-size length prefix and encode inline
+    if (isPrimitiveType(itemType) || isItemStringAlias) {
+      if (isPrimitiveType(itemType) && !isItemStringAlias) {
+        const primitiveSize = getPrimitiveSize(itemType);
+        // Write item length
+        switch (itemLengthType) {
+          case "uint8":
+            lines.push(`${indent}\tencoder.WriteUint8(${primitiveSize})`);
+            break;
+          case "uint16":
+            lines.push(`${indent}\tencoder.WriteUint16(${primitiveSize}, runtime.${runtimeEndianness})`);
+            break;
+          case "uint32":
+            lines.push(`${indent}\tencoder.WriteUint32(${primitiveSize}, runtime.${runtimeEndianness})`);
+            break;
+          case "uint64":
+            lines.push(`${indent}\tencoder.WriteUint64(${primitiveSize}, runtime.${runtimeEndianness})`);
+            break;
+        }
       }
 
-      // Encode primitive inline
-      const itemField: Field = { name: "", type: itemType, ...(items as any) };
-      const innerLines = generateEncodeFieldImpl(itemField, itemVar, endianness, runtimeEndianness, indent + "\t");
+      // Encode primitive/string alias inline
+      let itemField: Field;
+      if (isItemStringAlias) {
+        const typeDef = schema!.types[itemType] as any;
+        itemField = { name: "", ...typeDef };
+      } else {
+        itemField = { name: "", type: itemType, ...(items as any) };
+      }
+      const innerLines = generateEncodeFieldImpl(itemField, itemVar, endianness, runtimeEndianness, indent + "\t", schema);
       lines.push(...innerLines);
     } else {
       // For struct types, encode to bytes first
@@ -3641,12 +3992,15 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
       lines.push(`${indent}for _, ${itemVar} := range ${fieldName} {`);
     }
 
-    const itemField: Field = {
-      name: "",
-      type: items.type,
-      ...(items as any)
-    };
-    const innerLines = generateEncodeFieldImpl(itemField, itemVar, endianness, runtimeEndianness, indent + "\t");
+    // For string type aliases, inline the encoding config
+    let itemField: Field;
+    if (schema && typeof items.type === "string" && isStringTypeAlias(items.type, schema)) {
+      const typeDef = schema.types[items.type] as any;
+      itemField = { name: "", ...typeDef };
+    } else {
+      itemField = { name: "", type: items.type, ...(items as any) };
+    }
+    const innerLines = generateEncodeFieldImpl(itemField, itemVar, endianness, runtimeEndianness, indent + "\t", schema);
     lines.push(...innerLines);
 
     // Check for terminal variants and break if encountered
@@ -3797,7 +4151,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
 
   // Handle optional fields
   if (field.type === "optional") {
-    return generateDecodeOptional(field as any, fieldName, varName, endianness, runtimeEndianness, indent);
+    return generateDecodeOptional(field as any, fieldName, varName, endianness, runtimeEndianness, indent, schema);
   }
 
   return generateDecodeFieldImpl(field, fieldName, varName, endianness, runtimeEndianness, indent, schema, parentTypeName);
@@ -3921,6 +4275,24 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
       return lines;
     }
 
+    case "bool": {
+      lines.push(`${indent}${varName}Raw, err := decoder.ReadUint8()`);
+      lines.push(`${indent}if err != nil {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name || 'bool value'}: %w", err)`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}${varName} := ${varName}Raw != 0`);
+      if (fieldName) {
+        lines.push(`${indent}result.${fieldName} = ${varName}`);
+        lines.push(``);
+      }
+      return lines;
+    }
+
+    case "bytes":
+      // Delegate to array decoding with synthetic array<uint8> field
+      lines.push(...generateDecodeArray({ ...field, type: "array", items: { type: "uint8" } } as any, fieldName, varName, endianness, runtimeEndianness, indent, schema, parentTypeName));
+      return lines;
+
     case "string":
       lines.push(...generateDecodeString(field as any, fieldName, varName, endianness, indent));
       return lines; // Early return - string handling includes assignment
@@ -3938,6 +4310,13 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
       return lines; // Early return - back reference handling includes assignment
 
     default:
+      // Check if this is a string type alias — inline decoding
+      if (schema && isStringTypeAlias(field.type, schema)) {
+        const typeDef = schema.types[field.type] as any;
+        const syntheticField = { name: field.name, ...typeDef };
+        lines.push(...generateDecodeString(syntheticField, fieldName, varName, endianness, indent));
+        return lines;
+      }
       // Type reference - nested struct
       lines.push(...generateDecodeNestedStruct(field, fieldName, varName, indent));
       return lines; // Early return - nested struct handling includes assignment
@@ -3960,7 +4339,7 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
 /**
  * Generates decoding code for optional field
  */
-function generateDecodeOptional(field: any, fieldName: string, varName: string, endianness: string, runtimeEndianness: string, indent: string): string[] {
+function generateDecodeOptional(field: any, fieldName: string, varName: string, endianness: string, runtimeEndianness: string, indent: string, schema?: BinarySchema): string[] {
   const lines: string[] = [];
   const presenceType = field.presence_type || "uint8";
   const presenceVar = `${varName}Present`;
@@ -3979,18 +4358,32 @@ function generateDecodeOptional(field: any, fieldName: string, varName: string, 
   lines.push(`${indent}if ${presenceVar} == 1 {`);
 
   // Read value
-  const valueField: Field = {
-    name: "",
-    type: field.value_type
-  };
+  const valueType = field.value_type;
+  let valueField: Field;
+  if (typeof valueType === "object") {
+    // Inline type object — spread all properties
+    valueField = { name: "", ...valueType };
+  } else if (schema && isStringTypeAlias(valueType, schema)) {
+    // String type alias — inline the string decoding config
+    const typeDef = schema.types[valueType] as any;
+    valueField = { name: "", ...typeDef };
+  } else {
+    valueField = { name: "", type: valueType };
+  }
   const valueVar = `${varName}Value`;
-  const innerLines = generateDecodeFieldImpl(valueField, "", valueVar, endianness, runtimeEndianness, indent + "\t");
+  // Use field-level endianness from inline object if available
+  const valueEndianness = (valueField as any).endianness || endianness;
+  const valueRuntimeEndianness = mapEndianness(valueEndianness);
+  const innerLines = generateDecodeFieldImpl(valueField, "", valueVar, valueEndianness, valueRuntimeEndianness, indent + "\t", schema);
   lines.push(...innerLines);
 
   // Assign to result - type references return pointers, primitives need address-of
-  const valueType = field.value_type;
-  const primitiveTypes = ["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "string", "array", "bit", "int", "varlength"];
-  const isTypeRef = !primitiveTypes.includes(valueType) && typeof valueType === "string";
+  // Inline objects and string aliases are never type refs — they decode to primitives
+  const primitiveTypes = ["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "string", "array", "bit", "int", "varlength", "bool", "bytes"];
+  const resolvedType = typeof valueType === "object" ? valueType.type : valueType;
+  const isTypeRef = typeof valueType === "string"
+    && !primitiveTypes.includes(valueType)
+    && !(schema && isStringTypeAlias(valueType, schema));
   if (isTypeRef) {
     // Type reference decode returns pointer, assign directly
     lines.push(`${indent}\tresult.${fieldName} = ${valueVar}`);
@@ -4013,6 +4406,115 @@ function generateDecodeString(field: any, fieldName: string, varName: string, en
   const kind = field.kind;
   const encoding = field.encoding || "utf8";
   const bytesVar = `${varName}Bytes`;
+
+  // UTF-16: read code units (uint16), then decode to string
+  if (encoding === "utf16") {
+    const stringEndianness = field.endianness || endianness;
+    const runtimeEnd = mapEndianness(stringEndianness);
+    const unitsVar = `${varName}Units`;
+
+    switch (kind) {
+      case "length_prefixed": {
+        const lengthType = field.length_type || "uint8";
+        const lengthVarName = `${varName}Length`;
+        // Read byte count
+        switch (lengthType) {
+          case "uint8":
+            lines.push(`${indent}${lengthVarName}, err := decoder.ReadUint8()`);
+            break;
+          case "uint16":
+            lines.push(`${indent}${lengthVarName}, err := decoder.ReadUint16(runtime.${mapEndianness(endianness)})`);
+            break;
+          case "uint32":
+            lines.push(`${indent}${lengthVarName}, err := decoder.ReadUint32(runtime.${mapEndianness(endianness)})`);
+            break;
+          case "uint64":
+            lines.push(`${indent}${lengthVarName}, err := decoder.ReadUint64(runtime.${mapEndianness(endianness)})`);
+            break;
+        }
+        lines.push(`${indent}if err != nil {`);
+        lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name} length: %w", err)`);
+        lines.push(`${indent}}`);
+        // Read code units (byte count / 2)
+        const numUnitsVar = `${varName}NumUnits`;
+        lines.push(`${indent}${numUnitsVar} := int(${lengthVarName}) / 2`);
+        lines.push(`${indent}${unitsVar} := make([]uint16, ${numUnitsVar})`);
+        lines.push(`${indent}for i := 0; i < ${numUnitsVar}; i++ {`);
+        lines.push(`${indent}\tcu, err := decoder.ReadUint16(runtime.${runtimeEnd})`);
+        lines.push(`${indent}\tif err != nil {`);
+        lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\t${unitsVar}[i] = cu`);
+        lines.push(`${indent}}`);
+        break;
+      }
+
+      case "null_terminated":
+        // Read uint16 code units until 0x0000
+        lines.push(`${indent}${unitsVar} := []uint16{}`);
+        lines.push(`${indent}for {`);
+        lines.push(`${indent}\tcu, err := decoder.ReadUint16(runtime.${runtimeEnd})`);
+        lines.push(`${indent}\tif err != nil {`);
+        lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\tif cu == 0 {`);
+        lines.push(`${indent}\t\tbreak`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\t${unitsVar} = append(${unitsVar}, cu)`);
+        lines.push(`${indent}}`);
+        break;
+
+      case "fixed": {
+        const length = field.length || 0;
+        const numUnits = Math.floor(length / 2);
+        // Read fixed number of code units, trim trailing null units
+        lines.push(`${indent}${unitsVar} := make([]uint16, 0, ${numUnits})`);
+        lines.push(`${indent}for i := 0; i < ${numUnits}; i++ {`);
+        lines.push(`${indent}\tcu, err := decoder.ReadUint16(runtime.${runtimeEnd})`);
+        lines.push(`${indent}\tif err != nil {`);
+        lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\tif cu == 0 {`);
+        // Read remaining padding bytes
+        lines.push(`${indent}\t\tfor j := i + 1; j < ${numUnits}; j++ {`);
+        lines.push(`${indent}\t\t\tdecoder.ReadUint16(runtime.${runtimeEnd})`);
+        lines.push(`${indent}\t\t}`);
+        lines.push(`${indent}\t\tbreak`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\t${unitsVar} = append(${unitsVar}, cu)`);
+        lines.push(`${indent}}`);
+        break;
+      }
+
+      case "field_referenced": {
+        const lengthField = field.length_field;
+        const lengthFieldGoName = toGoFieldPath(lengthField);
+        const numUnitsVar = `${varName}NumUnits`;
+        lines.push(`${indent}${numUnitsVar} := int(result.${lengthFieldGoName}) / 2`);
+        lines.push(`${indent}${unitsVar} := make([]uint16, ${numUnitsVar})`);
+        lines.push(`${indent}for i := 0; i < ${numUnitsVar}; i++ {`);
+        lines.push(`${indent}\tcu, err := decoder.ReadUint16(runtime.${runtimeEnd})`);
+        lines.push(`${indent}\tif err != nil {`);
+        lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name}: %w", err)`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\t${unitsVar}[i] = cu`);
+        lines.push(`${indent}}`);
+        break;
+      }
+
+      default:
+        throw new Error(`Unknown string kind: ${kind}`);
+    }
+
+    // Convert code units to string
+    if (fieldName) {
+      lines.push(`${indent}result.${fieldName} = string(utf16.Decode(${unitsVar}))`);
+    } else {
+      lines.push(`${indent}${varName} := string(utf16.Decode(${unitsVar}))`);
+    }
+    lines.push(``);
+    return lines;
+  }
 
   switch (kind) {
     case "length_prefixed": {
@@ -4137,7 +4639,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
   if (items.type === "choice" && parentTypeName) {
     itemType = `${parentTypeName}_${fieldName}_Choice`;
   } else {
-    itemType = mapFieldToGoType(items);
+    itemType = mapFieldToGoType(items, parentTypeName, schema);
   }
 
   // Read length prefix for length_prefixed arrays
@@ -4515,9 +5017,11 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
   const isDiscriminatedUnionTypeRef = schema && schema.types[items.type] &&
     ((schema.types[items.type] as any).type === "discriminated_union" ||
      (schema.types[items.type] as any).variants !== undefined);
+  const isStringAlias = schema && typeof items.type === "string" && isStringTypeAlias(items.type, schema);
   const isStructItem = !isPrimitiveType(items.type) &&
     !["string", "array", "bit", "int", "bitfield", "discriminated_union"].includes(items.type) &&
-    !isDiscriminatedUnionTypeRef;
+    !isDiscriminatedUnionTypeRef &&
+    !isStringAlias;
   const itemValue = isStructItem ? `*${itemVar}` : itemVar;
 
   // Assign to array
@@ -4616,6 +5120,13 @@ function generateDecodeLengthPrefixedItems(field: any, fieldName: string, endian
       case "float64":
         lines.push(`${indent}\titem, err := decoder.ReadFloat64(runtime.${runtimeEndianness})`);
         break;
+      case "bool":
+        lines.push(`${indent}\titemRaw, err := decoder.ReadUint8()`);
+        lines.push(`${indent}\tif err != nil {`);
+        lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode item: %w", err)`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}\titem := itemRaw != 0`);
+        break;
       default:
         lines.push(`${indent}\t// Unsupported primitive type: ${itemType}`);
         lines.push(`${indent}\tvar item ${itemType}`);
@@ -4671,11 +5182,49 @@ function generateDecodeNestedStruct(field: Field, fieldName: string, varName: st
  */
 function isPrimitiveType(typeName: string): boolean {
   const primitives = [
-    "uint8", "uint16", "uint32", "uint64",
+    "bool", "uint8", "uint16", "uint32", "uint64",
     "int8", "int16", "int32", "int64",
-    "float32", "float64", "string"
+    "float32", "float64", "string", "bytes"
   ];
   return primitives.includes(typeName);
+}
+
+/**
+ * Check if a named type is a string type alias (type: "string", not a sequence struct).
+ * Returns false if the type is used as a discriminated union variant (needs struct with methods).
+ */
+function isStringTypeAlias(typeName: string, schema: BinarySchema): boolean {
+  const typeDef = schema.types[typeName] as any;
+  if (!typeDef || ('sequence' in typeDef) || typeDef.type !== 'string') {
+    return false;
+  }
+  // Check if this type is used as a discriminated union variant — those need structs
+  for (const [, otherTypeDef] of Object.entries(schema.types)) {
+    const otherAny = otherTypeDef as any;
+    // Check top-level discriminated unions
+    if (otherAny.variants && Array.isArray(otherAny.variants)) {
+      for (const variant of otherAny.variants) {
+        if (variant.type === typeName) return false;
+      }
+    }
+    // Check inline discriminated unions in sequence fields
+    if (otherAny.sequence) {
+      for (const field of otherAny.sequence) {
+        if (field.type === 'discriminated_union' && field.variants) {
+          for (const variant of field.variants) {
+            if (variant.type === typeName) return false;
+          }
+        }
+        // Check choice fields in arrays
+        if (field.type === 'array' && field.items?.type === 'choice') {
+          for (const choice of (field.items.choices || [])) {
+            if (choice.type === typeName) return false;
+          }
+        }
+      }
+    }
+  }
+  return true;
 }
 
 /**
@@ -4685,6 +5234,7 @@ function getPrimitiveSize(typeName: string): number {
   switch (typeName) {
     case "uint8":
     case "int8":
+    case "bool":
       return 1;
     case "uint16":
     case "int16":
@@ -4698,7 +5248,7 @@ function getPrimitiveSize(typeName: string): number {
     case "float64":
       return 8;
     default:
-      // For string or unknown types, return 0 (variable length)
+      // For string, bytes, or unknown types, return 0 (variable length)
       return 0;
   }
 }
@@ -4707,10 +5257,12 @@ function getPrimitiveSize(typeName: string): number {
  * Maps a field to its Go type
  * @param parentTypeName - Optional parent type name for generating nested type names (e.g., bitfield structs)
  */
-function mapFieldToGoType(field: Field, parentTypeName?: string): string {
+function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: BinarySchema): string {
   switch (field.type) {
     case "uint8":
       return "uint8";
+    case "bool":
+      return "bool";
     case "uint16":
       return "uint16";
     case "uint32":
@@ -4731,6 +5283,8 @@ function mapFieldToGoType(field: Field, parentTypeName?: string): string {
       return "float64";
     case "string":
       return "string";
+    case "bytes":
+      return "[]byte";
     case "bit":
       // Bitfield - determine size
       const size = (field as any).size || 1;
@@ -4764,16 +5318,25 @@ function mapFieldToGoType(field: Field, parentTypeName?: string): string {
         const fieldName = toGoFieldName(field.name);
         return `[]${parentTypeName}_${fieldName}_Choice`;
       }
-      const itemsType = mapFieldToGoType(items, parentTypeName);
+      const itemsType = mapFieldToGoType(items, parentTypeName, schema);
       return `[]${itemsType}`;
     case "choice":
       // Choice type - should be handled via array case above for proper naming
       // This fallback is for direct choice fields (rare)
       return "Choice";
-    case "optional":
+    case "optional": {
       // Optional type - pointer
       const valueType = (field as any).value_type;
+      if (typeof valueType === "object") {
+        // Inline type object — map it directly
+        return `*${mapFieldToGoType(valueType as Field, parentTypeName, schema)}`;
+      }
+      // String reference — check if it's a string type alias
+      if (schema && isStringTypeAlias(valueType, schema)) {
+        return `*string`;
+      }
       return `*${valueType}`;
+    }
     case "discriminated_union":
       // Inline discriminated union - use interface{} to hold any variant
       return "interface{}";
@@ -4782,6 +5345,10 @@ function mapFieldToGoType(field: Field, parentTypeName?: string): string {
       const targetType = (field as any).target_type;
       return toGoTypeName(targetType);
     default:
+      // Check if it's a string type alias — use native string
+      if (schema && isStringTypeAlias(field.type, schema)) {
+        return "string";
+      }
       // Assume it's a type reference (nested struct)
       return toGoTypeName(field.type);
   }
@@ -5020,6 +5587,28 @@ function generateDecodeInlineDiscriminatedUnion(
     const fieldPath = toGoFieldPath(discriminator.field);
     const discriminatorVar = `result.${fieldPath}`;
 
+    // Build enum reverse map if discriminator field type is an enum
+    let enumReverseLookup: Map<number, string> | null = null;
+    let goEnumPrefix: string = "";
+    if (schema && parentTypeName) {
+      const parentTypeDef = schema.types?.[parentTypeName];
+      if (parentTypeDef && "sequence" in parentTypeDef) {
+        const rootFieldName = discriminator.field.split('.')[0];
+        const discField = (parentTypeDef as any).sequence.find((f: any) => f.name === rootFieldName);
+        if (discField && !discriminator.field.includes('.') && typeof discField.type === 'string') {
+          const discTypeDef = schema.types?.[discField.type];
+          if (discTypeDef && isEnumType(discTypeDef)) {
+            enumReverseLookup = new Map<number, string>();
+            goEnumPrefix = toGoTypeName(discField.type);
+            const enumVariants = (discTypeDef as any).variants as Record<string, number>;
+            for (const [name, value] of Object.entries(enumVariants)) {
+              enumReverseLookup.set(value, name);
+            }
+          }
+        }
+      }
+    }
+
     // Find fallback variant (no 'when' condition)
     const fieldFallbackVariant = variants.find((v: any) => !v.when);
 
@@ -5033,6 +5622,19 @@ function generateDecodeInlineDiscriminatedUnion(
         let condition = variant.when.replace(/\bvalue\b/g, discriminatorVar);
         condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
         condition = condition.replace(/'([^']*)'/g, '"$1"');
+
+        // If discriminator field type is an enum, replace integer literals with Go enum constants
+        if (enumReverseLookup) {
+          condition = condition.replace(/(==|!=)\s*(0x[0-9a-fA-F]+|\d+)/g, (_match: string, op: string, numStr: string) => {
+            const num = Number(numStr);
+            const variantName = enumReverseLookup!.get(num);
+            if (variantName !== undefined) {
+              return `${op} ${goEnumPrefix}${toGoFieldName(variantName)}`;
+            }
+            return _match;
+          });
+        }
+
         const ifKeyword = isFirst ? "if" : "} else if";
         isFirst = false;
 

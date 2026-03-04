@@ -195,6 +195,58 @@ func prefixTypeNames(code string, typeName string, prefix string) string {
 		return match
 	})
 
+	// Prefix enum type definitions: "type Foo uint8/uint16/uint32" -> "type prefix_Foo uint8"
+	enumTypeDefRegex := regexp.MustCompile(`\btype\s+([A-Z][a-zA-Z0-9_]*)\s+(uint8|uint16|uint32)\b`)
+	code = enumTypeDefRegex.ReplaceAllString(code, fmt.Sprintf("type %s_$1 $2", prefix))
+
+	// Prefix type alias definitions: "type Foo = string" -> "type prefix_Foo = string"
+	typeAliasRegex := regexp.MustCompile(`\btype\s+([A-Z][a-zA-Z0-9_]*)\s*=\s*(\w+)`)
+	code = typeAliasRegex.ReplaceAllString(code, fmt.Sprintf("type %s_$1 = $2", prefix))
+
+	// Prefix value receiver methods: "func (x Foo)" -> "func (x prefix_Foo)" (no pointer)
+	valueReceiverRegex := regexp.MustCompile(`\bfunc\s+\(([a-z]+)\s+([A-Z][a-zA-Z0-9_]*)\)`)
+	code = valueReceiverRegex.ReplaceAllString(code, fmt.Sprintf("func ($1 %s_$2)", prefix))
+
+	// Prefix const declarations with type annotations: "\tFooBar Foo = 0" -> "\tprefix_FooBar prefix_Foo = 0"
+	constDeclRegex := regexp.MustCompile(`(\t)([A-Z][a-zA-Z0-9_]*)\s+([A-Z][a-zA-Z0-9_]*)\s*=`)
+	// IMPORTANT: Use ${N} syntax because $N followed by alphanumeric (e.g., $1enum...) is parsed as one group name
+	code = constDeclRegex.ReplaceAllString(code, fmt.Sprintf("${1}%s_${2} %s_${3} =", prefix, prefix))
+
+	// Prefix type conversions: ":= Foo(" or "= Foo(" -> ":= prefix_Foo(" or "= prefix_Foo("
+	// Process line-by-line to avoid matching Decode function calls (which look like type conversions syntactically)
+	{
+		typeConvRegex := regexp.MustCompile(`(=\s*)([A-Z][a-zA-Z0-9_]*)\(`)
+		typeConvLines := strings.Split(code, "\n")
+		for i, line := range typeConvLines {
+			if m := typeConvRegex.FindStringSubmatch(line); m != nil {
+				typeName := m[2]
+				// Skip decode function calls — these are handled by separate decode regexes
+				if strings.HasPrefix(typeName, "Decode") || strings.HasPrefix(typeName, "decode") {
+					continue
+				}
+				// IMPORTANT: Use ${N} syntax because $N followed by alphanumeric is parsed as one group name
+				typeConvLines[i] = typeConvRegex.ReplaceAllString(line, fmt.Sprintf("${1}%s_${2}(", prefix))
+			}
+		}
+		code = strings.Join(typeConvLines, "\n")
+	}
+
+	// Prefix bare uppercase identifiers in switch case statements: "case FooBar, FooBaz:" -> "case prefix_FooBar, prefix_FooBaz:"
+	// Process line by line to handle comma-separated identifiers
+	{
+		enumLines := strings.Split(code, "\n")
+		caseLineRegex := regexp.MustCompile(`^(\s*case\s+)(.+):$`)
+		upperIdRegex := regexp.MustCompile(`\b([A-Z][a-zA-Z0-9_]*)\b`)
+		for i, line := range enumLines {
+			if m := caseLineRegex.FindStringSubmatch(line); m != nil {
+				// Replace uppercase identifiers in the case expression (but not Go keywords)
+				caseExpr := upperIdRegex.ReplaceAllString(m[2], fmt.Sprintf("%s_$1", prefix))
+				enumLines[i] = m[1] + caseExpr + ":"
+			}
+		}
+		code = strings.Join(enumLines, "\n")
+	}
+
 	// Prefix all Decode function DEFINITIONS: "func DecodeFoo" -> "func Decodeprefix_Foo"
 	// and "func decodeFooWithDecoder" -> "func decodeprefixFooWithDecoder"
 	// Note: Decode functions get prefix AFTER Decode, decode helpers get prefix BEFORE decode
@@ -467,11 +519,24 @@ func generateValueConstructionWithSchema(typeName string, value interface{}, var
 		return generateValueConstructionSimple(typeName, value, varName)
 	}
 
+	// Check if this is an enum type (type definition where type == "enum")
+	// Go generator creates a typed uint, value is just a number
+	if typeDefType, _ := typeDef["type"].(string); typeDefType == "enum" {
+		if numVal, ok := value.(float64); ok {
+			return fmt.Sprintf("\t\t\t%s := %s(%d)\n", varName, typeName, int(numVal))
+		}
+	}
+
 	// Check if this is a string type alias (type definition where type == "string")
-	// Go generator wraps these in a struct with a Value field
+	// Go generator creates a type alias (type X = string) unless used as a discriminated union variant
 	if typeDefType, _ := typeDef["type"].(string); typeDefType == "string" {
 		if strVal, ok := value.(string); ok {
-			return fmt.Sprintf("\t\t\t%s := %s{Value: %q}\n", varName, typeName, strVal)
+			// Check if this type is used as a discriminated union variant
+			// (those keep struct wrapper, everything else is a type alias)
+			if isStringUsedAsVariant(suite.TestType, types) {
+				return fmt.Sprintf("\t\t\t%s := %s{Value: %q}\n", varName, typeName, strVal)
+			}
+			return fmt.Sprintf("\t\t\t%s := %s(%q)\n", varName, typeName, strVal)
 		}
 	}
 
@@ -626,6 +691,22 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 
 	fieldType, _ := fieldDef["type"].(string)
 
+	// Handle bytes fields - format as []byte{...}
+	if fieldType == "bytes" {
+		if valSlice, ok := val.([]interface{}); ok {
+			if len(valSlice) == 0 {
+				return "[]byte{}"
+			}
+			var elements []string
+			for _, elem := range valSlice {
+				if f, ok := elem.(float64); ok {
+					elements = append(elements, fmt.Sprintf("%d", int(f)))
+				}
+			}
+			return fmt.Sprintf("[]byte{%s}", strings.Join(elements, ", "))
+		}
+	}
+
 	// Handle inline array fields
 	if fieldType == "array" {
 		if valSlice, ok := val.([]interface{}); ok {
@@ -652,7 +733,14 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 		if val == nil {
 			return "nil"
 		}
+		// value_type can be a string (type reference) or map (inline type object)
 		valueType, _ := fieldDef["value_type"].(string)
+		if valueType == "" {
+			// Inline type object — extract the inner type
+			if vtMap, ok := fieldDef["value_type"].(map[string]interface{}); ok {
+				valueType, _ = vtMap["type"].(string)
+			}
+		}
 		formattedVal := formatValueWithType(val, valueType)
 		// Use pointer helper function based on value_type
 		switch valueType {
@@ -678,16 +766,21 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 			return fmt.Sprintf("ptrFloat64(float64(%s))", formattedVal)
 		case "string":
 			return fmt.Sprintf("ptrString(%s)", formattedVal)
+		case "bool":
+			return fmt.Sprintf("ptrBool(%s)", formattedVal)
 		default:
 			// For type references (structs), format and take address
 			if typeDef, hasTypeDef := types[valueType].(map[string]interface{}); hasTypeDef {
 				typeDefType, _ := typeDef["type"].(string)
 				goTypeName := typePrefix + "_" + capitalizeFirst(valueType)
 
-				// Type reference to string type - value is just a string
+				// Type reference to string type
 				if typeDefType == "string" {
 					if strVal, ok := val.(string); ok {
-						return fmt.Sprintf("&%s{Value: %q}", goTypeName, strVal)
+						if isStringUsedAsVariant(valueType, types) {
+							return fmt.Sprintf("&%s{Value: %q}", goTypeName, strVal)
+						}
+						return fmt.Sprintf("ptrString(%q)", strVal)
 					}
 				}
 
@@ -704,11 +797,22 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 	if typeDef, hasTypeDef := types[fieldType].(map[string]interface{}); hasTypeDef {
 		typeDefType, _ := typeDef["type"].(string)
 
+		// Handle type reference to enum type - value is just a number
+		if typeDefType == "enum" {
+			goTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
+			if numVal, ok := val.(float64); ok {
+				return fmt.Sprintf("%s(%d)", goTypeName, int(numVal))
+			}
+		}
+
 		// Handle type reference to string type
 		if typeDefType == "string" {
 			if strVal, ok := val.(string); ok {
-				goTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
-				return fmt.Sprintf("%s{Value: %q}", goTypeName, strVal)
+				if isStringUsedAsVariant(fieldType, types) {
+					goTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
+					return fmt.Sprintf("%s{Value: %q}", goTypeName, strVal)
+				}
+				return fmt.Sprintf("%q", strVal)
 			}
 		}
 
@@ -747,6 +851,65 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 
 	// For other types, use existing formatValueWithType
 	return formatValueWithType(val, fieldType)
+}
+
+// isStringUsedAsVariant checks if a string type is used as a discriminated union variant
+// in any type within the schema. Types used as variants need struct wrappers, not type aliases.
+func isStringUsedAsVariant(typeName string, types map[string]interface{}) bool {
+	for _, typeDef := range types {
+		tdef, ok := typeDef.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		// Check top-level variants (discriminated union type)
+		if variants, ok := tdef["variants"].([]interface{}); ok {
+			for _, v := range variants {
+				if vm, ok := v.(map[string]interface{}); ok {
+					if vt, _ := vm["type"].(string); vt == typeName {
+						return true
+					}
+				}
+			}
+		}
+		// Check sequence fields for inline discriminated unions and choice arrays
+		if seq, ok := tdef["sequence"].([]interface{}); ok {
+			for _, fieldRaw := range seq {
+				field, ok := fieldRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				// Inline discriminated union field
+				if ft, _ := field["type"].(string); ft == "discriminated_union" {
+					if variants, ok := field["variants"].([]interface{}); ok {
+						for _, v := range variants {
+							if vm, ok := v.(map[string]interface{}); ok {
+								if vt, _ := vm["type"].(string); vt == typeName {
+									return true
+								}
+							}
+						}
+					}
+				}
+				// Array with choice items
+				if ft, _ := field["type"].(string); ft == "array" {
+					if items, ok := field["items"].(map[string]interface{}); ok {
+						if it, _ := items["type"].(string); it == "choice" {
+							if choices, ok := items["choices"].([]interface{}); ok {
+								for _, c := range choices {
+									if cm, ok := c.(map[string]interface{}); ok {
+										if ct, _ := cm["type"].(string); ct == typeName {
+											return true
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
 }
 
 // formatArrayWithSchema formats an array using schema info (handles choice types)
@@ -807,16 +970,30 @@ func formatArrayWithSchema(arr []interface{}, fieldDef map[string]interface{}, t
 		}
 
 		// Handle reference to string type alias (e.g., Label)
-		// Go generator wraps these in a struct with a Value field
 		if typeDefType == "string" {
-			goTypeName := typePrefix + "_" + capitalizeFirst(itemType)
-			if len(arr) == 0 {
-				return fmt.Sprintf("[]%s{}", goTypeName)
+			if isStringUsedAsVariant(itemType, types) {
+				// String type used as discriminated union variant — struct wrapper
+				goTypeName := typePrefix + "_" + capitalizeFirst(itemType)
+				if len(arr) == 0 {
+					return fmt.Sprintf("[]%s{}", goTypeName)
+				}
+				result := fmt.Sprintf("[]%s{\n", goTypeName)
+				for _, elem := range arr {
+					if strVal, ok := elem.(string); ok {
+						result += fmt.Sprintf("\t\t\t\t\t{Value: %q},\n", strVal)
+					}
+				}
+				result += "\t\t\t\t}"
+				return result
 			}
-			result := fmt.Sprintf("[]%s{\n", goTypeName)
+			// String type alias — []string
+			if len(arr) == 0 {
+				return "[]string{}"
+			}
+			result := "[]string{\n"
 			for _, elem := range arr {
 				if strVal, ok := elem.(string); ok {
-					result += fmt.Sprintf("\t\t\t\t\t{Value: %q},\n", strVal)
+					result += fmt.Sprintf("\t\t\t\t\t%q,\n", strVal)
 				}
 			}
 			result += "\t\t\t\t}"
@@ -1074,11 +1251,15 @@ func formatChoiceArray(arr []interface{}, items map[string]interface{}, types ma
 									if referencedTypeDef, hasTypeDef := types[fieldType].(map[string]interface{}); hasTypeDef {
 										refTypeType, _ := referencedTypeDef["type"].(string)
 
-										// Type reference to string type - wrap string value in struct
+										// Type reference to string type
 										if refTypeType == "string" {
 											if strVal, ok := fieldVal.(string); ok {
-												refGoTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
-												result += fmt.Sprintf("\t\t\t\t\t\t%s: %s{Value: %q},\n", goFieldName, refGoTypeName, strVal)
+												if isStringUsedAsVariant(fieldType, types) {
+													refGoTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
+													result += fmt.Sprintf("\t\t\t\t\t\t%s: %s{Value: %q},\n", goFieldName, refGoTypeName, strVal)
+												} else {
+													result += fmt.Sprintf("\t\t\t\t\t\t%s: %q,\n", goFieldName, strVal)
+												}
 												continue
 											}
 										}
@@ -1185,11 +1366,15 @@ func formatStructValue(val map[string]interface{}, typeDef map[string]interface{
 					if referencedTypeDef, hasTypeDef := types[fieldType].(map[string]interface{}); hasTypeDef {
 						refTypeType, _ := referencedTypeDef["type"].(string)
 
-						// Type reference to string type - wrap string value in struct
+						// Type reference to string type
 						if refTypeType == "string" {
 							if strVal, ok := fieldVal.(string); ok {
-								goTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
-								result += fmt.Sprintf("\t\t\t\t\t\t%s: %s{Value: %q},\n", goFieldName, goTypeName, strVal)
+								if isStringUsedAsVariant(fieldType, types) {
+									goTypeName := typePrefix + "_" + capitalizeFirst(fieldType)
+									result += fmt.Sprintf("\t\t\t\t\t\t%s: %s{Value: %q},\n", goFieldName, goTypeName, strVal)
+								} else {
+									result += fmt.Sprintf("\t\t\t\t\t\t%s: %q,\n", goFieldName, strVal)
+								}
 								continue
 							}
 						}

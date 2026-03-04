@@ -1,7 +1,7 @@
 // ABOUTME: Generates Rust encoder/decoder code from BinSchema definitions
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript and Go runtimes
 
-import type { BinarySchema, Field, Endianness } from "../schema/binary-schema.js";
+import { type BinarySchema, type Field, type Endianness, isEnumType } from "../schema/binary-schema.js";
 
 /**
  * Options for Rust code generation
@@ -16,6 +16,152 @@ export interface RustGeneratorOptions {
 export interface GeneratedRustCode {
   code: string;
   typeName: string;
+}
+
+// ===== Byte-Alignment Analysis & Helpers =====
+
+/**
+ * Returns the fixed bit width for primitive/bit types, or null for variable-size types.
+ * Variable-size types (string, array, varlength, named types) are byte-aligned and
+ * preserve whatever alignment was present before them.
+ */
+function primitiveFieldBitWidth(field: Field | any): number | null {
+  switch (field.type) {
+    case "uint8": case "int8": case "bool": return 8;
+    case "uint16": case "int16": return 16;
+    case "uint32": case "int32": case "float32": return 32;
+    case "uint64": case "int64": case "float64": return 64;
+    case "bit": return (field as any).size || 1;
+    case "int": return (field as any).size || 8;
+    case "bitfield": {
+      const subFields = (field as any).fields;
+      if (subFields && Array.isArray(subFields)) {
+        let total = 0;
+        for (const sf of subFields) total += (sf as any).size || 1;
+        return total;
+      }
+      return (field as any).size || 8;
+    }
+    default:
+      return null; // Variable-size, named type, or complex type
+  }
+}
+
+/**
+ * Compute per-field byte-alignment for a sequence of fields.
+ * Returns a boolean[] where each entry indicates whether the corresponding
+ * field starts at a byte-aligned position in the stream.
+ *
+ * Tracking: maintains cumulative bitOffset. Fixed-bit fields add their width.
+ * Variable-size byte-aligned fields (string, array, varlength, named types)
+ * preserve alignment. Conditional/optional fields with non-byte-aligned inner
+ * types set bitOffset to unknown (-1, treated as not byte-aligned).
+ */
+function computeFieldAlignments(fields: Field[]): boolean[] {
+  const result: boolean[] = [];
+  let bitOffset = 0; // -1 = unknown alignment
+
+  for (const field of fields) {
+    // Record whether this field starts at a byte-aligned position
+    result.push(bitOffset >= 0 && bitOffset % 8 === 0);
+
+    if (bitOffset < 0 || !field.type) continue;
+
+    // Conditional fields: if inner type is not byte-aligned, alignment becomes unknown
+    const fieldAny = field as any;
+    if (isFieldConditional(field) || fieldAny.optional) {
+      const width = primitiveFieldBitWidth(field);
+      if (width !== null && width % 8 !== 0) {
+        bitOffset = -1;
+      }
+      // For optional fields, presence indicator adds 1 or 8 bits
+      if (fieldAny.optional && bitOffset >= 0) {
+        const presenceType = fieldAny.presence || "uint8";
+        bitOffset += presenceType === "bit" ? 1 : 8;
+      }
+      continue;
+    }
+
+    const width = primitiveFieldBitWidth(field);
+    if (width !== null) {
+      bitOffset += width;
+    }
+    // null width = variable-size byte-aligned → bitOffset unchanged
+  }
+
+  return result;
+}
+
+/**
+ * Emit an encoder write call, using byte-aligned fast-path methods when possible.
+ * Returns the complete statement (without indent or trailing newline).
+ */
+function emitEncoderWrite(type: string, value: string, rustEndianness: string, byteAligned: boolean): string {
+  if (byteAligned) {
+    const suffix = rustEndianness === "LittleEndian" ? "le" : "be";
+    switch (type) {
+      case "uint8": return `encoder.write_byte(${value});`;
+      case "int8": return `encoder.write_byte(${value} as u8);`;
+      case "uint16": return `encoder.write_u16_${suffix}(${value});`;
+      case "int16": return `encoder.write_u16_${suffix}(${value} as u16);`;
+      case "uint32": return `encoder.write_u32_${suffix}(${value});`;
+      case "int32": return `encoder.write_u32_${suffix}(${value} as u32);`;
+      case "float32": return `encoder.write_u32_${suffix}(${value}.to_bits());`;
+      case "uint64": return `encoder.write_u64_${suffix}(${value});`;
+      case "int64": return `encoder.write_u64_${suffix}(${value} as u64);`;
+      case "float64": return `encoder.write_u64_${suffix}(${value}.to_bits());`;
+    }
+  }
+  // Generic path
+  switch (type) {
+    case "uint8": return `encoder.write_uint8(${value});`;
+    case "int8": return `encoder.write_int8(${value});`;
+    case "uint16": return `encoder.write_uint16(${value}, Endianness::${rustEndianness});`;
+    case "int16": return `encoder.write_int16(${value}, Endianness::${rustEndianness});`;
+    case "uint32": return `encoder.write_uint32(${value}, Endianness::${rustEndianness});`;
+    case "int32": return `encoder.write_int32(${value}, Endianness::${rustEndianness});`;
+    case "float32": return `encoder.write_float32(${value}, Endianness::${rustEndianness});`;
+    case "uint64": return `encoder.write_uint64(${value}, Endianness::${rustEndianness});`;
+    case "int64": return `encoder.write_int64(${value}, Endianness::${rustEndianness});`;
+    case "float64": return `encoder.write_float64(${value}, Endianness::${rustEndianness});`;
+  }
+  throw new Error(`Unsupported type for emitEncoderWrite: ${type}`);
+}
+
+/**
+ * Emit a decoder read expression, using byte-aligned fast-path methods when possible.
+ * Returns the read expression (e.g., "decoder.read_byte()?" or "decoder.read_uint8()?").
+ */
+function emitDecoderRead(type: string, rustEndianness: string, byteAligned: boolean): string {
+  if (byteAligned) {
+    const suffix = rustEndianness === "LittleEndian" ? "le" : "be";
+    switch (type) {
+      case "uint8": return `decoder.read_byte()?`;
+      case "int8": return `decoder.read_byte()? as i8`;
+      case "uint16": return `decoder.read_u16_${suffix}()?`;
+      case "int16": return `decoder.read_u16_${suffix}()? as i16`;
+      case "uint32": return `decoder.read_u32_${suffix}()?`;
+      case "int32": return `decoder.read_u32_${suffix}()? as i32`;
+      case "float32": return `f32::from_bits(decoder.read_u32_${suffix}()?)`;
+      case "uint64": return `decoder.read_u64_${suffix}()?`;
+      case "int64": return `decoder.read_u64_${suffix}()? as i64`;
+      case "float64": return `f64::from_bits(decoder.read_u64_${suffix}()?)`;
+    }
+  }
+  // Generic path
+  switch (type) {
+    case "uint8": return `decoder.read_uint8()?`;
+    case "int8": return `decoder.read_int8()?`;
+    case "uint16": return `decoder.read_uint16(Endianness::${rustEndianness})?`;
+    case "int16": return `decoder.read_int16(Endianness::${rustEndianness})?`;
+    case "uint32": return `decoder.read_uint32(Endianness::${rustEndianness})?`;
+    case "int32": return `decoder.read_int32(Endianness::${rustEndianness})?`;
+    case "float32": return `decoder.read_float32(Endianness::${rustEndianness})?`;
+    case "uint64": return `decoder.read_uint64(Endianness::${rustEndianness})?`;
+    case "int64": return `decoder.read_int64(Endianness::${rustEndianness})?`;
+    case "float64": return `decoder.read_float64(Endianness::${rustEndianness})?`;
+  }
+  throw new Error(`Unsupported type for emitDecoderRead: ${type}`);
 }
 
 /**
@@ -57,7 +203,7 @@ export function generateRust(
 
   // Use statement - allow unused since different schemas need different imports
   lines.push(`#[allow(unused_imports)]`);
-  lines.push(`use ${crateName}::{BitStreamEncoder, BitStreamDecoder, Endianness, BitOrder, Result, EncodeContext, FieldValue};`);
+  lines.push(`use ${crateName}::{BitStreamEncoder, BitStreamDecoder, Endianness, BitOrder, Result, BinSchemaError, EncodeContext, FieldValue};`);
   lines.push(`#[allow(unused_imports)]`);
   lines.push(`use std::collections::HashMap;`);
   lines.push(``);
@@ -86,6 +232,9 @@ export function generateRust(
       const instances = (typeDef as any).instances || [];
       lines.push(...generateStructs(rustTypeName, name, typeDef.sequence, schema, instances));
       lines.push(...generateImpl(rustTypeName, name, typeDef.sequence, defaultEndianness, defaultBitOrder, schema, instances));
+    } else if (isEnumType(typeDef)) {
+      // Enum type - must check before "variants" since enum also has variants
+      lines.push(...generateRustEnumType(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ("variants" in typeDef) {
       // Discriminated union type - must check before "type" since it has both
       lines.push(...generateDiscriminatedUnion(rustTypeName, typeDef as any, defaultEndianness, defaultBitOrder, schema));
@@ -195,7 +344,7 @@ function getStaticFieldSize(field: Field, schema: BinarySchema): number {
   if (fieldAny.computed) {
     // Computed fields still take up space based on their type
     switch (field.type) {
-      case "uint8": case "int8": return 1;
+      case "uint8": case "int8": case "bool": return 1;
       case "uint16": case "int16": return 2;
       case "uint32": case "int32": case "float32": return 4;
       case "uint64": case "int64": case "float64": return 8;
@@ -204,7 +353,7 @@ function getStaticFieldSize(field: Field, schema: BinarySchema): number {
   }
   if (fieldAny.const !== undefined) {
     switch (field.type) {
-      case "uint8": case "int8": return 1;
+      case "uint8": case "int8": case "bool": return 1;
       case "uint16": case "int16": return 2;
       case "uint32": case "int32": case "float32": return 4;
       case "uint64": case "int64": case "float64": return 8;
@@ -212,7 +361,7 @@ function getStaticFieldSize(field: Field, schema: BinarySchema): number {
     }
   }
   switch (field.type) {
-    case "uint8": case "int8": return 1;
+    case "uint8": case "int8": case "bool": return 1;
     case "uint16": case "int16": return 2;
     case "uint32": case "int32": case "float32": return 4;
     case "uint64": case "int64": case "float64": return 8;
@@ -404,6 +553,7 @@ function getFieldValueConversion(field: Field): string {
   const fieldType = field.type;
   switch (fieldType) {
     case "uint8": return "FieldValue::U8";
+    case "bool": return "FieldValue::U8";
     case "uint16": return "FieldValue::U16";
     case "uint32": return "FieldValue::U32";
     case "uint64": return "FieldValue::U64";
@@ -415,6 +565,7 @@ function getFieldValueConversion(field: Field): string {
     case "float64": return "FieldValue::F64";
     case "string": return "FieldValue::String";
     case "array": return "FieldValue::Bytes";
+    case "bytes": return "FieldValue::Bytes";
     default: return "FieldValue::Bytes"; // Fallback for complex types
   }
 }
@@ -504,6 +655,9 @@ function typeTransitivelyContainsBackReference(typeName: string, schema: BinaryS
 
   const typeDef = schema.types[typeName];
   if (!typeDef) return false;
+
+  // Enum types never contain back references
+  if (isEnumType(typeDef)) return false;
 
   // Direct back_reference type
   if ("type" in typeDef && (typeDef as any).type === "back_reference") {
@@ -633,14 +787,14 @@ function generateTypeAlias(name: string, schemaTypeName: string, typeDef: any, d
 
     // Generate decode method
     lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
-    lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+    lines.push(`        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::${bitOrder});`);
     lines.push(`        Self::decode_with_decoder(&mut decoder)`);
     lines.push(`    }`);
     lines.push(``);
 
     // Generate decode_with_decoder method
     lines.push(`    pub fn decode_with_decoder(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
-    lines.push(...generateDecodeString(stringField, "value", defaultEndianness, "        "));
+    lines.push(...generateDecodeString(stringField, "value", defaultEndianness, "        ", true));
     lines.push(`        Ok(Self(value))`);
     lines.push(`    }`);
     lines.push(`}`);
@@ -733,7 +887,7 @@ function generateTypeAlias(name: string, schemaTypeName: string, typeDef: any, d
 
     // Generate decode method
     lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
-    lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+    lines.push(`        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::${bitOrder});`);
     lines.push(`        Self::decode_with_decoder(&mut decoder)`);
     lines.push(`    }`);
     lines.push(``);
@@ -863,6 +1017,90 @@ function typeNeedsInputOutputSuffix(typeName: string, schema: BinarySchema): boo
   }
 
   return false;
+}
+
+/**
+ * Generates a Rust enum type with repr and encode/decode support
+ */
+function generateRustEnumType(name: string, typeDef: any, defaultEndianness: string, defaultBitOrder: string): string[] {
+  const lines: string[] = [];
+  const variants = typeDef.variants as Record<string, number>;
+  const repr = typeDef.repr as string;
+  const bitOrder = mapBitOrder(defaultBitOrder);
+  const rustRepr = repr === "uint8" ? "u8" : repr === "uint16" ? "u16" : "u32";
+
+  // Determine read/write methods based on repr
+  let writeExpr: string;
+  let readExpr: string;
+  if (repr === "uint8") {
+    writeExpr = `encoder.write_uint8(*self as u8);`;
+    readExpr = `decoder.read_uint8()?`;
+  } else if (repr === "uint16") {
+    const endianness = mapEndianness(defaultEndianness);
+    writeExpr = `encoder.write_uint16(*self as u16, Endianness::${endianness});`;
+    readExpr = `decoder.read_uint16(Endianness::${endianness})?`;
+  } else {
+    const endianness = mapEndianness(defaultEndianness);
+    writeExpr = `encoder.write_uint32(*self as u32, Endianness::${endianness});`;
+    readExpr = `decoder.read_uint32(Endianness::${endianness})?`;
+  }
+
+  // Enum definition
+  lines.push(`#[derive(Debug, Clone, Copy, PartialEq, Eq)]`);
+  lines.push(`#[repr(${rustRepr})]`);
+  lines.push(`pub enum ${name} {`);
+  for (const [variantName, value] of Object.entries(variants)) {
+    lines.push(`    ${toRustTypeName(variantName)} = ${value},`);
+  }
+  lines.push(`}`);
+  lines.push(``);
+
+  // Impl block
+  lines.push(`impl ${name} {`);
+
+  // from_value constructor
+  lines.push(`    pub fn from_value(val: ${rustRepr}) -> Result<Self> {`);
+  lines.push(`        match val {`);
+  for (const [variantName, value] of Object.entries(variants)) {
+    lines.push(`            ${value} => Ok(${name}::${toRustTypeName(variantName)}),`);
+  }
+  lines.push(`            _ => Err(BinSchemaError::InvalidValue(format!("invalid ${name} value: {}", val))),`);
+  lines.push(`        }`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // encode
+  lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
+  lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
+  lines.push(`        self.encode_into(&mut encoder)?;`);
+  lines.push(`        Ok(encoder.finish())`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // encode_into
+  lines.push(`    pub fn encode_into(&self, encoder: &mut BitStreamEncoder) -> Result<()> {`);
+  lines.push(`        ${writeExpr}`);
+  lines.push(`        Ok(())`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // decode
+  lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
+  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::${bitOrder});`);
+  lines.push(`        Self::decode_with_decoder(&mut decoder)`);
+  lines.push(`    }`);
+  lines.push(``);
+
+  // decode_with_decoder
+  lines.push(`    pub fn decode_with_decoder(decoder: &mut BitStreamDecoder) -> Result<Self> {`);
+  lines.push(`        let val = ${readExpr};`);
+  lines.push(`        Self::from_value(val)`);
+  lines.push(`    }`);
+
+  lines.push(`}`);
+  lines.push(``);
+
+  return lines;
 }
 
 /**
@@ -1188,7 +1426,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
 
   // Generate decode method
   lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
-  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::${bitOrder});`);
   if (anyVariantNeedsContext) {
     lines.push(`        Self::decode_with_decoder_and_context(&mut decoder, None)`);
   } else {
@@ -1965,7 +2203,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
 
   // Generate decode method
   lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
-  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::${bitOrder});`);
   if (anyVariantNeedsContext) {
     lines.push(`        Self::decode_with_decoder_and_context(&mut decoder, None)`);
   } else {
@@ -2482,7 +2720,7 @@ function generateFromFieldConversion(fieldName: string, field: Field, schema: Bi
         return arrayItemNeedsConversion((field as any).items);
       case "optional": {
         const valueTypeName = (field as any).value_type;
-        if (!valueTypeName) return false;
+        if (!valueTypeName || typeof valueTypeName === "object") return false;
         return isCompositeType(valueTypeName, schema);
       }
       case "back_reference": {
@@ -2508,7 +2746,7 @@ function generateFromFieldConversion(fieldName: string, field: Field, schema: Bi
       }
       case "optional": {
         const valueTypeName = (field as any).value_type;
-        if (valueTypeName && isCompositeType(valueTypeName, schema)) {
+        if (valueTypeName && typeof valueTypeName === "string" && isCompositeType(valueTypeName, schema)) {
           return `${accessor}.map(|x| x.into())`;
         }
         return accessor;
@@ -2544,7 +2782,7 @@ function generateFromFieldConversion(fieldName: string, field: Field, schema: Bi
       case "optional": {
         // Optional + conditional = Option<Option<T>>, but let's handle the inner
         const valueTypeName = (field as any).value_type;
-        if (valueTypeName && isCompositeType(valueTypeName, schema)) {
+        if (valueTypeName && typeof valueTypeName === "string" && isCompositeType(valueTypeName, schema)) {
           return `${accessor}.map(|v| v.map(|x| x.into()))`;
         }
         return accessor;
@@ -2971,8 +3209,13 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
     }
   }
 
+  // Compute per-field byte-alignment for optimized encode calls
+  const fieldAlignments = computeFieldAlignments(fields);
+
   // Generate encoding logic for each field
-  for (const field of fields) {
+  for (let fieldIdx = 0; fieldIdx < fields.length; fieldIdx++) {
+    const field = fields[fieldIdx];
+    const fieldByteAligned = fieldAlignments[fieldIdx];
     // Skip fields without names
     if (!field.name) {
       continue;
@@ -2989,7 +3232,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
     // Note: Use loose equality (!=) to handle both undefined and null
     // (Rust serde serializes Option::None as null in JSON)
     if (fieldAny.const != null) {
-      lines.push(...generateEncodeConstField(field, fieldAny.const, defaultEndianness, "        "));
+      lines.push(...generateEncodeConstField(field, fieldAny.const, defaultEndianness, "        ", fieldByteAligned));
       continue;
     }
 
@@ -3004,7 +3247,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
 
     // Handle conditional fields - only encode if condition is true AND value is Some
     if (isFieldConditional(field)) {
-      lines.push(...generateEncodeConditionalField(field, fields, defaultEndianness, "        "));
+      lines.push(...generateEncodeConditionalField(field, fields, defaultEndianness, "        ", fieldByteAligned));
       continue;
     }
 
@@ -3036,7 +3279,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
           }
         }
       }
-      lines.push(...generateEncodeField(field, defaultEndianness, "        ", schema, hasNestedStructs, choiceCtxVarForField));
+      lines.push(...generateEncodeField(field, defaultEndianness, "        ", schema, hasNestedStructs, choiceCtxVarForField, fieldByteAligned));
     }
   }
 
@@ -3091,7 +3334,7 @@ function generateEncodeNestedStructField(field: Field, defaultEndianness: string
  * Generates encoding code for a conditional field
  * The field is Option<T> and only encoded if the condition is true
  */
-function generateEncodeConditionalField(field: Field, allFields: Field[], defaultEndianness: string, indent: string): string[] {
+function generateEncodeConditionalField(field: Field, allFields: Field[], defaultEndianness: string, indent: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const fieldAny = field as any;
   const condition = fieldAny.conditional;
@@ -3106,7 +3349,7 @@ function generateEncodeConditionalField(field: Field, allFields: Field[], defaul
   lines.push(`${indent}    if let Some(ref value) = self.${rustFieldName} {`);
 
   // Generate encoding for the value - we need to use "value" instead of "self.field"
-  const encodeLines = generateEncodeFieldWithValue(field, "value", defaultEndianness, `${indent}        `);
+  const encodeLines = generateEncodeFieldWithValue(field, "value", defaultEndianness, `${indent}        `, byteAligned);
   lines.push(...encodeLines);
 
   lines.push(`${indent}    }`);
@@ -3950,41 +4193,24 @@ function getFieldSize(field: Field): number {
  * Generates encoding code for a field using a specific value variable
  * (used for conditional fields where the value is unwrapped from Option)
  */
-function generateEncodeFieldWithValue(field: Field, valueVar: string, defaultEndianness: string, indent: string): string[] {
+function generateEncodeFieldWithValue(field: Field, valueVar: string, defaultEndianness: string, indent: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+  const aligned = byteAligned === true;
 
   switch (field.type) {
     case "uint8":
-      lines.push(`${indent}encoder.write_uint8(*${valueVar});`);
-      break;
     case "uint16":
-      lines.push(`${indent}encoder.write_uint16(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "uint32":
-      lines.push(`${indent}encoder.write_uint32(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "uint64":
-      lines.push(`${indent}encoder.write_uint64(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "int8":
-      lines.push(`${indent}encoder.write_int8(*${valueVar});`);
-      break;
     case "int16":
-      lines.push(`${indent}encoder.write_int16(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "int32":
-      lines.push(`${indent}encoder.write_int32(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "int64":
-      lines.push(`${indent}encoder.write_int64(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "float32":
-      lines.push(`${indent}encoder.write_float32(*${valueVar}, Endianness::${rustEndianness});`);
-      break;
     case "float64":
-      lines.push(`${indent}encoder.write_float64(*${valueVar}, Endianness::${rustEndianness});`);
+      lines.push(`${indent}${emitEncoderWrite(field.type, `*${valueVar}`, rustEndianness, aligned)}`);
       break;
     case "string":
       // For strings, call the encoding function
@@ -4008,38 +4234,25 @@ function generateEncodeFieldWithValue(field: Field, valueVar: string, defaultEnd
 /**
  * Generates encoding code for a const field (writes a fixed value)
  */
-function generateEncodeConstField(field: Field, constValue: any, defaultEndianness: string, indent: string): string[] {
+function generateEncodeConstField(field: Field, constValue: any, defaultEndianness: string, indent: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+  const aligned = byteAligned === true;
 
   // Handle null/undefined const values - use 0 as default
   const value = constValue === null || constValue === undefined ? 0 : constValue;
 
   switch (field.type) {
     case "uint8":
-      lines.push(`${indent}encoder.write_uint8(${value});`);
-      break;
     case "uint16":
-      lines.push(`${indent}encoder.write_uint16(${value}, Endianness::${rustEndianness});`);
-      break;
     case "uint32":
-      lines.push(`${indent}encoder.write_uint32(${value}, Endianness::${rustEndianness});`);
-      break;
     case "uint64":
-      lines.push(`${indent}encoder.write_uint64(${value}, Endianness::${rustEndianness});`);
-      break;
     case "int8":
-      lines.push(`${indent}encoder.write_int8(${value});`);
-      break;
     case "int16":
-      lines.push(`${indent}encoder.write_int16(${value}, Endianness::${rustEndianness});`);
-      break;
     case "int32":
-      lines.push(`${indent}encoder.write_int32(${value}, Endianness::${rustEndianness});`);
-      break;
     case "int64":
-      lines.push(`${indent}encoder.write_int64(${value}, Endianness::${rustEndianness});`);
+      lines.push(`${indent}${emitEncoderWrite(field.type, `${value}`, rustEndianness, aligned)}`);
       break;
     case "string": {
       // String const - write the const string value as fixed-length bytes
@@ -4055,11 +4268,12 @@ function generateEncodeConstField(field: Field, constValue: any, defaultEndianne
         } else {
           lines.push(`${indent}let const_str_bytes: &[u8] = ${constStr}.as_bytes();`);
         }
+        const writeByteCall = aligned ? "encoder.write_byte" : "encoder.write_uint8";
         lines.push(`${indent}for i in 0..${length} {`);
         lines.push(`${indent}    if i < const_str_bytes.len() {`);
-        lines.push(`${indent}        encoder.write_uint8(const_str_bytes[i]);`);
+        lines.push(`${indent}        ${writeByteCall}(const_str_bytes[i]);`);
         lines.push(`${indent}    } else {`);
-        lines.push(`${indent}        encoder.write_uint8(0);`);
+        lines.push(`${indent}        ${writeByteCall}(0);`);
         lines.push(`${indent}    }`);
         lines.push(`${indent}}`);
       } else {
@@ -4087,7 +4301,7 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
 
   // Public decode function
   lines.push(`    pub fn decode(bytes: &[u8]) -> Result<Self> {`);
-  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes.to_vec(), BitOrder::${bitOrder});`);
+  lines.push(`        let mut decoder = BitStreamDecoder::new(bytes, BitOrder::${bitOrder});`);
   if (needsContext) {
     lines.push(`        Self::decode_with_decoder_and_context(&mut decoder, None)`);
   } else {
@@ -4107,11 +4321,15 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
     lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<String, u64>>) -> Result<Self> {`);
   }
 
+  // Compute per-field byte-alignment for optimized decode calls
+  const fieldAlignments = computeFieldAlignments(fields);
+
   // Generate decoding logic for each field
   // Note: We decode ALL fields (including unnamed) because they may be referenced
   // by other fields (e.g., as length_field for arrays)
-  for (const field of fields) {
-    lines.push(...generateDecodeField(field, defaultEndianness, "        ", name, schema, fields, needsContext));
+  for (let fieldIdx = 0; fieldIdx < fields.length; fieldIdx++) {
+    const field = fields[fieldIdx];
+    lines.push(...generateDecodeField(field, defaultEndianness, "        ", name, schema, fields, needsContext, fieldAlignments[fieldIdx]));
   }
 
   // Generate instance field decoding (position-based)
@@ -4328,11 +4546,12 @@ function generateInstanceInlineUnionDecode(
 /**
  * Generates encoding code for a single field
  */
-function generateEncodeField(field: Field, defaultEndianness: string, indent: string, schema?: BinarySchema, hasContext?: boolean, choiceEncodeCtxVar?: string): string[] {
+function generateEncodeField(field: Field, defaultEndianness: string, indent: string, schema?: BinarySchema, hasContext?: boolean, choiceEncodeCtxVar?: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const fieldName = `self.${toRustFieldName(field.name)}`;
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+  const aligned = byteAligned === true;
 
   // Skip fields without a type (e.g., conditional markers)
   if (!field.type) {
@@ -4341,43 +4560,16 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
 
   switch (field.type) {
     case "uint8":
-      lines.push(`${indent}encoder.write_uint8(${fieldName});`);
-      break;
-
     case "uint16":
-      lines.push(`${indent}encoder.write_uint16(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "uint32":
-      lines.push(`${indent}encoder.write_uint32(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "uint64":
-      lines.push(`${indent}encoder.write_uint64(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "int8":
-      lines.push(`${indent}encoder.write_int8(${fieldName});`);
-      break;
-
     case "int16":
-      lines.push(`${indent}encoder.write_int16(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "int32":
-      lines.push(`${indent}encoder.write_int32(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "int64":
-      lines.push(`${indent}encoder.write_int64(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "float32":
-      lines.push(`${indent}encoder.write_float32(${fieldName}, Endianness::${rustEndianness});`);
-      break;
-
     case "float64":
-      lines.push(`${indent}encoder.write_float64(${fieldName}, Endianness::${rustEndianness});`);
+      lines.push(`${indent}${emitEncoderWrite(field.type, fieldName, rustEndianness, aligned)}`);
       break;
 
     case "bit":
@@ -4409,12 +4601,21 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
       break;
     }
 
+    case "bool":
+      lines.push(`${indent}${aligned ? "encoder.write_byte" : "encoder.write_uint8"}(if ${fieldName} { 1 } else { 0 });`);
+      break;
+
+    case "bytes":
+      // Delegate to array encoding with synthetic array<uint8> field
+      lines.push(...generateEncodeArray({ ...field, type: "array", items: { type: "uint8" } } as any, fieldName, endianness, rustEndianness, indent, schema, choiceEncodeCtxVar, aligned));
+      break;
+
     case "string":
-      lines.push(...generateEncodeString(field as any, fieldName, endianness, indent));
+      lines.push(...generateEncodeString(field as any, fieldName, endianness, indent, aligned));
       break;
 
     case "array":
-      lines.push(...generateEncodeArray(field as any, fieldName, endianness, rustEndianness, indent, schema, choiceEncodeCtxVar));
+      lines.push(...generateEncodeArray(field as any, fieldName, endianness, rustEndianness, indent, schema, choiceEncodeCtxVar, aligned));
       break;
 
     case "optional":
@@ -4429,7 +4630,7 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
       lines.push(`${indent}    let current_pos = encoder.byte_offset();`);
       lines.push(`${indent}    let padding_bytes = (${alignTo} - (current_pos % ${alignTo})) % ${alignTo};`);
       lines.push(`${indent}    for _ in 0..padding_bytes {`);
-      lines.push(`${indent}        encoder.write_uint8(0);`);
+      lines.push(`${indent}        encoder.write_byte(0);`);
       lines.push(`${indent}    }`);
       lines.push(`${indent}}`);
       break;
@@ -4480,7 +4681,10 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
  */
 function generateStringToBytes(fieldName: string, encoding: string, indent: string): string[] {
   const lines: string[] = [];
-  if (encoding === "latin1" || encoding === "ascii") {
+  if (encoding === "utf16") {
+    // UTF-16: encode to u16 code units
+    lines.push(`${indent}let code_units: Vec<u16> = ${fieldName}.encode_utf16().collect();`);
+  } else if (encoding === "latin1" || encoding === "ascii") {
     // Latin-1/ASCII: each char maps directly to a byte value (charCode == byte value for 0-255)
     lines.push(`${indent}let string_bytes: Vec<u8> = ${fieldName}.chars().map(|c| c as u8).collect();`);
   } else {
@@ -4496,6 +4700,10 @@ function generateStringToBytes(fieldName: string, encoding: string, indent: stri
  * Latin-1/ASCII: .chars().count() gives char count, which equals byte count for Latin-1
  */
 function generateStringLen(fieldName: string, encoding: string): string {
+  if (encoding === "utf16") {
+    // UTF-16 length in bytes = code_units * 2
+    return `(${fieldName}.encode_utf16().count() * 2)`;
+  }
   if (encoding === "latin1" || encoding === "ascii") {
     return `${fieldName}.chars().count()`;
   }
@@ -4505,35 +4713,71 @@ function generateStringLen(fieldName: string, encoding: string): string {
 /**
  * Generates encoding code for string field
  */
-function generateEncodeString(field: any, fieldName: string, endianness: string, indent: string): string[] {
+function generateEncodeString(field: any, fieldName: string, endianness: string, indent: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const kind = field.kind;
   const rustEndianness = mapEndianness(endianness);
   const encoding = field.encoding || "utf8";
+  const aligned = byteAligned === true;
+  const writeByteCall = aligned ? "encoder.write_byte" : "encoder.write_uint8";
+
+  // UTF-16: write code units as u16 values
+  if (encoding === "utf16") {
+    const stringEndianness = field.endianness || endianness;
+    const stringRustEndianness = mapEndianness(stringEndianness);
+    lines.push(...generateStringToBytes(fieldName, encoding, indent));
+
+    switch (kind) {
+      case "length_prefixed": {
+        const lengthType = field.length_type || "uint8";
+        // Length is in bytes (code_units * 2)
+        const lenExpr = `(code_units.len() * 2)`;
+        const castType = lengthType === "uint8" ? "u8" : lengthType === "uint16" ? "u16" : lengthType === "uint32" ? "u32" : "u64";
+        lines.push(`${indent}${emitEncoderWrite(lengthType, `${lenExpr} as ${castType}`, rustEndianness, aligned)}`);
+        lines.push(`${indent}for &cu in code_units.iter() {`);
+        lines.push(`${indent}    ${emitEncoderWrite("uint16", "cu", stringRustEndianness, aligned)}`);
+        lines.push(`${indent}}`);
+        break;
+      }
+      case "null_terminated":
+        lines.push(`${indent}for &cu in code_units.iter() {`);
+        lines.push(`${indent}    ${emitEncoderWrite("uint16", "cu", stringRustEndianness, aligned)}`);
+        lines.push(`${indent}}`);
+        lines.push(`${indent}${emitEncoderWrite("uint16", "0u16", stringRustEndianness, aligned)}`);
+        break;
+      case "fixed": {
+        const length = field.length || 0;
+        const numUnits = Math.floor(length / 2);
+        lines.push(`${indent}for i in 0..${numUnits}usize {`);
+        lines.push(`${indent}    if i < code_units.len() {`);
+        lines.push(`${indent}        ${emitEncoderWrite("uint16", "code_units[i]", stringRustEndianness, aligned)}`);
+        lines.push(`${indent}    } else {`);
+        lines.push(`${indent}        ${emitEncoderWrite("uint16", "0u16", stringRustEndianness, aligned)}`);
+        lines.push(`${indent}    }`);
+        lines.push(`${indent}}`);
+        break;
+      }
+      case "field_referenced":
+        lines.push(`${indent}for &cu in code_units.iter() {`);
+        lines.push(`${indent}    ${emitEncoderWrite("uint16", "cu", stringRustEndianness, aligned)}`);
+        lines.push(`${indent}}`);
+        break;
+      default:
+        throw new Error(`Unknown string kind: ${kind}`);
+    }
+    return lines;
+  }
 
   switch (kind) {
     case "length_prefixed": {
       const lengthType = field.length_type || "uint8";
       const lenExpr = generateStringLen(fieldName, encoding);
       // Write length prefix
-      switch (lengthType) {
-        case "uint8":
-          lines.push(`${indent}encoder.write_uint8(${lenExpr} as u8);`);
-          break;
-        case "uint16":
-          lines.push(`${indent}encoder.write_uint16(${lenExpr} as u16, Endianness::${rustEndianness});`);
-          break;
-        case "uint32":
-          lines.push(`${indent}encoder.write_uint32(${lenExpr} as u32, Endianness::${rustEndianness});`);
-          break;
-        case "uint64":
-          lines.push(`${indent}encoder.write_uint64(${lenExpr} as u64, Endianness::${rustEndianness});`);
-          break;
-      }
+      lines.push(`${indent}${emitEncoderWrite(lengthType, `${lenExpr} as ${lengthType === "uint8" ? "u8" : lengthType === "uint16" ? "u16" : lengthType === "uint32" ? "u32" : "u64"}`, rustEndianness, aligned)}`);
       // Write bytes
       lines.push(...generateStringToBytes(fieldName, encoding, indent));
       lines.push(`${indent}for &b in string_bytes.iter() {`);
-      lines.push(`${indent}    encoder.write_uint8(b);`);
+      lines.push(`${indent}    ${writeByteCall}(b);`);
       lines.push(`${indent}}`);
       break;
     }
@@ -4541,9 +4785,9 @@ function generateEncodeString(field: any, fieldName: string, endianness: string,
     case "null_terminated":
       lines.push(...generateStringToBytes(fieldName, encoding, indent));
       lines.push(`${indent}for &b in string_bytes.iter() {`);
-      lines.push(`${indent}    encoder.write_uint8(b);`);
+      lines.push(`${indent}    ${writeByteCall}(b);`);
       lines.push(`${indent}}`);
-      lines.push(`${indent}encoder.write_uint8(0);`);
+      lines.push(`${indent}${writeByteCall}(0);`);
       break;
 
     case "fixed": {
@@ -4551,9 +4795,9 @@ function generateEncodeString(field: any, fieldName: string, endianness: string,
       lines.push(...generateStringToBytes(fieldName, encoding, indent));
       lines.push(`${indent}for i in 0..${length} {`);
       lines.push(`${indent}    if i < string_bytes.len() {`);
-      lines.push(`${indent}        encoder.write_uint8(string_bytes[i]);`);
+      lines.push(`${indent}        ${writeByteCall}(string_bytes[i]);`);
       lines.push(`${indent}    } else {`);
-      lines.push(`${indent}        encoder.write_uint8(0);`);
+      lines.push(`${indent}        ${writeByteCall}(0);`);
       lines.push(`${indent}    }`);
       lines.push(`${indent}}`);
       break;
@@ -4563,7 +4807,7 @@ function generateEncodeString(field: any, fieldName: string, endianness: string,
       // Length is determined by another field, just write the bytes
       lines.push(...generateStringToBytes(fieldName, encoding, indent));
       lines.push(`${indent}for &b in string_bytes.iter() {`);
-      lines.push(`${indent}    encoder.write_uint8(b);`);
+      lines.push(`${indent}    ${writeByteCall}(b);`);
       lines.push(`${indent}}`);
       break;
 
@@ -4765,26 +5009,21 @@ function generateEncodeArrayWithRef(field: any, valueVar: string, endianness: st
 /**
  * Generates encoding code for array field
  */
-function generateEncodeArray(field: any, fieldName: string, endianness: string, rustEndianness: string, indent: string, schema?: BinarySchema, choiceEncodeCtxVar?: string): string[] {
+function generateEncodeArray(field: any, fieldName: string, endianness: string, rustEndianness: string, indent: string, schema?: BinarySchema, choiceEncodeCtxVar?: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const kind = field.kind;
   const items = field.items;
+  const aligned = byteAligned === true;
 
   // Write length prefix for length_prefixed and length_prefixed_items arrays
   if (kind === "length_prefixed" || kind === "length_prefixed_items") {
     const lengthType = field.length_type || "uint8";
     switch (lengthType) {
       case "uint8":
-        lines.push(`${indent}encoder.write_uint8(${fieldName}.len() as u8);`);
-        break;
       case "uint16":
-        lines.push(`${indent}encoder.write_uint16(${fieldName}.len() as u16, Endianness::${rustEndianness});`);
-        break;
       case "uint32":
-        lines.push(`${indent}encoder.write_uint32(${fieldName}.len() as u32, Endianness::${rustEndianness});`);
-        break;
       case "uint64":
-        lines.push(`${indent}encoder.write_uint64(${fieldName}.len() as u64, Endianness::${rustEndianness});`);
+        lines.push(`${indent}${emitEncoderWrite(lengthType, `${fieldName}.len() as ${lengthType === "uint8" ? "u8" : lengthType === "uint16" ? "u16" : lengthType === "uint32" ? "u32" : "u64"}`, rustEndianness, aligned)}`);
         break;
       case "varlength": {
         const lengthEncoding = field.length_encoding || "der";
@@ -4800,47 +5039,25 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     const lengthEncoding = field.length_encoding || "der";
     const itemType = items?.type;
 
+    // Helper to emit byte_length_prefixed length write
+    const emitByteLenPrefix = (lenExpr: string) => {
+      if (lengthType === "varlength") {
+        lines.push(`${indent}encoder.write_varlength(${lenExpr} as u64, "${lengthEncoding}")?;`);
+      } else {
+        const castType = lengthType === "uint8" ? "u8" : lengthType === "uint16" ? "u16" : lengthType === "uint32" ? "u32" : "u64";
+        lines.push(`${indent}${emitEncoderWrite(lengthType, `${lenExpr} as ${castType}`, rustEndianness, aligned)}`);
+      }
+    };
+
     // For uint8 items, byte length = item count (optimization)
     if (itemType === "uint8") {
-      switch (lengthType) {
-        case "uint8":
-          lines.push(`${indent}encoder.write_uint8(${fieldName}.len() as u8);`);
-          break;
-        case "uint16":
-          lines.push(`${indent}encoder.write_uint16(${fieldName}.len() as u16, Endianness::${rustEndianness});`);
-          break;
-        case "uint32":
-          lines.push(`${indent}encoder.write_uint32(${fieldName}.len() as u32, Endianness::${rustEndianness});`);
-          break;
-        case "uint64":
-          lines.push(`${indent}encoder.write_uint64(${fieldName}.len() as u64, Endianness::${rustEndianness});`);
-          break;
-        case "varlength":
-          lines.push(`${indent}encoder.write_varlength(${fieldName}.len() as u64, "${lengthEncoding}")?;`);
-          break;
-      }
+      emitByteLenPrefix(`${fieldName}.len()`);
     } else {
       // For other types, need to compute byte size
       const itemSize = getItemSizeForRust(items);
       if (itemSize !== null) {
         // Fixed-size items: byte_length = item_count * item_size
-        switch (lengthType) {
-          case "uint8":
-            lines.push(`${indent}encoder.write_uint8((${fieldName}.len() * ${itemSize}) as u8);`);
-            break;
-          case "uint16":
-            lines.push(`${indent}encoder.write_uint16((${fieldName}.len() * ${itemSize}) as u16, Endianness::${rustEndianness});`);
-            break;
-          case "uint32":
-            lines.push(`${indent}encoder.write_uint32((${fieldName}.len() * ${itemSize}) as u32, Endianness::${rustEndianness});`);
-            break;
-          case "uint64":
-            lines.push(`${indent}encoder.write_uint64((${fieldName}.len() * ${itemSize}) as u64, Endianness::${rustEndianness});`);
-            break;
-          case "varlength":
-            lines.push(`${indent}encoder.write_varlength((${fieldName}.len() * ${itemSize}) as u64, "${lengthEncoding}")?;`);
-            break;
-        }
+        emitByteLenPrefix(`(${fieldName}.len() * ${itemSize})`);
       } else {
         // Variable-size items: encode to temp buffer first to measure
         lines.push(`${indent}// Encode items to temp encoder to measure byte length`);
@@ -4849,23 +5066,7 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
         lines.push(`${indent}    item.encode_into(&mut temp_encoder)?;`);
         lines.push(`${indent}}`);
         lines.push(`${indent}let byte_length = temp_encoder.finish().len();`);
-        switch (lengthType) {
-          case "uint8":
-            lines.push(`${indent}encoder.write_uint8(byte_length as u8);`);
-            break;
-          case "uint16":
-            lines.push(`${indent}encoder.write_uint16(byte_length as u16, Endianness::${rustEndianness});`);
-            break;
-          case "uint32":
-            lines.push(`${indent}encoder.write_uint32(byte_length as u32, Endianness::${rustEndianness});`);
-            break;
-          case "uint64":
-            lines.push(`${indent}encoder.write_uint64(byte_length as u64, Endianness::${rustEndianness});`);
-            break;
-          case "varlength":
-            lines.push(`${indent}encoder.write_varlength(byte_length as u64, "${lengthEncoding}")?;`);
-            break;
-        }
+        emitByteLenPrefix("byte_length");
       }
     }
   }
@@ -4888,46 +5089,22 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
 
     if (itemSize !== null) {
       // Fixed-size item - write constant size
-      switch (itemLengthType) {
-        case "uint8":
-          lines.push(`${indent}    encoder.write_uint8(${itemSize});`);
-          break;
-        case "uint16":
-          lines.push(`${indent}    encoder.write_uint16(${itemSize}, Endianness::${rustEndianness});`);
-          break;
-        case "uint32":
-          lines.push(`${indent}    encoder.write_uint32(${itemSize}, Endianness::${rustEndianness});`);
-          break;
-        case "uint64":
-          lines.push(`${indent}    encoder.write_uint64(${itemSize}, Endianness::${rustEndianness});`);
-          break;
-      }
+      const castType = itemLengthType === "uint8" ? "u8" : itemLengthType === "uint16" ? "u16" : itemLengthType === "uint32" ? "u32" : "u64";
+      lines.push(`${indent}    ${emitEncoderWrite(itemLengthType, `${itemSize} as ${castType}`, rustEndianness, aligned)}`);
     } else {
       // Variable-size item - need to encode to temp buffer to measure size
       lines.push(`${indent}    // Encode item to measure size`);
       lines.push(`${indent}    let item_bytes = item.encode()?;`);
-      switch (itemLengthType) {
-        case "uint8":
-          lines.push(`${indent}    encoder.write_uint8(item_bytes.len() as u8);`);
-          break;
-        case "uint16":
-          lines.push(`${indent}    encoder.write_uint16(item_bytes.len() as u16, Endianness::${rustEndianness});`);
-          break;
-        case "uint32":
-          lines.push(`${indent}    encoder.write_uint32(item_bytes.len() as u32, Endianness::${rustEndianness});`);
-          break;
-        case "uint64":
-          lines.push(`${indent}    encoder.write_uint64(item_bytes.len() as u64, Endianness::${rustEndianness});`);
-          break;
-      }
+      const castType = itemLengthType === "uint8" ? "u8" : itemLengthType === "uint16" ? "u16" : itemLengthType === "uint32" ? "u32" : "u64";
+      lines.push(`${indent}    ${emitEncoderWrite(itemLengthType, `item_bytes.len() as ${castType}`, rustEndianness, aligned)}`);
       lines.push(`${indent}    for b in item_bytes {`);
-      lines.push(`${indent}        encoder.write_uint8(b);`);
+      lines.push(`${indent}        ${aligned ? "encoder.write_byte(b);" : "encoder.write_uint8(b);"}`);
       lines.push(`${indent}    }`);
       lines.push(`${indent}}`);
 
       // Write null terminator for null_terminated arrays
       if (kind === "null_terminated") {
-        lines.push(`${indent}encoder.write_uint8(0);`);
+        lines.push(`${indent}${aligned ? "encoder.write_byte(0);" : "encoder.write_uint8(0);"}`);
       }
 
       return lines;
@@ -4959,7 +5136,7 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     lines.push(`${indent}    let item_ctx = ctx.with_base_offset(encoder.byte_offset());`);
   }
 
-  const innerLines = generateEncodeArrayItem(itemField, "item", endianness, `${indent}    `, schema, itemsNeedContext, choiceEncodeCtxVar, itemsContainBackRef);
+  const innerLines = generateEncodeArrayItem(itemField, "item", endianness, `${indent}    `, schema, itemsNeedContext, choiceEncodeCtxVar, itemsContainBackRef, aligned);
   lines.push(...innerLines);
 
   lines.push(`${indent}}`);
@@ -4984,13 +5161,13 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
         lines.push(`${indent}    }`);
         lines.push(`${indent}});`);
         lines.push(`${indent}if !is_terminal {`);
-        lines.push(`${indent}    encoder.write_uint8(0);`);
+        lines.push(`${indent}    ${aligned ? "encoder.write_byte(0);" : "encoder.write_uint8(0);"}`);
         lines.push(`${indent}}`);
       } else {
-        lines.push(`${indent}encoder.write_uint8(0);`);
+        lines.push(`${indent}${aligned ? "encoder.write_byte(0);" : "encoder.write_uint8(0);"}`);
       }
     } else {
-      lines.push(`${indent}encoder.write_uint8(0);`);
+      lines.push(`${indent}${aligned ? "encoder.write_byte(0);" : "encoder.write_uint8(0);"}`);
     }
   }
 
@@ -5026,40 +5203,23 @@ function getItemSizeForRust(items: any): number | null {
 /**
  * Generates encoding code for a single array item
  */
-function generateEncodeArrayItem(field: Field, itemVar: string, endianness: string, indent: string, schema?: BinarySchema, hasContext?: boolean, choiceEncodeCtxVar?: string, hasCompressionCtx?: boolean): string[] {
+function generateEncodeArrayItem(field: Field, itemVar: string, endianness: string, indent: string, schema?: BinarySchema, hasContext?: boolean, choiceEncodeCtxVar?: string, hasCompressionCtx?: boolean, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const rustEndianness = mapEndianness(endianness);
+  const aligned = byteAligned === true;
 
   switch (field.type) {
     case "uint8":
-      lines.push(`${indent}encoder.write_uint8(*${itemVar});`);
-      break;
     case "uint16":
-      lines.push(`${indent}encoder.write_uint16(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "uint32":
-      lines.push(`${indent}encoder.write_uint32(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "uint64":
-      lines.push(`${indent}encoder.write_uint64(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "int8":
-      lines.push(`${indent}encoder.write_int8(*${itemVar});`);
-      break;
     case "int16":
-      lines.push(`${indent}encoder.write_int16(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "int32":
-      lines.push(`${indent}encoder.write_int32(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "int64":
-      lines.push(`${indent}encoder.write_int64(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "float32":
-      lines.push(`${indent}encoder.write_float32(*${itemVar}, Endianness::${rustEndianness});`);
-      break;
     case "float64":
-      lines.push(`${indent}encoder.write_float64(*${itemVar}, Endianness::${rustEndianness});`);
+      lines.push(`${indent}${emitEncoderWrite(field.type as string, `*${itemVar}`, rustEndianness, aligned)}`);
       break;
     case "bit":
     case "int": {
@@ -5070,42 +5230,31 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
     case "string": {
       // Inline string encoding for array items
       const kind = (field as any).kind;
+      const writeByteCall = aligned ? "encoder.write_byte" : "encoder.write_uint8";
       switch (kind) {
         case "length_prefixed": {
           const lengthType = (field as any).length_type || "uint8";
-          switch (lengthType) {
-            case "uint8":
-              lines.push(`${indent}encoder.write_uint8(${itemVar}.len() as u8);`);
-              break;
-            case "uint16":
-              lines.push(`${indent}encoder.write_uint16(${itemVar}.len() as u16, Endianness::${rustEndianness});`);
-              break;
-            case "uint32":
-              lines.push(`${indent}encoder.write_uint32(${itemVar}.len() as u32, Endianness::${rustEndianness});`);
-              break;
-            case "uint64":
-              lines.push(`${indent}encoder.write_uint64(${itemVar}.len() as u64, Endianness::${rustEndianness});`);
-              break;
-          }
+          const castType = lengthType === "uint8" ? "u8" : lengthType === "uint16" ? "u16" : lengthType === "uint32" ? "u32" : "u64";
+          lines.push(`${indent}${emitEncoderWrite(lengthType, `${itemVar}.len() as ${castType}`, rustEndianness, aligned)}`);
           lines.push(`${indent}for b in ${itemVar}.as_bytes() {`);
-          lines.push(`${indent}    encoder.write_uint8(*b);`);
+          lines.push(`${indent}    ${writeByteCall}(*b);`);
           lines.push(`${indent}}`);
           break;
         }
         case "null_terminated":
           lines.push(`${indent}for b in ${itemVar}.as_bytes() {`);
-          lines.push(`${indent}    encoder.write_uint8(*b);`);
+          lines.push(`${indent}    ${writeByteCall}(*b);`);
           lines.push(`${indent}}`);
-          lines.push(`${indent}encoder.write_uint8(0);`);
+          lines.push(`${indent}${writeByteCall}(0);`);
           break;
         case "fixed": {
           const length = (field as any).length || 0;
           lines.push(`${indent}let bytes = ${itemVar}.as_bytes();`);
           lines.push(`${indent}for i in 0..${length} {`);
           lines.push(`${indent}    if i < bytes.len() {`);
-          lines.push(`${indent}        encoder.write_uint8(bytes[i]);`);
+          lines.push(`${indent}        ${writeByteCall}(bytes[i]);`);
           lines.push(`${indent}    } else {`);
-          lines.push(`${indent}        encoder.write_uint8(0);`);
+          lines.push(`${indent}        ${writeByteCall}(0);`);
           lines.push(`${indent}    }`);
           lines.push(`${indent}}`);
           break;
@@ -5113,9 +5262,9 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
         default:
           // Default to null-terminated for unknown string kinds
           lines.push(`${indent}for b in ${itemVar}.as_bytes() {`);
-          lines.push(`${indent}    encoder.write_uint8(*b);`);
+          lines.push(`${indent}    ${writeByteCall}(*b);`);
           lines.push(`${indent}}`);
-          lines.push(`${indent}encoder.write_uint8(0);`);
+          lines.push(`${indent}${writeByteCall}(0);`);
           break;
       }
       break;
@@ -5128,20 +5277,8 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
 
       // Write length prefix if length_prefixed
       if (innerKind === "length_prefixed") {
-        switch (innerLengthType) {
-          case "uint8":
-            lines.push(`${indent}encoder.write_uint8(${itemVar}.len() as u8);`);
-            break;
-          case "uint16":
-            lines.push(`${indent}encoder.write_uint16(${itemVar}.len() as u16, Endianness::${rustEndianness});`);
-            break;
-          case "uint32":
-            lines.push(`${indent}encoder.write_uint32(${itemVar}.len() as u32, Endianness::${rustEndianness});`);
-            break;
-          case "uint64":
-            lines.push(`${indent}encoder.write_uint64(${itemVar}.len() as u64, Endianness::${rustEndianness});`);
-            break;
-        }
+        const castType = innerLengthType === "uint8" ? "u8" : innerLengthType === "uint16" ? "u16" : innerLengthType === "uint32" ? "u32" : "u64";
+        lines.push(`${indent}${emitEncoderWrite(innerLengthType, `${itemVar}.len() as ${castType}`, rustEndianness, aligned)}`);
       }
 
       // Encode inner items
@@ -5202,7 +5339,9 @@ function generateEncodeNestedStruct(field: Field, fieldName: string, indent: str
  */
 function generateEncodeOptional(field: any, fieldName: string, endianness: string, indent: string): string[] {
   const lines: string[] = [];
-  const valueType = field.value_type;
+  const rawValueType = field.value_type;
+  // Support inline type objects: resolve to the effective type string
+  const valueType = typeof rawValueType === "object" ? rawValueType.type : rawValueType;
   const presenceType = field.presence_type || "uint8";
   const rustEndianness = mapEndianness(endianness);
 
@@ -5246,6 +5385,9 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
     case "float64":
       lines.push(`${indent}    encoder.write_float64(*v, Endianness::${rustEndianness});`);
       break;
+    case "bool":
+      lines.push(`${indent}    encoder.write_uint8(if *v { 1 } else { 0 });`);
+      break;
     case "string":
       // For strings in optional, we need to know the string kind
       // Default to null-terminated for simplicity
@@ -5274,11 +5416,12 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
 /**
  * Generates decoding code for a single field
  */
-function generateDecodeField(field: Field, defaultEndianness: string, indent: string, containingTypeName: string, schema: BinarySchema, allFields?: Field[], hasContext?: boolean): string[] {
+function generateDecodeField(field: Field, defaultEndianness: string, indent: string, containingTypeName: string, schema: BinarySchema, allFields?: Field[], hasContext?: boolean, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const varName = toRustFieldName(field.name);
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+  const aligned = byteAligned === true;
 
   // Skip fields without a type (e.g., conditional markers)
   if (!field.type) {
@@ -5298,7 +5441,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
     lines.push(`${indent}let ${varName} = if ${rustCondition} {`);
 
     // Generate the decode for the inner value
-    const innerLines = generateDecodeFieldInner(field, defaultEndianness, `${indent}    `, containingTypeName, schema);
+    const innerLines = generateDecodeFieldInner(field, defaultEndianness, `${indent}    `, containingTypeName, schema, aligned);
     lines.push(...innerLines);
     lines.push(`${indent}    Some(${varName}_inner)`);
     lines.push(`${indent}} else {`);
@@ -5310,43 +5453,16 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
 
   switch (field.type) {
     case "uint8":
-      lines.push(`${indent}let ${varName} = decoder.read_uint8()?;`);
-      break;
-
     case "uint16":
-      lines.push(`${indent}let ${varName} = decoder.read_uint16(Endianness::${rustEndianness})?;`);
-      break;
-
     case "uint32":
-      lines.push(`${indent}let ${varName} = decoder.read_uint32(Endianness::${rustEndianness})?;`);
-      break;
-
     case "uint64":
-      lines.push(`${indent}let ${varName} = decoder.read_uint64(Endianness::${rustEndianness})?;`);
-      break;
-
     case "int8":
-      lines.push(`${indent}let ${varName} = decoder.read_int8()?;`);
-      break;
-
     case "int16":
-      lines.push(`${indent}let ${varName} = decoder.read_int16(Endianness::${rustEndianness})?;`);
-      break;
-
     case "int32":
-      lines.push(`${indent}let ${varName} = decoder.read_int32(Endianness::${rustEndianness})?;`);
-      break;
-
     case "int64":
-      lines.push(`${indent}let ${varName} = decoder.read_int64(Endianness::${rustEndianness})?;`);
-      break;
-
     case "float32":
-      lines.push(`${indent}let ${varName} = decoder.read_float32(Endianness::${rustEndianness})?;`);
-      break;
-
     case "float64":
-      lines.push(`${indent}let ${varName} = decoder.read_float64(Endianness::${rustEndianness})?;`);
+      lines.push(`${indent}let ${varName} = ${emitDecoderRead(field.type, rustEndianness, aligned)};`);
       break;
 
     case "bit": {
@@ -5387,12 +5503,21 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       break;
     }
 
+    case "bool":
+      lines.push(`${indent}let ${varName} = ${emitDecoderRead("uint8", rustEndianness, aligned)} != 0;`);
+      break;
+
+    case "bytes":
+      // Delegate to array decoding with synthetic array<uint8> field
+      lines.push(...generateDecodeArray({ ...field, type: "array", items: { type: "uint8" } } as any, varName, endianness, rustEndianness, indent, schema, containingTypeName, hasContext, aligned));
+      break;
+
     case "string":
-      lines.push(...generateDecodeString(field as any, varName, endianness, indent));
+      lines.push(...generateDecodeString(field as any, varName, endianness, indent, aligned));
       break;
 
     case "array":
-      lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent, schema, containingTypeName, hasContext));
+      lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent, schema, containingTypeName, hasContext, aligned));
       break;
 
     case "optional":
@@ -5444,7 +5569,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
         const budgetFieldName = toRustFieldName(byteBudget.field);
         lines.push(`${indent}// byte_budget: read exactly ${byteBudget.field} bytes for variant decoding`);
         lines.push(`${indent}let budget_slice = decoder.read_bytes_vec(${budgetFieldName} as usize)?;`);
-        lines.push(`${indent}let mut sub_decoder = BitStreamDecoder::new(budget_slice, BitOrder::${mapBitOrder(fieldAny.bit_order || schema.config?.bit_order || "msb_first")});`);
+        lines.push(`${indent}let mut sub_decoder = BitStreamDecoder::new(&budget_slice, BitOrder::${mapBitOrder(fieldAny.bit_order || schema.config?.bit_order || "msb_first")});`);
       }
 
       if (discriminator.field) {
@@ -5493,6 +5618,32 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
           condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
           // Convert single-quoted strings to Rust string literals
           condition = condition.replace(/'([^']*)'/g, '"$1"');
+
+          // If discriminator field type is an enum, replace integer literals with enum variant paths
+          // (Rust enums can't be compared to raw integers)
+          if (allFields) {
+            const rootFieldName = discriminator.field.split('.')[0];
+            const discField = allFields.find((f: any) => f.name === rootFieldName);
+            if (discField && !discriminator.field.includes('.') && typeof discField.type === 'string') {
+              const discTypeDef = schema.types?.[discField.type];
+              if (discTypeDef && isEnumType(discTypeDef)) {
+                const enumVariants = (discTypeDef as any).variants as Record<string, number>;
+                const reverseMap = new Map<number, string>();
+                for (const [name, value] of Object.entries(enumVariants)) {
+                  reverseMap.set(value, name);
+                }
+                const rustEnumName = toRustTypeName(discField.type);
+                condition = condition.replace(/(==|!=)\s*(0x[0-9a-fA-F]+|\d+)/g, (_match: string, op: string, numStr: string) => {
+                  const num = Number(numStr);
+                  const variantName = reverseMap.get(num);
+                  if (variantName !== undefined) {
+                    return `${op} ${rustEnumName}::${toRustTypeName(variantName)}`;
+                  }
+                  return _match;
+                });
+              }
+            }
+          }
 
           if (i === 0) {
             lines.push(`${indent}let ${varName} = if ${condition} {`);
@@ -5590,42 +5741,25 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
  * Generates decoding code for a field's inner value (used for conditional fields)
  * Uses a _inner suffix for the variable name to avoid conflicts
  */
-function generateDecodeFieldInner(field: Field, defaultEndianness: string, indent: string, containingTypeName: string, schema: BinarySchema): string[] {
+function generateDecodeFieldInner(field: Field, defaultEndianness: string, indent: string, containingTypeName: string, schema: BinarySchema, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const varName = `${toRustFieldName(field.name)}_inner`;
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+  const aligned = byteAligned === true;
 
   switch (field.type) {
     case "uint8":
-      lines.push(`${indent}let ${varName} = decoder.read_uint8()?;`);
-      break;
     case "uint16":
-      lines.push(`${indent}let ${varName} = decoder.read_uint16(Endianness::${rustEndianness})?;`);
-      break;
     case "uint32":
-      lines.push(`${indent}let ${varName} = decoder.read_uint32(Endianness::${rustEndianness})?;`);
-      break;
     case "uint64":
-      lines.push(`${indent}let ${varName} = decoder.read_uint64(Endianness::${rustEndianness})?;`);
-      break;
     case "int8":
-      lines.push(`${indent}let ${varName} = decoder.read_int8()?;`);
-      break;
     case "int16":
-      lines.push(`${indent}let ${varName} = decoder.read_int16(Endianness::${rustEndianness})?;`);
-      break;
     case "int32":
-      lines.push(`${indent}let ${varName} = decoder.read_int32(Endianness::${rustEndianness})?;`);
-      break;
     case "int64":
-      lines.push(`${indent}let ${varName} = decoder.read_int64(Endianness::${rustEndianness})?;`);
-      break;
     case "float32":
-      lines.push(`${indent}let ${varName} = decoder.read_float32(Endianness::${rustEndianness})?;`);
-      break;
     case "float64":
-      lines.push(`${indent}let ${varName} = decoder.read_float64(Endianness::${rustEndianness})?;`);
+      lines.push(`${indent}let ${varName} = ${emitDecoderRead(field.type, rustEndianness, aligned)};`);
       break;
     case "bit": {
       const bitSize = (field as any).size || 1;
@@ -5656,12 +5790,18 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
       }
       break;
     }
+    case "bool":
+      lines.push(`${indent}let ${varName} = ${emitDecoderRead("uint8", rustEndianness, aligned)} != 0;`);
+      break;
+    case "bytes":
+      lines.push(...generateDecodeArray({ ...field, type: "array", items: { type: "uint8" } } as any, varName, endianness, rustEndianness, indent, schema, containingTypeName, false, aligned));
+      break;
     case "string":
-      lines.push(...generateDecodeString(field as any, varName, endianness, indent));
+      lines.push(...generateDecodeString(field as any, varName, endianness, indent, aligned));
       break;
     case "array":
       // In conditional fields, we don't have context - these arrays should have local field refs
-      lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent, schema, containingTypeName, false));
+      lines.push(...generateDecodeArray(field as any, varName, endianness, rustEndianness, indent, schema, containingTypeName, false, aligned));
       break;
     case "optional":
       lines.push(...generateDecodeOptional(field as any, varName, endianness, indent, schema));
@@ -5790,7 +5930,9 @@ function generateDecodeBackReference(field: any, varName: string, endianness: st
  */
 function generateDecodeOptional(field: any, varName: string, endianness: string, indent: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
-  const valueType = field.value_type;
+  const rawValueType = field.value_type;
+  // Support inline type objects: resolve to the effective type string
+  const valueType = typeof rawValueType === "object" ? rawValueType.type : rawValueType;
   const presenceType = field.presence_type || "uint8";
   const rustEndianness = mapEndianness(endianness);
 
@@ -5833,6 +5975,9 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
     case "float64":
       lines.push(`${indent}    Some(decoder.read_float64(Endianness::${rustEndianness})?)`);
       break;
+    case "bool":
+      lines.push(`${indent}    Some(decoder.read_uint8()? != 0)`);
+      break;
     case "string":
       // For strings in optional, decode as null-terminated
       lines.push(`${indent}    let mut bytes = Vec::new();`);
@@ -5870,6 +6015,10 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
  * Latin-1/ASCII: direct char mapping (each byte maps to its Unicode code point)
  */
 function generateBytesToString(varName: string, bytesExpr: string, encoding: string, indent: string): string {
+  if (encoding === "utf16") {
+    // UTF-16: decode from u16 code units
+    return `${indent}let ${varName} = std::string::String::from_utf16(&${bytesExpr}).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`;
+  }
   if (encoding === "latin1" || encoding === "ascii") {
     // Latin-1/ASCII: each byte maps directly to a Unicode code point (0x00-0xFF -> U+0000-U+00FF)
     // Use fully qualified std::string::String to avoid prefix_type_names rewriting
@@ -5882,40 +6031,94 @@ function generateBytesToString(varName: string, bytesExpr: string, encoding: str
 /**
  * Generates decoding code for string field
  */
-function generateDecodeString(field: any, varName: string, endianness: string, indent: string): string[] {
+function generateDecodeString(field: any, varName: string, endianness: string, indent: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const kind = field.kind;
   const rustEndianness = mapEndianness(endianness);
   const encoding = field.encoding || "utf8";
+  const aligned = byteAligned === true;
+
+  // UTF-16: read code units (u16), then decode to string
+  if (encoding === "utf16") {
+    const stringEndianness = field.endianness || endianness;
+    const stringRustEndianness = mapEndianness(stringEndianness);
+
+    switch (kind) {
+      case "length_prefixed": {
+        const lengthType = field.length_type || "uint8";
+        // Read byte count, then read code_units = byte_count / 2
+        lines.push(`${indent}let byte_length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
+        lines.push(`${indent}let num_units = byte_length / 2;`);
+        lines.push(`${indent}let mut code_units = Vec::with_capacity(num_units);`);
+        lines.push(`${indent}for _ in 0..num_units {`);
+        lines.push(`${indent}    code_units.push(${emitDecoderRead("uint16", stringRustEndianness, aligned)});`);
+        lines.push(`${indent}}`);
+        lines.push(generateBytesToString(varName, "code_units", encoding, indent));
+        break;
+      }
+      case "null_terminated": {
+        lines.push(`${indent}let mut code_units = Vec::new();`);
+        lines.push(`${indent}loop {`);
+        lines.push(`${indent}    let cu = ${emitDecoderRead("uint16", stringRustEndianness, aligned)};`);
+        lines.push(`${indent}    if cu == 0 {`);
+        lines.push(`${indent}        break;`);
+        lines.push(`${indent}    }`);
+        lines.push(`${indent}    code_units.push(cu);`);
+        lines.push(`${indent}}`);
+        lines.push(generateBytesToString(varName, "code_units", encoding, indent));
+        break;
+      }
+      case "fixed": {
+        const length = field.length || 0;
+        const numUnits = Math.floor(length / 2);
+        lines.push(`${indent}let mut code_units = Vec::with_capacity(${numUnits});`);
+        lines.push(`${indent}for i in 0..${numUnits}usize {`);
+        lines.push(`${indent}    let cu = ${emitDecoderRead("uint16", stringRustEndianness, aligned)};`);
+        lines.push(`${indent}    if cu == 0 {`);
+        // Read remaining padding code units
+        lines.push(`${indent}        for _ in (i + 1)..${numUnits} {`);
+        lines.push(`${indent}            let _ = ${emitDecoderRead("uint16", stringRustEndianness, aligned)};`);
+        lines.push(`${indent}        }`);
+        lines.push(`${indent}        break;`);
+        lines.push(`${indent}    }`);
+        lines.push(`${indent}    code_units.push(cu);`);
+        lines.push(`${indent}}`);
+        lines.push(generateBytesToString(varName, "code_units", encoding, indent));
+        break;
+      }
+      case "field_referenced": {
+        const lengthField = field.length_field;
+        const lengthFieldRust = toRustFieldName(lengthField);
+        lines.push(`${indent}let num_units = ${lengthFieldRust} as usize / 2;`);
+        lines.push(`${indent}let mut code_units = Vec::with_capacity(num_units);`);
+        lines.push(`${indent}for _ in 0..num_units {`);
+        lines.push(`${indent}    code_units.push(${emitDecoderRead("uint16", stringRustEndianness, aligned)});`);
+        lines.push(`${indent}}`);
+        lines.push(generateBytesToString(varName, "code_units", encoding, indent));
+        break;
+      }
+      default:
+        throw new Error(`Unknown string kind: ${kind}`);
+    }
+    return lines;
+  }
 
   switch (kind) {
     case "length_prefixed": {
       const lengthType = field.length_type || "uint8";
       // Read length prefix
-      switch (lengthType) {
-        case "uint8":
-          lines.push(`${indent}let length = decoder.read_uint8()? as usize;`);
-          break;
-        case "uint16":
-          lines.push(`${indent}let length = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-          break;
-        case "uint32":
-          lines.push(`${indent}let length = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-          break;
-        case "uint64":
-          lines.push(`${indent}let length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-          break;
-      }
+      lines.push(`${indent}let length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
       // Read bytes (bulk read)
       lines.push(`${indent}let bytes = decoder.read_bytes_vec(length)?;`);
       lines.push(generateBytesToString(varName, "bytes", encoding, indent));
       break;
     }
 
-    case "null_terminated":
+    case "null_terminated": {
+      const readByteExpr = aligned ? "decoder.read_byte()?" : "decoder.read_uint8()?";
       lines.push(`${indent}let mut bytes = Vec::new();`);
       lines.push(`${indent}loop {`);
-      lines.push(`${indent}    let b = decoder.read_uint8()?;`);
+      lines.push(`${indent}    let b = ${readByteExpr};`);
       lines.push(`${indent}    if b == 0 {`);
       lines.push(`${indent}        break;`);
       lines.push(`${indent}    }`);
@@ -5923,6 +6126,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
       lines.push(`${indent}}`);
       lines.push(generateBytesToString(varName, "bytes", encoding, indent));
       break;
+    }
 
     case "fixed": {
       const length = field.length || 0;
@@ -5954,7 +6158,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
  * @param containingTypeName - The name of the type containing this field (for context checking)
  * @param hasContext - Whether the decode function has access to a context parameter
  */
-function generateDecodeArray(field: any, varName: string, endianness: string, rustEndianness: string, indent: string, schema: BinarySchema, containingTypeName?: string, hasContext?: boolean): string[] {
+function generateDecodeArray(field: any, varName: string, endianness: string, rustEndianness: string, indent: string, schema: BinarySchema, containingTypeName?: string, hasContext?: boolean, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const kind = field.kind;
   const items = field.items;
@@ -5967,22 +6171,11 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
   const itemsWithName = { ...items, name: field.name };
   const itemType = mapFieldToRustType(itemsWithName, schema, containingTypeName);
 
+  const aligned = byteAligned === true;
+
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
-    switch (lengthType) {
-      case "uint8":
-        lines.push(`${indent}let length = decoder.read_uint8()? as usize;`);
-        break;
-      case "uint16":
-        lines.push(`${indent}let length = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint32":
-        lines.push(`${indent}let length = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint64":
-        lines.push(`${indent}let length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-        break;
-    }
+    lines.push(`${indent}let length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
     lines.push(`${indent}let mut ${varName} = Vec::with_capacity(length);`);
     lines.push(`${indent}for _ in 0..length {`);
   } else if (kind === "field_referenced") {
@@ -6022,9 +6215,10 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     if (itemType2 === "uint8") {
       // Optimized path for byte arrays (like c_string)
       // Read byte, check if 0, break if so, push if not
+      const readByteExpr = aligned ? "decoder.read_byte()?" : "decoder.read_uint8()?";
       lines.push(`${indent}let mut ${varName}: Vec<u8> = Vec::new();`);
       lines.push(`${indent}loop {`);
-      lines.push(`${indent}    let byte = decoder.read_uint8()?;`);
+      lines.push(`${indent}    let byte = ${readByteExpr};`);
       lines.push(`${indent}    if byte == 0 { break; }`);
       lines.push(`${indent}    ${varName}.push(byte);`);
       lines.push(`${indent}}`);
@@ -6032,34 +6226,22 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     }
 
     // For other item types, peek at first byte to check for null terminator before decoding
+    const consumeNullExpr = aligned ? "decoder.read_byte()?;" : "decoder.read_uint8()?;";
     lines.push(`${indent}let mut ${varName}: Vec<${itemType}> = Vec::new();`);
     lines.push(`${indent}loop {`);
     lines.push(`${indent}    // Check for null terminator before decoding item`);
     lines.push(`${indent}    if decoder.peek_uint8()? == 0 {`);
-    lines.push(`${indent}        decoder.read_uint8()?; // Consume the null byte`);
+    lines.push(`${indent}        ${consumeNullExpr} // Consume the null byte`);
     lines.push(`${indent}        break;`);
     lines.push(`${indent}    }`);
   } else if (kind === "byte_length_prefixed") {
     // Read length in bytes, then decode items until we've consumed that many bytes
     const lengthType = field.length_type || "uint8";
-    switch (lengthType) {
-      case "uint8":
-        lines.push(`${indent}let byte_length = decoder.read_uint8()? as usize;`);
-        break;
-      case "uint16":
-        lines.push(`${indent}let byte_length = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint32":
-        lines.push(`${indent}let byte_length = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint64":
-        lines.push(`${indent}let byte_length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "varlength": {
-        const lengthEncoding = field.length_encoding || "der";
-        lines.push(`${indent}let byte_length = decoder.read_varlength("${lengthEncoding}")? as usize;`);
-        break;
-      }
+    if (lengthType === "varlength") {
+      const lengthEncoding = field.length_encoding || "der";
+      lines.push(`${indent}let byte_length = decoder.read_varlength("${lengthEncoding}")? as usize;`);
+    } else {
+      lines.push(`${indent}let byte_length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
     }
     lines.push(`${indent}let start_pos = decoder.position();`);
     lines.push(`${indent}let mut ${varName}: Vec<${itemType}> = Vec::new();`);
@@ -6067,20 +6249,7 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
   } else if (kind === "length_prefixed_items") {
     // Each item has a length prefix
     const lengthType = field.length_type || "uint8";
-    switch (lengthType) {
-      case "uint8":
-        lines.push(`${indent}let count = decoder.read_uint8()? as usize;`);
-        break;
-      case "uint16":
-        lines.push(`${indent}let count = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint32":
-        lines.push(`${indent}let count = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint64":
-        lines.push(`${indent}let count = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-        break;
-    }
+    lines.push(`${indent}let count = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
     lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
     lines.push(`${indent}for _ in 0..count {`);
   } else if (kind === "computed_count") {
@@ -6139,24 +6308,11 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
   // For length_prefixed_items, read item length prefix before decoding each item
   if (kind === "length_prefixed_items" && field.item_length_type) {
     const itemLengthType = field.item_length_type;
-    switch (itemLengthType) {
-      case "uint8":
-        lines.push(`${indent}    let _item_length = decoder.read_uint8()? as usize;`);
-        break;
-      case "uint16":
-        lines.push(`${indent}    let _item_length = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint32":
-        lines.push(`${indent}    let _item_length = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-        break;
-      case "uint64":
-        lines.push(`${indent}    let _item_length = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-        break;
-    }
+    lines.push(`${indent}    let _item_length = ${emitDecoderRead(itemLengthType, rustEndianness, aligned)} as usize;`);
   }
 
   // Decode item
-  const itemLines = generateDecodeArrayItem(items, endianness, rustEndianness, `${indent}    `, schema, containingTypeName, field.name);
+  const itemLines = generateDecodeArrayItem(items, endianness, rustEndianness, `${indent}    `, schema, containingTypeName, field.name, byteAligned);
   lines.push(...itemLines);
   lines.push(`${indent}    ${varName}.push(item);`);
 
@@ -6202,39 +6358,22 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
 /**
  * Generates decoding code for a single array item
  */
-function generateDecodeArrayItem(items: any, endianness: string, rustEndianness: string, indent: string, schema: BinarySchema, containingTypeName?: string, arrayFieldName?: string): string[] {
+function generateDecodeArrayItem(items: any, endianness: string, rustEndianness: string, indent: string, schema: BinarySchema, containingTypeName?: string, arrayFieldName?: string, byteAligned?: boolean): string[] {
   const lines: string[] = [];
+  const aligned = byteAligned === true;
 
   switch (items.type) {
     case "uint8":
-      lines.push(`${indent}let item = decoder.read_uint8()?;`);
-      break;
     case "uint16":
-      lines.push(`${indent}let item = decoder.read_uint16(Endianness::${rustEndianness})?;`);
-      break;
     case "uint32":
-      lines.push(`${indent}let item = decoder.read_uint32(Endianness::${rustEndianness})?;`);
-      break;
     case "uint64":
-      lines.push(`${indent}let item = decoder.read_uint64(Endianness::${rustEndianness})?;`);
-      break;
     case "int8":
-      lines.push(`${indent}let item = decoder.read_int8()?;`);
-      break;
     case "int16":
-      lines.push(`${indent}let item = decoder.read_int16(Endianness::${rustEndianness})?;`);
-      break;
     case "int32":
-      lines.push(`${indent}let item = decoder.read_int32(Endianness::${rustEndianness})?;`);
-      break;
     case "int64":
-      lines.push(`${indent}let item = decoder.read_int64(Endianness::${rustEndianness})?;`);
-      break;
     case "float32":
-      lines.push(`${indent}let item = decoder.read_float32(Endianness::${rustEndianness})?;`);
-      break;
     case "float64":
-      lines.push(`${indent}let item = decoder.read_float64(Endianness::${rustEndianness})?;`);
+      lines.push(`${indent}let item = ${emitDecoderRead(items.type, rustEndianness, aligned)};`);
       break;
     case "bit":
     case "int": {
@@ -6258,23 +6397,11 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
     case "string": {
       // Inline string decoding for array items
       const kind = items.kind;
+      const readByteExpr = aligned ? "decoder.read_byte()?" : "decoder.read_uint8()?";
       switch (kind) {
         case "length_prefixed": {
           const lengthType = items.length_type || "uint8";
-          switch (lengthType) {
-            case "uint8":
-              lines.push(`${indent}let str_len = decoder.read_uint8()? as usize;`);
-              break;
-            case "uint16":
-              lines.push(`${indent}let str_len = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-              break;
-            case "uint32":
-              lines.push(`${indent}let str_len = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-              break;
-            case "uint64":
-              lines.push(`${indent}let str_len = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-              break;
-          }
+          lines.push(`${indent}let str_len = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
           lines.push(`${indent}let str_bytes = decoder.read_bytes_vec(str_len)?;`);
           lines.push(`${indent}let item = std::string::String::from_utf8(str_bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?;`);
           break;
@@ -6282,7 +6409,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
         case "null_terminated":
           lines.push(`${indent}let mut str_bytes = Vec::new();`);
           lines.push(`${indent}loop {`);
-          lines.push(`${indent}    let b = decoder.read_uint8()?;`);
+          lines.push(`${indent}    let b = ${readByteExpr};`);
           lines.push(`${indent}    if b == 0 { break; }`);
           lines.push(`${indent}    str_bytes.push(b);`);
           lines.push(`${indent}}`);
@@ -6299,7 +6426,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
           // Default to null-terminated for unknown string kinds
           lines.push(`${indent}let mut str_bytes = Vec::new();`);
           lines.push(`${indent}loop {`);
-          lines.push(`${indent}    let b = decoder.read_uint8()?;`);
+          lines.push(`${indent}    let b = ${readByteExpr};`);
           lines.push(`${indent}    if b == 0 { break; }`);
           lines.push(`${indent}    str_bytes.push(b);`);
           lines.push(`${indent}}`);
@@ -6316,20 +6443,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
 
       // Read length prefix if length_prefixed
       if (innerKind === "length_prefixed") {
-        switch (innerLengthType) {
-          case "uint8":
-            lines.push(`${indent}let inner_len = decoder.read_uint8()? as usize;`);
-            break;
-          case "uint16":
-            lines.push(`${indent}let inner_len = decoder.read_uint16(Endianness::${rustEndianness})? as usize;`);
-            break;
-          case "uint32":
-            lines.push(`${indent}let inner_len = decoder.read_uint32(Endianness::${rustEndianness})? as usize;`);
-            break;
-          case "uint64":
-            lines.push(`${indent}let inner_len = decoder.read_uint64(Endianness::${rustEndianness})? as usize;`);
-            break;
-        }
+        lines.push(`${indent}let inner_len = ${emitDecoderRead(innerLengthType, rustEndianness, aligned)} as usize;`);
       } else {
         // For fixed arrays, use the length directly
         const fixedLen = items.length || 0;
@@ -6339,7 +6453,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
       // Decode inner items
       lines.push(`${indent}let mut item = Vec::with_capacity(inner_len);`);
       lines.push(`${indent}for _ in 0..inner_len {`);
-      const innerLines = generateDecodeArrayItem(innerItems, endianness, rustEndianness, `${indent}    `, schema, containingTypeName, arrayFieldName);
+      const innerLines = generateDecodeArrayItem(innerItems, endianness, rustEndianness, `${indent}    `, schema, containingTypeName, arrayFieldName, byteAligned);
       // Rename 'item' to 'inner_item' in the inner lines to avoid shadowing
       for (const line of innerLines) {
         lines.push(line.replace(/let item = /, 'let inner_item = '));
@@ -6401,6 +6515,8 @@ function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema, containi
     case "int64": return "i64";
     case "float32": return "f32";
     case "float64": return "f64";
+    case "bool": return "bool";
+    case "bytes": return "Vec<u8>";
     case "varlength": return "u64";
     case "string": return "std::string::String";
     case "bit": {
@@ -6445,16 +6561,21 @@ function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema, containi
       return inlineEnumName(containingTypeName || "", field.name || "");
     }
     case "optional": {
-      const valueTypeName = (field as any).value_type;
-      if (!valueTypeName) {
+      const rawVt = (field as any).value_type;
+      if (!rawVt) {
         throw new Error(`Optional field ${field.name} missing value_type`);
       }
+      if (typeof rawVt === "object") {
+        // Inline type object — map directly to Rust type
+        const innerType = mapPrimitiveToRustType(rawVt.type);
+        return `Option<${innerType}>`;
+      }
       // Check if the value type is composite (including through type aliases)
-      const optIsComposite = isCompositeType(valueTypeName, schema);
-      const rustTypeName = toRustTypeName(valueTypeName);
+      const optIsComposite = isCompositeType(rawVt, schema);
+      const rustTypeName = toRustTypeName(rawVt);
       // Only use Input suffix if the type actually needs the Input/Output split
-      const optNeedsSplit = optIsComposite && typeNeedsInputOutputSplit(valueTypeName, schema);
-      const valueType = optNeedsSplit ? `${rustTypeName}Input` : (optIsComposite ? rustTypeName : mapPrimitiveToRustType(valueTypeName));
+      const optNeedsSplit = optIsComposite && typeNeedsInputOutputSplit(rawVt, schema);
+      const valueType = optNeedsSplit ? `${rustTypeName}Input` : (optIsComposite ? rustTypeName : mapPrimitiveToRustType(rawVt));
       return `Option<${valueType}>`;
     }
     case "back_reference": {
@@ -6496,6 +6617,11 @@ function isCompositeType(typeName: string, schema: BinarySchema): boolean {
 
     if (!typeDef) {
       // Not defined in schema - must be a primitive
+      return false;
+    }
+
+    if (isEnumType(typeDef)) {
+      // Enum types are not composite
       return false;
     }
 
@@ -6576,6 +6702,10 @@ function mapFieldToRustType(field: Field, schema?: BinarySchema, containingTypeN
       return "f32";
     case "float64":
       return "f64";
+    case "bool":
+      return "bool";
+    case "bytes":
+      return "Vec<u8>";
     case "varlength":
       return "u64";  // Variable-length integers decode to u64
     case "bitfield": {
@@ -6627,11 +6757,12 @@ function mapFieldToRustType(field: Field, schema?: BinarySchema, containingTypeN
       return inlineEnumName(containingTypeName || "", field.name || "");
     }
     case "optional": {
-      const valueTypeName = (field as any).value_type;
-      if (!valueTypeName) {
+      const rawVt = (field as any).value_type;
+      if (!rawVt) {
         throw new Error(`Optional field ${field.name} missing value_type`);
       }
-      const valueType = mapPrimitiveToRustType(valueTypeName);
+      const vtName = typeof rawVt === "object" ? rawVt.type : rawVt;
+      const valueType = mapPrimitiveToRustType(vtName);
       return `Option<${valueType}>`;
     }
     case "back_reference": {
@@ -6680,6 +6811,8 @@ function mapPrimitiveToRustType(typeName: string): string {
     case "int64": return "i64";
     case "float32": return "f32";
     case "float64": return "f64";
+    case "bool": return "bool";
+    case "bytes": return "Vec<u8>";
     case "string": return "std::string::String";
     default: return toRustTypeName(typeName);
   }

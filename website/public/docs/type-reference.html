@@ -2842,7 +2842,7 @@
                     </tr>
                     <tr>
                       <td><code>value_type</code></td>
-                      <td><code>string</code></td>
+                      <td><code>union</code></td>
                       <td><span class="badge badge-required">required</span></td>
                       <td></td>
                     </tr>
@@ -3024,6 +3024,12 @@
                       <td>Human-readable description of this field</td>
                     </tr>
                     <tr>
+                      <td><code>byte_budget</code></td>
+                      <td><code>object</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Byte budget: limits variant decoding to the number of bytes specified by referenced field</td>
+                    </tr>
+                    <tr>
                       <td><code>description</code></td>
                       <td><code>string</code></td>
                       <td><span class="badge badge-optional">optional</span></td>
@@ -3075,7 +3081,11 @@
                 <ul class="notes-list">
                   <li>Peek-based: Reads discriminator without consuming bytes (useful for tag-first protocols)</li>
                   <li>Field-based: Uses value from earlier field (useful for header-based protocols)</li>
-                  <li>Each variant has a &#039;when&#039; condition (e.g., &#039;value == 0x01&#039;) that determines if it matches</li>
+                  <li>Each variant has a <strong>when</strong> condition (e.g., `value == 0x01`) that determines if it matches</li>
+                  <li>Conditions support <strong>string literals</strong> (e.g., `value == &#039;SIZE&#039;`) for matching ASCII chunk IDs</li>
+                  <li>The last variant may omit <strong>when</strong> to act as a <strong>fallback/default</strong> for unrecognized discriminator values</li>
+                  <li><strong>byte_budget</strong>: Limits variant decoding to N bytes from a referenced numeric field. Creates a sub-slice for the variant decoder; main decoder advances by the full budget. Essential for RIFF/IFF-style chunk formats.</li>
+                  <li>byte_budget pairs naturally with <strong>eof_terminated</strong> arrays in fallback variants — the sub-slice EOF boundary becomes the byte budget boundary</li>
                 </ul>
               </div>
               <div class="examples">
@@ -3095,6 +3105,25 @@
       {
         <span class="json-key">"when"</span>: <span class="json-string">&quot;value == 0x02&quot;</span>,
         <span class="json-key">"type"</span>: <span class="json-string">&quot;ResponseMessage&quot;</span>
+      }
+    ]
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;content&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-discriminated_union" class="type-link">discriminated_union</a>&quot;</span>,
+    <span class="json-key">"discriminator"</span>: {
+      <span class="json-key">"field"</span>: <span class="json-string">&quot;chunk_id&quot;</span>
+    },
+    <span class="json-key">"byte_budget"</span>: {
+      <span class="json-key">"field"</span>: <span class="json-string">&quot;content_size&quot;</span>
+    },
+    <span class="json-key">"variants"</span>: [
+      {
+        <span class="json-key">"when"</span>: <span class="json-string">&quot;value == &#039;SIZE&#039;&quot;</span>,
+        <span class="json-key">"type"</span>: <span class="json-string">&quot;SizeData&quot;</span>
+      },
+      {
+        <span class="json-key">"type"</span>: <span class="json-string">&quot;RawBytes&quot;</span>
       }
     ]
   }

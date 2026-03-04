@@ -4,7 +4,7 @@
  * Generates beautiful HTML documentation from a ProtocolSchema + BinarySchema
  */
 
-import { BinarySchema, TypeDef, Field } from "../schema/binary-schema.js";
+import { BinarySchema, TypeDef, Field, isEnumType } from "../schema/binary-schema.js";
 import { ProtocolSchema, ProtocolMessage, normalizeProtocolSchemaInPlace } from "../schema/protocol-schema.js";
 import { formatInlineMarkup } from "./inline-formatting.js";
 import { annotateWireFormat } from "../schema/annotate-wire-format.js";
@@ -12,6 +12,7 @@ import { encodeValue } from "../schema/encoder.js";
 
 /** Check if a type is a composite (has a sequence) or a type alias */
 function isTypeAlias(typeDef: TypeDef): boolean {
+  if (isEnumType(typeDef)) return false;
   return !("sequence" in typeDef);
 }
 
@@ -107,6 +108,7 @@ function generateArrayTypeAliasDiagram(
  */
 function getItemTypeSize(itemType: string): string {
   switch (itemType) {
+    case "bool":
     case "uint8":
     case "int8":
       return "1 byte";
@@ -142,6 +144,8 @@ function isBuiltInType(typeName: string): boolean {
     "float32",
     "float64",
     "bit",
+    "bool",
+    "bytes",
   ];
   return builtIns.includes(typeName);
 }
@@ -221,6 +225,20 @@ function getAliasedTypeInfo(typeDef: TypeDef, schema: BinarySchema): string {
   }
 
   switch (aliasedType.type) {
+    case "bool":
+      return "boolean (1 byte)";
+    case "bytes": {
+      const kind = aliasedType.kind;
+      if (kind === "length_prefixed") {
+        const lengthType = aliasedType.length_type || "uint8";
+        return `length-prefixed bytes (length: ${lengthType})`;
+      } else if (kind === "fixed") {
+        return `fixed bytes[${aliasedType.length}]`;
+      } else if (kind === "null_terminated") {
+        return `null-terminated bytes`;
+      }
+      return `bytes`;
+    }
     case "array": {
       const itemsType = aliasedType.items?.type || "unknown";
       const kind = aliasedType.kind;
@@ -514,6 +532,8 @@ function generateExampleData(typeName: string, typeDef: TypeDef, schema: BinaryS
     const aliasedType = typeDef as any;
     if ('type' in aliasedType) {
       switch (aliasedType.type) {
+        case 'bool':
+          return true;
         case 'string':
           return "example";
         case 'uint8':
@@ -522,6 +542,7 @@ function generateExampleData(typeName: string, typeDef: TypeDef, schema: BinaryS
         case 'uint64':
           return 0;
         case 'array':
+        case 'bytes':
           return [];
         default:
           if (schema.types[aliasedType.type]) {
@@ -554,6 +575,13 @@ function generateExampleData(typeName: string, typeDef: TypeDef, schema: BinaryS
     }
 
     switch (fieldType) {
+      case 'bool':
+        data[field.name] = field.name.toLowerCase().includes('enable') || field.name.toLowerCase().includes('active') ? true : false;
+        break;
+      case 'bytes': {
+        data[field.name] = [0x00, 0x01, 0x02];
+        break;
+      }
       case 'uint8':
       case 'int8':
         data[field.name] = field.name.toLowerCase().includes('flag') ? 1 : 0;
@@ -1081,8 +1109,22 @@ function generateDataTypesSection(
           <summary><h3>${escapeHtml(typeName)}${isGeneric ? ' <span class="generic-badge">Generic</span>' : ""}</h3></summary>
 `;
 
-    // Check if this is a type alias or composite type
-    if (isTypeAlias(typeDefObj)) {
+    // Check if this is an enum, type alias, or composite type
+    if (isEnumType(typeDefObj)) {
+      // Enum type — show variant table
+      if (description) {
+        html += `          <p class="type-description">${escapeHtml(description)}</p>\n`;
+      }
+      const enumDef = typeDefObj as any;
+      const repr = enumDef.repr || "uint8";
+      html += `          <p class="type-alias">Enum (${escapeHtml(repr)})</p>\n`;
+      html += `          <table class="enum-table"><thead><tr><th>Variant</th><th>Value</th></tr></thead><tbody>\n`;
+      const variants = enumDef.variants as Record<string, number>;
+      for (const [name, value] of Object.entries(variants).sort((a, b) => (a[1] as number) - (b[1] as number))) {
+        html += `            <tr><td><code>${escapeHtml(name)}</code></td><td>${value}</td></tr>\n`;
+      }
+      html += `          </tbody></table>\n`;
+    } else if (isTypeAlias(typeDefObj)) {
       // Type alias - show visual diagram if it's an array, otherwise show text
       if (description) {
         html += `          <p class="type-description">${escapeHtml(description)}</p>\n`;
@@ -1401,6 +1443,10 @@ function getFieldTypeInfo(
     case "int64":
     case "float64":
       return { displayType: type, size: "8 bytes", bytes: 8, constValue, computed: computedField };
+    case "bool":
+      return { displayType: "bool", size: "1 byte", bytes: 1, constValue, computed: computedField };
+    case "bytes":
+      return { displayType: "bytes", size: "variable", bytes: 4 };
     case "varlength":
       const varlengthEncoding = "encoding" in field ? field.encoding : "leb128";
       return { displayType: `varlength (${varlengthEncoding})`, size: "variable", bytes: 2, computed: computedField };

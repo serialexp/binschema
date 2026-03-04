@@ -9,7 +9,7 @@
  * - Circular type dependencies
  */
 
-import { BinarySchema, Field, TypeDef } from "./binary-schema.js";
+import { BinarySchema, Field, TypeDef, isEnumType } from "./binary-schema.js";
 import { ARRAY_ITER_SUFFIX } from "../generators/typescript/shared.js";
 
 export interface ValidationError {
@@ -26,9 +26,9 @@ export interface ValidationResult {
  * Built-in types that don't need to be defined in schema.types
  */
 const BUILT_IN_TYPES = [
-  "bit", "int", "uint8", "uint16", "uint32", "uint64",
+  "bit", "int", "bool", "uint8", "uint16", "uint32", "uint64",
   "int8", "int16", "int32", "int64", "varlength", "float32", "float64",
-  "string", "array", "optional", "bitfield", "discriminated_union", "back_reference", "choice",
+  "string", "array", "bytes", "optional", "bitfield", "discriminated_union", "back_reference", "choice",
   "padding"
 ];
 
@@ -44,6 +44,7 @@ const RESERVED_FIELD_PATTERNS = [
  * Check if a type is a composite (has sequence/fields) or a type alias
  */
 function isTypeAlias(typeDef: TypeDef): boolean {
+  if (isEnumType(typeDef)) return false;
   return !('sequence' in typeDef);
 }
 
@@ -131,6 +132,12 @@ function validateTypeDef(
   schema: BinarySchema,
   errors: ValidationError[]
 ): void {
+  // Check if this is an enum type
+  if (isEnumType(typeDef)) {
+    validateEnumType(typeName, typeDef as any, errors);
+    return;
+  }
+
   // Check if this is a discriminated union or pointer type alias
   if (isTypeAlias(typeDef)) {
     const typeDefAny = typeDef as any;
@@ -1277,6 +1284,25 @@ function validateOptional(
 
   const valueType = field.value_type;
 
+  // If value_type is an inline type object, validate the inner type and skip string-only checks
+  if (typeof valueType === "object") {
+    const innerType = valueType.type;
+    if (innerType === "optional") {
+      errors.push({
+        path: `${path} (${field.name || "optional"})`,
+        message: "Nested optionals are not allowed (optional<optional<T>> is redundant)"
+      });
+    }
+    if (innerType === "bit") {
+      errors.push({
+        path: `${path} (${field.name || "optional"})`,
+        message: "Optional bit is not allowed (use a 2-bit field instead - presence flag + value bit = 2 bits total)"
+      });
+    }
+    // Inline type object is self-contained — no need to check schema.types
+    return;
+  }
+
   // Prohibit nested optionals (optional<optional<T>>)
   if (valueType === "optional") {
     errors.push({
@@ -1679,6 +1705,62 @@ function extractTypeReference(typeRef: string | undefined): string {
 }
 
 /**
+ * Validate an enum type definition
+ */
+function validateEnumType(
+  typeName: string,
+  typeDef: { type: "enum"; repr: string; variants: Record<string, number> },
+  errors: ValidationError[]
+): void {
+  const variants = typeDef.variants;
+
+  // Check at least one variant
+  if (Object.keys(variants).length === 0) {
+    errors.push({
+      path: `types.${typeName}`,
+      message: "Enum type must have at least one variant"
+    });
+  }
+
+  // Check variant names are valid identifiers
+  for (const name of Object.keys(variants)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      errors.push({
+        path: `types.${typeName}.variants.${name}`,
+        message: `Variant name '${name}' is not a valid identifier`
+      });
+    }
+  }
+
+  // Check variant values are unique
+  const values = Object.values(variants);
+  const uniqueValues = new Set(values);
+  if (uniqueValues.size !== values.length) {
+    errors.push({
+      path: `types.${typeName}.variants`,
+      message: "Variant values must be unique"
+    });
+  }
+
+  // Check variant values fit in repr type
+  const maxValue: Record<string, number> = {
+    uint8: 255,
+    uint16: 65535,
+    uint32: 4294967295,
+  };
+  const max = maxValue[typeDef.repr];
+
+  for (const [name, value] of Object.entries(variants)) {
+    if (value < 0 || value > max) {
+      errors.push({
+        path: `types.${typeName}.variants.${name}`,
+        message: `Variant value ${value} exceeds range of ${typeDef.repr} (0-${max})`
+      });
+    }
+  }
+}
+
+/**
  * Find circular dependencies in type definitions
  */
 function findCircularDependency(
@@ -1704,6 +1786,11 @@ function findCircularDependency(
 
   visited.add(typeName);
   path.push(typeName);
+
+  // Enum types have no type dependencies
+  if (isEnumType(typeDef)) {
+    return null;
+  }
 
   // Handle type aliases that can have dependencies (discriminated unions and pointers)
   if (isTypeAlias(typeDef)) {

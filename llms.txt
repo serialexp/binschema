@@ -99,6 +99,14 @@ All multi-byte integer fields support an optional `endianness` property to overr
 | `float32` | 4 bytes | IEEE 754 single precision | `number` / `float32` / `f32` |
 | `float64` | 8 bytes | IEEE 754 double precision | `number` / `float64` / `f64` |
 
+### Boolean
+
+| Type   | Size   | Values           | Code Gen (TS/Go/Rust) |
+|--------|--------|------------------|------------------------|
+| `bool` | 1 byte | `true` / `false` | `boolean` / `bool` / `bool` |
+
+Sugar over `uint8`. Wire format: `0x00` = false, `0x01` = true. Any non-zero value decodes as `true`.
+
 ### Bit Fields
 
 For sub-byte fields with 1-64 bit precision:
@@ -162,6 +170,15 @@ Strings have a `type` of `"string"` and require a `kind` to specify how their le
 | `"utf8"`  | UTF-8 encoding (default) |
 | `"ascii"` | 7-bit ASCII, one byte per character |
 | `"latin1"` | ISO-8859-1, one byte per character |
+| `"utf16"` | UTF-16 encoding, 2 bytes per code unit |
+
+**UTF-16 endianness:** UTF-16 strings use 2-byte code units whose byte order is determined by (1) field-level `endianness` override if present, or (2) the global config endianness. Surrogate pairs are used for characters outside the Basic Multilingual Plane. For `null_terminated` UTF-16 strings, the terminator is two zero bytes (`0x0000`). For `length_prefixed` UTF-16 strings, the length prefix is the byte count (not the code unit count).
+
+```json5
+{ "name": "label", "type": "string", "kind": "fixed", "length": 8, "encoding": "utf16" }
+{ "name": "name", "type": "string", "kind": "length_prefixed", "length_type": "uint16", "encoding": "utf16", "endianness": "little_endian" }
+{ "name": "path", "type": "string", "kind": "null_terminated", "encoding": "utf16" }
+```
 
 ### String Kinds
 
@@ -256,6 +273,18 @@ Supports dot notation for nested fields: `"length_field": "header.num_tracks"`.
 ### Array Items
 
 Array `items` can be any element type: primitives, type references, strings, nested arrays, discriminated unions, choices, optional, or back references. Element types are the same as field types but without a `name` property.
+
+## Bytes
+
+The `bytes` type is sugar for `array<uint8>`. It supports all the same `kind` options as arrays but without an `items` field (element type is implicitly `uint8`):
+
+```json5
+{ "name": "data", "type": "bytes", "kind": "fixed", "length": 16 }
+{ "name": "payload", "type": "bytes", "kind": "length_prefixed", "length_type": "uint16" }
+{ "name": "content", "type": "bytes", "kind": "field_referenced", "length_field": "data_length" }
+```
+
+Generated types: `number[]` (TypeScript), `[]byte` (Go), `Vec<u8>` (Rust).
 
 ## Computed Fields
 
@@ -443,8 +472,25 @@ Optional fields include a presence indicator on the wire (1 = present, 0 = absen
 
 | Property | Values | Default | Description |
 |----------|--------|---------|-------------|
-| `value_type` | Any type name | required | The wrapped type |
+| `value_type` | Type name or inline type object | required | The wrapped type |
 | `presence_type` | `"uint8"`, `"bit"` | `"uint8"` | Size of presence indicator |
+
+`value_type` can be a string referencing a named type or primitive (`"uint64"`, `"String"`), or an inline type object with full configuration — useful when a named type would only be used once:
+
+```json5
+{
+  "name": "name",
+  "type": "optional",
+  "value_type": {
+    "type": "string",
+    "kind": "length_prefixed",
+    "length_type": "uint8",
+    "encoding": "utf8"
+  }
+}
+```
+
+Inline type objects support all properties of the corresponding field type, including field-level `endianness` overrides.
 
 ## Generic / Parameterized Types
 
@@ -633,6 +679,12 @@ BinSchema generates code for three languages from a single schema:
 | TypeScript | `src/generators/typescript.ts` | `src/runtime/bit-stream.ts` | Reference implementation, full feature support |
 | Go | `src/generators/go.ts` + `go/codegen/` | `go/runtime/bitstream.go` | Production ready, follows TypeScript patterns |
 | Rust | `src/generators/rust.ts` | `rust/` | Experimental, limited support |
+
+### Go Generated Code
+
+**String type aliases.** Named string types (type definitions with `"type": "string"`) generate transparent Go type aliases (`type LPString = string`). This means fields referencing string types use native `string` in Go — no wrapper struct or `.Value` access needed. The encoding configuration (length prefix, encoding, etc.) is inlined at each call site.
+
+Exception: string types used as discriminated union variants retain a struct wrapper (with `Value string` field and `Encode`/`Decode` methods) because Go interfaces require methods on the type.
 
 ### Rust Generated Code
 
