@@ -57,6 +57,11 @@ func TestBinSchema(t *testing.T) {
 			continue
 		}
 
+		// Skip suites where test_type is a string type alias (no standalone encode/decode)
+		if isStringTypeAliasSuite(suite) {
+			continue
+		}
+
 		results, ok := resultMap[suite.Name]
 		if !ok {
 			t.Errorf("No results for suite %s", suite.Name)

@@ -46,6 +46,11 @@ func BuildTestSummary(resultMap map[string][]TestResult, suites []*TestSuite) *T
 			continue
 		}
 
+		// Skip suites where test_type is a string type alias (no standalone encode/decode)
+		if isStringTypeAliasSuite(suite) {
+			continue
+		}
+
 		results, ok := resultMap[suite.Name]
 		if !ok {
 			// Suite has no results (probably failed to compile)

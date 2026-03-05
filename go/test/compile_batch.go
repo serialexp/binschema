@@ -59,6 +59,14 @@ func CompileAndTestBatch(suites []*TestSuite) (map[string][]TestResult, error) {
 			continue
 		}
 
+		// Skip suites where test_type is a string type alias (no encode/decode methods).
+		// Go generator produces bare type aliases (type X = string) for these — encoding
+		// is inlined at call sites when used as struct fields, not standalone.
+		if isStringTypeAliasSuite(suite) {
+			fmt.Fprintf(os.Stderr, "Skipping suite %q: test_type %q is a string type alias (no standalone encode/decode)\n", suite.Name, suite.TestType)
+			continue
+		}
+
 		code, err := generateGoSource(suite.Schema, suite.TestType)
 		if err != nil {
 			// Mark all test cases in this suite as failed due to code generation error
@@ -860,6 +868,27 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 	return formatValueWithType(val, fieldType)
 }
 
+// isStringTypeAliasSuite checks if a suite's test_type resolves to a bare string type alias
+// (no standalone encode/decode methods in generated Go code).
+func isStringTypeAliasSuite(suite *TestSuite) bool {
+	if len(suite.TestCases) == 0 {
+		return false
+	}
+	types, ok := suite.Schema["types"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	typeDef, ok := types[suite.TestType].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	typeDefType, _ := typeDef["type"].(string)
+	if typeDefType != "string" {
+		return false
+	}
+	return !isStringUsedAsVariant(suite.TestType, types)
+}
+
 // isStringUsedAsVariant checks if a string type is used as a discriminated union variant
 // in any type within the schema. Types used as variants need struct wrappers, not type aliases.
 func isStringUsedAsVariant(typeName string, types map[string]interface{}) bool {
@@ -908,6 +937,18 @@ func isStringUsedAsVariant(typeName string, types map[string]interface{}) bool {
 											return true
 										}
 									}
+								}
+							}
+						}
+					}
+				}
+				// Inline choice field
+				if ft, _ := field["type"].(string); ft == "choice" {
+					if choices, ok := field["choices"].([]interface{}); ok {
+						for _, c := range choices {
+							if cm, ok := c.(map[string]interface{}); ok {
+								if ct, _ := cm["type"].(string); ct == typeName {
+									return true
 								}
 							}
 						}
@@ -1143,6 +1184,41 @@ func formatBitfieldValue(val map[string]interface{}, typePrefix string, parentTy
 
 // formatDiscriminatedUnionValue formats a discriminated union value
 // The value has format: {type: "VariantName", value: {...}}
+// formatInlineChoiceValue formats a choice value used as a direct sequence field.
+// Choice values are flat maps: {type: "VariantName", field1: val1, field2: val2, ...}
+// Unlike discriminated_union which wraps in {type, value}, choice fields are flat.
+func formatInlineChoiceValue(val map[string]interface{}, choiceDef map[string]interface{}, types map[string]interface{}, typePrefix string) string {
+	variantType, _ := val["type"].(string)
+	if variantType == "" {
+		return formatValue(val)
+	}
+
+	// Look up the variant type definition
+	variantTypeDef, _ := types[variantType].(map[string]interface{})
+	if variantTypeDef == nil {
+		return formatValue(val)
+	}
+
+	goTypeName := typePrefix + "_" + variantType
+
+	// Format as pointer to variant struct with fields from the value map
+	result := "&" + goTypeName + "{"
+	if sequence, ok := variantTypeDef["sequence"].([]interface{}); ok {
+		for _, fieldRaw := range sequence {
+			if field, ok := fieldRaw.(map[string]interface{}); ok {
+				fieldName, _ := field["name"].(string)
+				if fieldVal, hasVal := val[fieldName]; hasVal {
+					goFieldName := capitalizeFirst(fieldName)
+					fieldType, _ := field["type"].(string)
+					result += fmt.Sprintf("%s: %s, ", goFieldName, formatValueWithType(fieldVal, fieldType))
+				}
+			}
+		}
+	}
+	result += "}"
+	return result
+}
+
 func formatDiscriminatedUnionValue(val map[string]interface{}, unionDef map[string]interface{}, types map[string]interface{}, typePrefix string) string {
 	variantType, _ := val["type"].(string)
 	variantValue := val["value"]
@@ -1361,6 +1437,14 @@ func formatStructValue(val map[string]interface{}, typeDef map[string]interface{
 							continue
 						}
 					}
+					// Check for inline choice field
+					if fieldType == "choice" {
+						if choiceVal, ok := fieldVal.(map[string]interface{}); ok {
+							result += fmt.Sprintf("\t\t\t\t\t\t%s: %s,\n", goFieldName, formatInlineChoiceValue(choiceVal, field, types, typePrefix))
+							continue
+						}
+					}
+
 
 					// Check for optional field - wrap value in pointer helper
 					if fieldType == "optional" {
