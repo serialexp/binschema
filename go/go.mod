@@ -1,4 +1,4 @@
-module github.com/anthropics/binschema
+module github.com/serialexp/binschema
 
 go 1.25.2
 

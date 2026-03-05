@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/anthropics/binschema/codegen"
+	"github.com/serialexp/binschema/codegen"
 )
 
 func main() {

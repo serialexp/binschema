@@ -16,7 +16,7 @@ async function main() {
 
   const result = generateGo(schema, "DnsMessage", {
     packageName: "binschema",
-    runtimeImport: "github.com/anthropics/binschema/runtime",
+    runtimeImport: "github.com/serialexp/binschema/runtime",
   });
 
   // Create output directory

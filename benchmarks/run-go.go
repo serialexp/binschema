@@ -202,7 +202,7 @@ func runSchemaFile(schemaPath string) ([]BenchmarkResult, error) {
 
 	goModPath := filepath.Join(tmpDir, "go.mod")
 	goModContent, _ := os.ReadFile(goModPath)
-	goModContent = append(goModContent, []byte(fmt.Sprintf("\nreplace github.com/anthropics/binschema => %s\n", runtimePath))...)
+	goModContent = append(goModContent, []byte(fmt.Sprintf("\nreplace github.com/serialexp/binschema => %s\n", runtimePath))...)
 	if err := os.WriteFile(goModPath, goModContent, 0644); err != nil {
 		return nil, fmt.Errorf("failed to update go.mod: %w", err)
 	}

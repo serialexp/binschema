@@ -154,7 +154,7 @@ describe("Go Code Generator", () => {
     expect(result.code).toContain('import (');
     expect(result.code).toContain('"fmt"');
     expect(result.code).toContain('"io"');
-    expect(result.code).toContain('"github.com/anthropics/binschema/runtime"');
+    expect(result.code).toContain('"github.com/serialexp/binschema/runtime"');
   });
 
   test("supports custom package name", () => {

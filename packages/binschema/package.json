@@ -19,11 +19,14 @@
     "!dist/**/*.test.js",
     "!dist/**/*.test.d.ts",
     "!dist/tests",
-    "!dist/examples"
+    "!dist/examples",
+    "llms.txt",
+    "go-runtime",
+    "rust-runtime"
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "cp ../../README.md .",
+    "prepublishOnly": "cp ../../README.md . && cp ../../llms.txt . && mkdir -p go-runtime && cp ../../go/runtime/*.go go-runtime/ && mkdir -p rust-runtime && cp ../../rust/src/lib.rs ../../rust/src/bitstream.rs ../../rust/src/context.rs rust-runtime/",
     "test": "bun run src/run-tests.ts",
     "test:filter": "bun run src/run-tests.ts --filter",
     "watch": "tsc --watch",
@@ -42,10 +45,10 @@
     "@types/node": "^24.7.1",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "json5": "^2.2.3",
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "json5": "^2.2.3",
     "kleur": "^4.1.5",
     "zod": "^4.1.12",
     "zod-metadata-extractor": "workspace:*"

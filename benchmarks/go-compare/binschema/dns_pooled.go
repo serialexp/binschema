@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/anthropics/binschema/benchmarks/go-compare/binschema/runtime"
+	"github.com/serialexp/binschema/benchmarks/go-compare/binschema/runtime"
 )
 
 // Pre-allocated decode context with reusable buffers

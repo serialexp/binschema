@@ -70,7 +70,7 @@ func GenerateGo(schemaData map[string]interface{}, typeName string) (string, err
 	// Package and imports
 	buf.WriteString("package main\n\n")
 	buf.WriteString("import (\n")
-	buf.WriteString("\t\"github.com/anthropics/binschema/runtime\"\n")
+	buf.WriteString("\t\"github.com/serialexp/binschema/runtime\"\n")
 	buf.WriteString(")\n\n")
 
 	// Generate ALL types in the schema (simpler - always same logic)

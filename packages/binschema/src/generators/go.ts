@@ -123,7 +123,7 @@ function hasUTF16Strings(schema: BinarySchema): boolean {
  */
 export interface GoGeneratorOptions {
   packageName?: string; // default: "main"
-  runtimeImport?: string; // default: "github.com/anthropics/binschema/runtime"
+  runtimeImport?: string; // default: "github.com/serialexp/binschema/runtime"
 }
 
 /**
@@ -1311,6 +1311,27 @@ function collectChoiceTypes(schema: BinarySchema): Map<string, { choices: Array<
 
           choiceTypes.set(choiceName, { choices, discriminatorType, discriminatorEndianness });
         }
+
+        // Also collect inline choice fields (direct sequence fields, not inside arrays)
+        if (field.type === "choice") {
+          const choices = (field as any).choices || [];
+          const fieldName = toGoFieldName(field.name);
+          const choiceName = `${typeName}_${fieldName}_Choice`;
+
+          let discriminatorType = "uint8";
+          let discriminatorEndianness = globalEndianness;
+
+          if (choices.length > 0) {
+            const firstChoiceType = schema.types[choices[0].type];
+            if (firstChoiceType && 'sequence' in firstChoiceType && firstChoiceType.sequence.length > 0) {
+              const firstField = firstChoiceType.sequence[0];
+              discriminatorType = firstField.type;
+              discriminatorEndianness = (firstField as any).endianness || globalEndianness;
+            }
+          }
+
+          choiceTypes.set(choiceName, { choices, discriminatorType, discriminatorEndianness });
+        }
       }
     }
   }
@@ -1417,7 +1438,7 @@ export function generateGo(
   options?: GoGeneratorOptions
 ): GeneratedGoCode {
   const pkg = options?.packageName || "main";
-  const runtimePkg = options?.runtimeImport || "github.com/anthropics/binschema/runtime";
+  const runtimePkg = options?.runtimeImport || "github.com/serialexp/binschema/runtime";
 
   // Verify the requested type exists
   if (!schema.types[typeName]) {
@@ -2512,9 +2533,10 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
       lines.push(...generateArraySizeCalculation(fieldAny, valueExpr, schema, indent));
       break;
     }
+    case "choice":
     case "discriminated_union": {
-      // Inline discriminated union - use CalculateSize if available, fallback to Encode
-      lines.push(`${indent}// ${fieldName}: inline discriminated union`);
+      // Inline choice/discriminated union - use CalculateSize if available, fallback to Encode
+      lines.push(`${indent}// ${fieldName}: inline ${fieldType}`);
       lines.push(`${indent}if sizable, ok := ${valueExpr}.(interface{ CalculateSize() int }); ok {`);
       lines.push(`${indent}\tsize += sizable.CalculateSize()`);
       lines.push(`${indent}} else if ${valueExpr} != nil {`);
@@ -3564,8 +3586,8 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
       break;
 
     case "choice":
-      // Choice type - encode via interface method
-      lines.push(...generateEncodeNestedStruct(field, fieldName, indent));
+      // Inline choice field - encode via type switch (same pattern as discriminated_union)
+      lines.push(...generateEncodeInlineChoice(field as any, fieldName, indent));
       break;
 
     case "discriminated_union":
@@ -4300,6 +4322,10 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
     case "array":
       lines.push(...generateDecodeArray(field as any, fieldName, varName, endianness, runtimeEndianness, indent, schema, parentTypeName));
       return lines; // Early return - array handling includes assignment
+
+    case "choice":
+      lines.push(...generateDecodeInlineChoice(field as any, fieldName, varName, endianness, runtimeEndianness, indent, schema, parentTypeName));
+      return lines; // Early return - choice handling includes assignment
 
     case "discriminated_union":
       lines.push(...generateDecodeInlineDiscriminatedUnion(field as any, fieldName, varName, endianness, runtimeEndianness, indent, schema, parentTypeName));
@@ -5321,9 +5347,8 @@ function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: Binary
       const itemsType = mapFieldToGoType(items, parentTypeName, schema);
       return `[]${itemsType}`;
     case "choice":
-      // Choice type - should be handled via array case above for proper naming
-      // This fallback is for direct choice fields (rare)
-      return "Choice";
+      // Inline choice field - use interface{} to hold any variant (same as discriminated_union)
+      return "interface{}";
     case "optional": {
       // Optional type - pointer
       const valueType = (field as any).value_type;
@@ -5453,6 +5478,95 @@ function getSentinelValue(goType: string): string {
     default:
       return "0xFFFFFFFF"; // Default to uint32 sentinel
   }
+}
+
+/**
+ * Generates decoding code for inline choice field
+ */
+function generateDecodeInlineChoice(
+  field: any,
+  fieldName: string,
+  varName: string,
+  endianness: string,
+  runtimeEndianness: string,
+  indent: string,
+  schema?: BinarySchema,
+  parentTypeName?: string
+): string[] {
+  const lines: string[] = [];
+  const choices = field.choices || [];
+  const globalEndianness = schema?.config?.endianness || endianness || "big_endian";
+
+  // Auto-detect discriminator type from first choice type's first field
+  let discriminatorType = "uint8";
+  let discriminatorEndianness = globalEndianness;
+
+  if (choices.length > 0 && schema) {
+    const firstChoiceType = schema.types[choices[0].type];
+    if (firstChoiceType && 'sequence' in firstChoiceType && firstChoiceType.sequence.length > 0) {
+      const firstField = firstChoiceType.sequence[0];
+      discriminatorType = firstField.type;
+      discriminatorEndianness = (firstField as any).endianness || globalEndianness;
+    }
+  }
+
+  const discRuntimeEndianness = mapEndianness(discriminatorEndianness);
+
+  // Block scope to avoid duplicate variable declarations when multiple choice fields in same struct
+  lines.push(`${indent}{`);
+  const inner = indent + "\t";
+
+  // Peek at discriminator value
+  switch (discriminatorType) {
+    case "uint8":
+      lines.push(`${inner}discriminator, err := decoder.PeekUint8()`);
+      break;
+    case "uint16":
+      lines.push(`${inner}discriminator, err := decoder.PeekUint16(runtime.${discRuntimeEndianness})`);
+      break;
+    case "uint32":
+      lines.push(`${inner}discriminator, err := decoder.PeekUint32(runtime.${discRuntimeEndianness})`);
+      break;
+    default:
+      lines.push(`${inner}discriminator, err := decoder.PeekUint8()`);
+  }
+  lines.push(`${inner}if err != nil {`);
+  lines.push(`${inner}\treturn nil, fmt.Errorf("failed to peek choice discriminator for ${field.name || 'choice'}: %w", err)`);
+  lines.push(`${inner}}`);
+  lines.push(``);
+
+  // Switch on discriminator value
+  lines.push(`${inner}switch discriminator {`);
+
+  for (const choice of choices) {
+    // Get discriminator value from choice type's first field const
+    let discriminatorValue: number | bigint = 0;
+    if (schema) {
+      const choiceTypeDef = schema.types[choice.type];
+      if (choiceTypeDef && 'sequence' in choiceTypeDef && choiceTypeDef.sequence.length > 0) {
+        const firstField = choiceTypeDef.sequence[0];
+        if ('const' in firstField && firstField.const !== undefined) {
+          discriminatorValue = firstField.const;
+        }
+      }
+    }
+
+    const variantTypeName = toGoTypeName(choice.type);
+    lines.push(`${inner}case ${discriminatorValue}:`);
+    lines.push(`${inner}\tvariantValue, err := decode${variantTypeName}WithDecoder(decoder)`);
+    lines.push(`${inner}\tif err != nil {`);
+    lines.push(`${inner}\t\treturn nil, fmt.Errorf("failed to decode ${choice.type} variant: %w", err)`);
+    lines.push(`${inner}\t}`);
+    lines.push(`${inner}\tresult.${fieldName} = variantValue`);
+  }
+
+  lines.push(`${inner}default:`);
+  lines.push(`${inner}\treturn nil, fmt.Errorf("unknown choice discriminator value: %d", discriminator)`);
+  lines.push(`${inner}}`);
+  lines.push(`${indent}}`);
+  lines.push(``);
+
+  return lines;
 }
 
 /**
@@ -5768,6 +5882,40 @@ function generateEncodeInlineDiscriminatedUnion(
 
   lines.push(`${indent}default:`);
   lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminated union variant type: %T", ${fieldName})`);
+  lines.push(`${indent}}`);
+
+  return lines;
+}
+
+/**
+ * Generates encoding code for inline choice field
+ */
+function generateEncodeInlineChoice(
+  field: any,
+  fieldName: string,
+  indent: string
+): string[] {
+  const lines: string[] = [];
+  const choices = field.choices || [];
+
+  // For encoding, use type assertion to determine variant type (same as discriminated_union)
+  lines.push(`${indent}// Encode choice variant`);
+  lines.push(`${indent}switch v := ${fieldName}.(type) {`);
+
+  for (const choice of choices) {
+    const variantTypeName = toGoTypeName(choice.type);
+    lines.push(`${indent}case *${variantTypeName}:`);
+    lines.push(`${indent}\tvariantBytes, err := v.EncodeWithContext(childCtx)`);
+    lines.push(`${indent}\tif err != nil {`);
+    lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to encode ${choice.type} variant: %w", err)`);
+    lines.push(`${indent}\t}`);
+    lines.push(`${indent}\tfor _, b := range variantBytes {`);
+    lines.push(`${indent}\t\tencoder.WriteUint8(b)`);
+    lines.push(`${indent}\t}`);
+  }
+
+  lines.push(`${indent}default:`);
+  lines.push(`${indent}\treturn nil, fmt.Errorf("unknown choice variant type: %T", ${fieldName})`);
   lines.push(`${indent}}`);
 
   return lines;

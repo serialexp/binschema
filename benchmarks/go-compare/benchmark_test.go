@@ -6,9 +6,9 @@ import (
 
 	kaitai_runtime "github.com/kaitai-io/kaitai_struct_go_runtime/kaitai"
 
-	"github.com/anthropics/binschema/benchmarks/go-compare/binschema"
-	"github.com/anthropics/binschema/benchmarks/go-compare/cdns"
-	"github.com/anthropics/binschema/benchmarks/go-compare/kaitai"
+	"github.com/serialexp/binschema/benchmarks/go-compare/binschema"
+	"github.com/serialexp/binschema/benchmarks/go-compare/cdns"
+	"github.com/serialexp/binschema/benchmarks/go-compare/kaitai"
 )
 
 // DNS query packet for "example.com" type A (29 bytes)

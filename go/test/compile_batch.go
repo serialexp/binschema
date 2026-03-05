@@ -131,13 +131,13 @@ func CompileAndTestBatch(suites []*TestSuite) (map[string][]TestResult, error) {
 		return nil, fmt.Errorf("failed to read go.mod: %w", err)
 	}
 
-	goModContent = append(goModContent, []byte(fmt.Sprintf("\nreplace github.com/anthropics/binschema => %s\n", runtimePath))...)
+	goModContent = append(goModContent, []byte(fmt.Sprintf("\nreplace github.com/serialexp/binschema => %s\n", runtimePath))...)
 	if err := os.WriteFile(goModPath, goModContent, 0644); err != nil {
 		return nil, fmt.Errorf("failed to update go.mod: %w", err)
 	}
 
 	// Run go get to fetch dependencies
-	cmd = exec.Command("go", "get", "github.com/anthropics/binschema/runtime", "github.com/aeolun/json5")
+	cmd = exec.Command("go", "get", "github.com/serialexp/binschema/runtime", "github.com/aeolun/json5")
 	cmd.Dir = tmpDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("failed to get dependencies: %w\nOutput: %s", err, output)
@@ -725,6 +725,13 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 	if fieldType == "discriminated_union" {
 		if valMap, ok := val.(map[string]interface{}); ok {
 			return formatDiscriminatedUnionValue(valMap, fieldDef, types, typePrefix)
+		}
+	}
+
+	// Handle inline choice fields
+	if fieldType == "choice" {
+		if valMap, ok := val.(map[string]interface{}); ok {
+			return formatInlineChoiceValue(valMap, fieldDef, types, typePrefix)
 		}
 	}
 
@@ -1488,7 +1495,6 @@ func generateGoSource(schema map[string]interface{}, typeName string) (string, e
 		"--language", "go",
 		"--schema", schemaFile,
 		"--out", outputDir,
-		"--type", typeName,
 	)
 	cmd.Dir = toolsRoot
 	if output, err := cmd.CombinedOutput(); err != nil {

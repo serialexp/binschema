@@ -1,4 +1,4 @@
-module github.com/anthropics/binschema/benchmarks/go-compare
+module github.com/serialexp/binschema/benchmarks/go-compare
 
 go 1.23.0
 

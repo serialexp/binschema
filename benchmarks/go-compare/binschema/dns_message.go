@@ -2,7 +2,7 @@ package binschema
 
 import (
 	"fmt"
-	"github.com/anthropics/binschema/benchmarks/go-compare/binschema/runtime"
+	"github.com/serialexp/binschema/benchmarks/go-compare/binschema/runtime"
 )
 
 type Label struct {
