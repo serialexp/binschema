@@ -5,7 +5,7 @@ Binary protocol schema definition and code generation tool. Define binary format
 ## Features
 
 - **Bit-level precision** - 1-64 bit fields with configurable bit ordering (MSB/LSB)
-- **Rich type system** - Primitives, strings, arrays, discriminated unions, back-references
+- **Rich type system** - Primitives, booleans, strings (UTF-8/ASCII/Latin-1/UTF-16), byte arrays, discriminated unions, back-references
 - **Computed fields** - Auto-calculate lengths, positions, checksums, and counts
 - **Multi-language** - Generate TypeScript, Go, and Rust from a single schema
 - **Cross-language testing** - JSON test format validates all implementations produce identical output
@@ -68,6 +68,7 @@ Schemas are defined in JSON5 format:
 
 | Type | Size | Description |
 |------|------|-------------|
+| `bool` | 1 byte | Boolean (`0x00` = false, `0x01` = true) |
 | `uint8`, `int8` | 1 byte | 8-bit integers |
 | `uint16`, `int16` | 2 bytes | 16-bit integers |
 | `uint32`, `int32` | 4 bytes | 32-bit integers |
@@ -75,6 +76,21 @@ Schemas are defined in JSON5 format:
 | `float32` | 4 bytes | IEEE 754 single precision |
 | `float64` | 8 bytes | IEEE 754 double precision |
 | `bitfield` | variable | Bit-level fields (1-64 bits) |
+| `bytes` | variable | Byte array (sugar for `array<uint8>`) |
+
+### Strings
+
+Strings support four encodings: `utf8` (default), `ascii`, `latin1`, and `utf16`. UTF-16 strings use 2-byte code units with endianness from the field or global config.
+
+### Bytes
+
+The `bytes` type is shorthand for `array<uint8>` — no `items` field needed:
+
+```json5
+{ "name": "data", "type": "bytes", "kind": "length_prefixed", "length_type": "uint16" }
+```
+
+Supports all array kinds: `fixed`, `length_prefixed`, `field_referenced`, `null_terminated`, `eof_terminated`, etc.
 
 ### Array Kinds
 

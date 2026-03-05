@@ -11,7 +11,8 @@ export type CLICommand =
   | DocsBuildCommand
   | DocsServeCommand
   | GenerateCommand
-  | ValidateCommand;
+  | ValidateCommand
+  | LlmCommand;
 
 export interface HelpCommand {
   readonly type: "help";
@@ -44,13 +45,16 @@ export interface GenerateCommand {
   readonly schemaPath: string;
   readonly outputDir: string;
   readonly watch: boolean;
-  readonly typeName?: string;
   readonly debug: boolean;
 }
 
 export interface ValidateCommand {
   readonly type: "validate";
   readonly schemaPath: string;
+}
+
+export interface LlmCommand {
+  readonly type: "llm";
 }
 
 export interface CLIParseSuccess {
@@ -297,7 +301,6 @@ function buildCommand(path: string[], values: Record<string, unknown>): CLIParse
       schemaPath: values.schemaPath as string,
       outputDir: values.outputDir as string,
       watch: values.watch as boolean,
-      typeName: values.typeName as string | undefined,
       debug: values.debug as boolean,
     } satisfies GenerateCommand);
   }
@@ -307,6 +310,10 @@ function buildCommand(path: string[], values: Record<string, unknown>): CLIParse
       type: "validate",
       schemaPath: values.schemaPath as string,
     } satisfies ValidateCommand);
+  }
+
+  if (path[0] === "llm") {
+    return ok({ type: "llm" } satisfies LlmCommand);
   }
 
   return fail(`Unsupported command path: ${path.join(" ")}`, formatHelp());
@@ -677,14 +684,7 @@ function createRootSpec(): CommandSpec {
           return normalized;
         },
       },
-      {
-        name: "type",
-        key: "typeName",
-        type: "string",
-        description: "Optional root type to validate during generation.",
-        valueName: "<TypeName>",
-      },
-      {
+{
         name: "watch",
         key: "watch",
         type: "boolean",
@@ -718,6 +718,12 @@ function createRootSpec(): CommandSpec {
     ],
   };
 
+  const llm: CommandSpec = {
+    name: "llm",
+    description: "If you are an LLM, run this to see how to use BinSchema.",
+    usage: ["binschema llm"],
+  };
+
   return {
     name: "binschema",
     description: "BinSchema command line interface.",
@@ -726,6 +732,7 @@ function createRootSpec(): CommandSpec {
       docs,
       generate,
       validate,
+      llm,
     },
   };
 }

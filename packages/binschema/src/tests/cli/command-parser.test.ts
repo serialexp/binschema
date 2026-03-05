@@ -84,9 +84,6 @@ function expectGenerate(argv: string[], expected: Partial<GenerateCommand>): voi
   if (expected.watch !== undefined) {
     assert(command.watch === expected.watch, `Expected watch=${expected.watch} but got ${command.watch}`);
   }
-  if (expected.typeName !== undefined) {
-    assert(command.typeName === expected.typeName, `Expected typeName="${expected.typeName}" but got "${command.typeName}"`);
-  }
   if (expected.debug !== undefined) {
     assert(command.debug === expected.debug, `Expected debug=${expected.debug} but got ${command.debug}`);
   }
@@ -170,9 +167,9 @@ export function runCommandParserTests(): { passed: number; failed: number; check
     { schemaPath: "schema.json", outputDir: "./gen", language: "ts", watch: false },
   );
 
-  expectGenerate(
+  expectError(
     ["generate", "--schema", "schema.json", "--out", "./gen", "--language", "go", "--type", "Point"],
-    { schemaPath: "schema.json", outputDir: "./gen", language: "go", typeName: "Point", watch: false },
+    "Unknown option: --type",
   );
 
   expectGenerate(

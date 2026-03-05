@@ -133,8 +133,6 @@ fn generate_rust_code(schema_json: &str, type_name: &str) -> Result<String, Box<
             schema_path.to_str().unwrap(),
             "--out",
             out_dir.to_str().unwrap(),
-            "--type",
-            type_name,
         ])
         .current_dir(&binschema_dir)
         .output()?;

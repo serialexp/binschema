@@ -11,8 +11,8 @@
  * 5. Injecting a MessageCode enum type from protocol message definitions
  */
 
-import { BinarySchema } from "./binary-schema";
-import { normalizeMessageCode } from "./protocol-schema";
+import { BinarySchema } from "./binary-schema.js";
+import { normalizeMessageCode } from "./protocol-schema.js";
 
 export interface ProtocolTransformOptions {
   /** Custom name for the generated combined type (default: "Frame") */

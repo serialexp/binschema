@@ -3420,6 +3420,346 @@
         </div>
         <div class="type-category">
           <h3>Other Types</h3>
+          <details class="type-details" id="type-bool">
+            <summary>
+              <h4><code>bool</code></h4>
+              <span class="type-title">Boolean</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Boolean value encoded as a single byte. 0x00 = false, 0x01 = true.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Feature flags, enabled/disabled states, presence indicators
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>1 byte (0x00 or 0x01)</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal &quot;bool&quot;</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field type (always &#039;bool&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Human-readable description of this field</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>boolean</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript boolean type</li>
+                    <li>true/false</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>bool</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Go bool type</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>bool</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Native Rust bool type</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="examples-table">
+                <h5>Examples</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;enabled&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bool" class="type-link">bool</a>&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;visible&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bool" class="type-link">bool</a>&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Whether the item is visible&quot;</span>
+  }
+]</code></pre></td>
+                        <td><pre><code>{
+  enabled: true,
+  visible: false,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;enabled&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bool" class="type-link">bool</a>&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;visible&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bool" class="type-link">bool</a>&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Whether the item is visible&quot;</span>
+  }
+]</code></pre></td>
+                        <td><pre><code>Flags{
+  Enabled: true,
+  Visible: false,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <table class="example-table">
+                    <thead>
+                      <tr>
+                        <th>Schema Definition</th>
+                        <th>Example Values</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;enabled&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bool" class="type-link">bool</a>&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;visible&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bool" class="type-link">bool</a>&quot;</span>,
+    <span class="json-key">"description"</span>: <span class="json-string">&quot;Whether the item is visible&quot;</span>
+  }
+]</code></pre></td>
+                        <td><pre><code>Flags {
+  enabled: true,
+  visible: false,
+}</code></pre></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </details>
+          <details class="type-details" id="type-bytes">
+            <summary>
+              <h4><code>bytes</code></h4>
+              <span class="type-title">Bytes</span>
+            </summary>
+            <div class="type-content">
+              <p class="type-description">Raw byte array. Sugar for array of uint8 — same wire format, simpler schema definition.</p>
+              <div class="use-for">
+                <strong>Use for:</strong> Raw binary data, payloads, hashes, signatures, reserved bytes, binary blobs
+              </div>
+              <div class="wire-format-info">
+                <strong>Wire format:</strong> <code>Depends on kind: fixed (N bytes), length_prefixed (length + bytes), field_referenced (length from earlier field)</code>
+              </div>
+              <div class="fields-table">
+                <h5>Properties</h5>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Property</th>
+                      <th>Type</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><code>name</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field name</td>
+                    </tr>
+                    <tr>
+                      <td><code>type</code></td>
+                      <td><code>literal &quot;bytes&quot;</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td>Field type (always &#039;bytes&#039;)</td>
+                    </tr>
+                    <tr>
+                      <td><code>kind</code></td>
+                      <td><code>enum (&quot;fixed&quot; | &quot;length_prefixed&quot; | &quot;length_prefixed_items&quot; | &quot;byte_length_prefixed&quot; | &quot;null_terminated&quot; | &quot;signature_terminated&quot; | &quot;eof_terminated&quot; | &quot;field_referenced&quot; | &quot;variant_terminated&quot; | &quot;computed_count&quot;)</code></td>
+                      <td><span class="badge badge-required">required</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>length</code></td>
+                      <td><code>number</code> <span class="constraints">(min: 0)</span></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>length_type</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot; | &quot;varlength&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>length_encoding</code></td>
+                      <td><code>enum (&quot;der&quot; | &quot;leb128&quot; | &quot;ebml&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>length_field</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>count_expr</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminator_value</code></td>
+                      <td><code>number</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminator_type</code></td>
+                      <td><code>enum (&quot;uint8&quot; | &quot;uint16&quot; | &quot;uint32&quot; | &quot;uint64&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminator_endianness</code></td>
+                      <td><code>enum (&quot;big_endian&quot; | &quot;little_endian&quot;)</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>terminal_variants</code></td>
+                      <td><code>array</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td><code>description</code></td>
+                      <td><code>string</code></td>
+                      <td><span class="badge badge-optional">optional</span></td>
+                      <td>Human-readable description of this field</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="tabs-container">
+                <h5>Generated Code</h5>
+                <div class="tabs">
+                  <button class="tab-button active" data-lang="typescript">Typescript</button>
+                  <button class="tab-button" data-lang="go">Go</button>
+                  <button class="tab-button" data-lang="rust">Rust</button>
+                </div>
+                <div class="tab-content active" data-lang="typescript">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>number[]</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>JavaScript number array</li>
+                    <li>Each element is 0-255</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="go">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>[]byte</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Go byte slice</li>
+                  </ul>
+                </div>
+                <div class="tab-content" data-lang="rust">
+                  <div class="code-type">
+                    <strong>Type:</strong> <code>Vec&lt;u8&gt;</code>
+                  </div>
+                  <ul class="code-notes">
+                    <li>Rust byte vector</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="examples">
+                <h5>Examples</h5>
+                <pre><code>[
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;hash&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bytes" class="type-link">bytes</a>&quot;</span>,
+    <span class="json-key">"kind"</span>: <span class="json-string">&quot;fixed&quot;</span>,
+    <span class="json-key">"length"</span>: <span class="json-number">32</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;payload&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bytes" class="type-link">bytes</a>&quot;</span>,
+    <span class="json-key">"kind"</span>: <span class="json-string">&quot;length_prefixed&quot;</span>,
+    <span class="json-key">"length_type"</span>: <span class="json-string">&quot;uint16&quot;</span>
+  },
+  {
+    <span class="json-key">"name"</span>: <span class="json-string">&quot;data&quot;</span>,
+    <span class="json-key">"type"</span>: <span class="json-string">&quot;<a href="#type-bytes" class="type-link">bytes</a>&quot;</span>,
+    <span class="json-key">"kind"</span>: <span class="json-string">&quot;field_referenced&quot;</span>,
+    <span class="json-key">"length_field"</span>: <span class="json-string">&quot;data_length&quot;</span>
+  }
+]</code></pre>
+              </div>
+            </div>
+          </details>
           <details class="type-details" id="type-choice">
             <summary>
               <h4><code>choice</code></h4>
