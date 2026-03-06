@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 (2026-03-06)
+
+### Features
+
+- add performance benchmarks, CLI/API tabs, and nav styling
+- add ldns (C library) to DNS benchmark comparison
+
 ## 0.5.0 (2026-03-06)
 
 ### Features
