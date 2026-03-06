@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 (2026-03-06)
+
+### Features
+
+- add bool, bytes, and utf16 sugar types across all generators
+- bundle runtime files during Go/Rust generation
+
+### Chores
+
+- clean up uncommitted changes
+
 ## 0.4.0 (2026-03-02)
 
 ### Features
