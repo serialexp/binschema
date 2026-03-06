@@ -9,6 +9,7 @@ import (
 	"github.com/serialexp/binschema/benchmarks/go-compare/binschema"
 	"github.com/serialexp/binschema/benchmarks/go-compare/cdns"
 	"github.com/serialexp/binschema/benchmarks/go-compare/kaitai"
+	"github.com/serialexp/binschema/benchmarks/go-compare/ldns"
 )
 
 // DNS query packet for "example.com" type A (29 bytes)
@@ -256,6 +257,54 @@ func BenchmarkBinSchemaResponseEncode(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := msg.Encode()
 		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkLdnsQueryDecode benchmarks ldns DNS query decoding (wire2pkt)
+func BenchmarkLdnsQueryDecode(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		if err := ldns.DecodeDNSPacket(dnsQueryPacket); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkLdnsResponseDecode benchmarks ldns DNS response decoding (wire2pkt)
+func BenchmarkLdnsResponseDecode(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		if err := ldns.DecodeDNSPacket(dnsResponsePacket); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkLdnsQueryEncode benchmarks ldns DNS query encoding (pkt2wire)
+func BenchmarkLdnsQueryEncode(b *testing.B) {
+	state, err := ldns.PrepareBenchEncode(dnsQueryPacket)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer state.Close()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := state.Encode(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkLdnsResponseEncode benchmarks ldns DNS response encoding (pkt2wire)
+func BenchmarkLdnsResponseEncode(b *testing.B) {
+	state, err := ldns.PrepareBenchEncode(dnsResponsePacket)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer state.Close()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := state.Encode(); err != nil {
 			b.Fatal(err)
 		}
 	}

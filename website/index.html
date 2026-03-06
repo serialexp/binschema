@@ -114,6 +114,7 @@
               <tbody>
                 <tr class="bench-baseline"><td>C hand-written</td><td>32 ns</td><td class="bench-na">&mdash;</td></tr>
                 <tr class="bench-highlight"><td>Rust BinSchema</td><td>136 ns</td><td>186 ns</td></tr>
+                <tr><td><a href="https://github.com/NLnetLabs/ldns">ldns</a> (C library)</td><td>214 ns</td><td>431 ns</td></tr>
                 <tr class="bench-highlight"><td>Go BinSchema (optimized)</td><td>96 ns</td><td></td></tr>
                 <tr><td>Go BinSchema (standard)</td><td>320 ns</td><td>1,048 ns</td></tr>
                 <tr><td>Go Kaitai Struct</td><td>395 ns</td><td class="bench-na">&mdash;</td></tr>
@@ -131,6 +132,7 @@
               <tbody>
                 <tr class="bench-baseline"><td>C hand-written</td><td>35 ns</td><td class="bench-na">&mdash;</td></tr>
                 <tr class="bench-highlight"><td>Rust BinSchema</td><td>225 ns</td><td>309 ns</td></tr>
+                <tr><td><a href="https://github.com/NLnetLabs/ldns">ldns</a> (C library)</td><td>325 ns</td><td>520 ns</td></tr>
                 <tr class="bench-highlight"><td>Go BinSchema (optimized)</td><td>165 ns</td><td></td></tr>
                 <tr><td>Go BinSchema (standard)</td><td>500 ns</td><td>1,511 ns</td></tr>
                 <tr><td>Go Kaitai Struct</td><td>610 ns</td><td class="bench-na">&mdash;</td></tr>
@@ -141,7 +143,7 @@
         </div>
 
         <div class="bench-notes">
-          <p>Kaitai Struct and the C parser are <strong>decode-only</strong> &mdash; BinSchema generates both encoders and decoders. Rust encode uses <code>encode_into</code> with a reused encoder (zero allocation per call). All benchmarks on Apple M3 Max.</p>
+          <p>Kaitai Struct and the C parser are <strong>decode-only</strong>. <a href="https://github.com/NLnetLabs/ldns">ldns</a> is a production C DNS library (NLnet Labs). Rust encode uses <code>encode_into</code> with a reused encoder. All benchmarks on Apple M3 Max.</p>
         </div>
       </div>
     </section>
