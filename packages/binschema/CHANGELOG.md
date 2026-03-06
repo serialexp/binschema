@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 (2026-03-06)
+
+### Features
+
+- add messageCodeTypeName option to ProtocolTransformOptions
+- add bool, bytes, and utf16 sugar types across all generators
+- bundle runtime files during Go/Rust generation
+
+### Bug Fixes
+
+- use MessageCode enum type for discriminator field in Frame
+- add frame_type_name and message_code_type_name to Zod schema
+
+### Documentation
+
+- add llms.txt for BinSchema package
+
+### Chores
+
+- clean up uncommitted changes
+- update task tracking and fix Rust codegen test assertions
+
 ## 0.4.0 (2026-03-02)
 
 ### Features
