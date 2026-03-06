@@ -38,8 +38,6 @@ EOF
 
 ## Task Tracking with CURRENT_TASK.md
 
-**IMPORTANT:** `CURRENT_TASK.md` is a local-only file for tracking work in progress. It is gitignored and should **NEVER** be committed, even after making updates to it.
-
 **Purpose:**
 - Tracks the current task state between conversations
 - Documents completed work with commit references
