@@ -201,8 +201,8 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     const result = generateRust(schema, "Message");
 
     const hasStringType = result.code.includes("pub text: std::string::String");
-    const writesLength = result.code.includes("encoder.write_uint8(self.text.len() as u8)");
-    const readsLength = result.code.includes("let length = decoder.read_uint8()? as usize");
+    const writesLength = result.code.includes("write_byte(self.text.len() as u8)");
+    const readsLength = result.code.includes("let length = decoder.read_byte()? as usize");
     const handlesUtf8 = result.code.includes("String::from_utf8");
 
     if (hasStringType && writesLength && readsLength && handlesUtf8) {
@@ -240,7 +240,8 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
 
     const result = generateRust(schema, "LittleEndianStruct");
 
-    const usesLittleEndian = result.code.includes("Endianness::LittleEndian");
+    // Rust generator uses _le/_be method suffixes instead of Endianness:: enum
+    const usesLittleEndian = result.code.includes("_le(");
 
     if (usesLittleEndian) {
       passed++;
@@ -278,8 +279,9 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
 
     const result = generateRust(schema, "MixedEndian");
 
-    const hasBigEndian = result.code.includes("Endianness::BigEndian");
-    const hasLittleEndian = result.code.includes("Endianness::LittleEndian");
+    // Rust generator uses _be/_le method suffixes instead of Endianness:: enum
+    const hasBigEndian = result.code.includes("_be(");
+    const hasLittleEndian = result.code.includes("_le(");
 
     if (hasBigEndian && hasLittleEndian) {
       passed++;
