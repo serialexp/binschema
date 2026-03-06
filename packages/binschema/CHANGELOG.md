@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 (2026-03-06)
+
+### Features
+
+- add Python code generator, runtime, and test harness
+
 ## 0.5.0 (2026-03-06)
 
 ### Features
