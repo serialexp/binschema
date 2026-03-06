@@ -37,7 +37,7 @@ export interface DocsServeCommand extends DocsCommandBase {
   readonly open: boolean;
 }
 
-export type SupportedLanguage = "ts" | "go" | "rust";
+export type SupportedLanguage = "ts" | "go" | "rust" | "python";
 
 export interface GenerateCommand {
   readonly type: "generate";
@@ -648,7 +648,7 @@ function createRootSpec(): CommandSpec {
   const generate: CommandSpec = {
     name: "generate",
     description: "Emit code for a target language.",
-    usage: ["binschema generate --language <ts|go|rust> --schema <file> --out <dir> [--watch]"],
+    usage: ["binschema generate --language <ts|go|rust|python> --schema <file> --out <dir> [--watch]"],
     options: [
       {
         name: "schema",
@@ -672,7 +672,7 @@ function createRootSpec(): CommandSpec {
         type: "string",
         description: "Target language for generated sources.",
         required: true,
-        valueName: "<ts|go|rust>",
+        valueName: "<ts|go|rust|python>",
         transform: (value) => {
           if (typeof value !== "string") {
             throw new Error("Language must be a string.");
@@ -748,6 +748,9 @@ function normalizeLanguage(value: string): SupportedLanguage | null {
       return "go";
     case "rust":
       return "rust";
+    case "python":
+    case "py":
+      return "python";
     default:
       return null;
   }

@@ -1,35 +1,99 @@
-# Current Task: Inline Choice Field Support for Go Generator — COMPLETE
+# Current Task: Python Code Generator
 
-## Status: COMPLETE (2026-03-05)
+## Status: IN PROGRESS — v1 foundation complete (514/746 tests passing, 69%)
 
-Fixed Go generator and test harness to support `choice` as a direct sequence field (not just inside arrays). This fixes 4 failing test cases across 2 test suites.
+## Goal
 
----
+Add Python as the fourth target language for BinSchema code generation (after TypeScript, Go, and Rust).
 
-## What Was Done
+## Approach
 
-### Go Generator (`packages/binschema/src/generators/go.ts`)
-*Note: These changes were already committed in a previous session.*
+**The TypeScript generator (`src/generators/typescript.ts`) is the reference implementation for everything.** Python's dynamic typing and object model are very similar to TypeScript/JavaScript, so the Python generator should map almost 1:1 from the TypeScript generator. When in doubt about how to handle any feature, edge case, or encoding pattern — look at the TypeScript generator first.
 
-1. **Type mapping** (`mapFieldToGoType`): Changed `case "choice"` to return `interface{}` instead of `"Choice"` (matching discriminated_union pattern)
-2. **Choice type collection** (`collectChoiceTypes`): Added second pass to collect choice types from direct sequence fields (not just arrays)
-3. **Encoding** (`generateEncodeFieldImpl`): Replaced `generateEncodeNestedStruct` with new `generateEncodeInlineChoice` function using type switch
-4. **Decoding**: Added new `generateDecodeInlineChoice` function with peek-based discriminator detection and block scoping for multiple choice fields
-5. **Size calculation** (`generateFieldSizeForType`): Added `case "choice"` alongside `discriminated_union`
+### Design Decisions Made
 
-### Go Test Harness (`go/test/compile_batch.go`)
-1. **`formatValueWithSchema`**: Added handler for `fieldType == "choice"`
-2. **`formatStructValue`**: Added handler for inline choice fields
-3. **`isStringUsedAsVariant`**: Added check for inline choice field variant types
-4. **`formatInlineChoiceValue`**: New function to format flat choice values as `&prefix_VariantType{fields...}`
+- **Plain dicts** for generated types (not dataclasses) — matches JS object literal style
+- **Python 3.12+** — uses `uv` for dependency management
+- **`json5` package** for parsing test JSON5 files
 
-### Key Design Decisions
-- Choice values are **flat** (`{type: "X", field1: v1}`) unlike discriminated_union which wraps in `{type, value}`
-- Discriminator is auto-detected from first field's `const` value in first choice type
-- Block scoping prevents duplicate `const discriminator` declarations when multiple choice fields exist in same struct
+## What's Done
 
-## Test Results
-- `inline_choice_field`: 2/2 passed
-- `multiple_inline_choice_fields`: 2/2 passed
-- No regressions in TypeScript tests (1015 passed, 3 pre-existing Rust generator failures)
-- Pre-existing Go failures (dns_label_* string type alias issue) noted in TODO.md
+### Files Created
+
+- `python/pyproject.toml` — uv project config, depends on `json5`
+- `python/runtime/__init__.py` — re-exports BitStreamEncoder/Decoder
+- `python/runtime/bitstream.py` — full port of `src/runtime/bit-stream.ts` (encoder, decoder, seekable decoder)
+- `python/test/__init__.py`
+- `python/test/run_tests.py` — test harness: loads JSON5 test suites, generates Python code via CLI, runs encode/decode tests
+- `packages/binschema/src/generators/python.ts` — Python code generator
+
+### Files Modified
+
+- `packages/binschema/src/cli/command-parser.ts` — added `"python"` to `SupportedLanguage`
+- `packages/binschema/src/cli/index.ts` — added `case "python"` handler with `runPythonGenerator()`
+- `justfile` — added `test-python` and `test-python-debug` recipes (use `uv run`)
+
+### What Works (514 tests passing)
+
+- All primitive types: uint8/16/32/64, int8/16/32/64, float32/64, bool
+- Both endiannesses (big/little) and bit orderings (msb/lsb)
+- Simple and nested structs
+- Length-prefixed arrays (uint8/16/32/64 length types)
+- Length-prefixed strings and bytes
+- Fixed-length arrays, strings, bytes
+- Field-referenced arrays (count from another field)
+- Null-terminated arrays and strings
+- EOF-terminated arrays
+- Variable-length integers (DER, LEB128, EBML, VLQ)
+- Enum types
+- Bitfield types
+- Basic discriminated unions
+- Basic choice types
+- Optional fields (presence-based)
+- Const fields
+- Computed count_of fields (basic)
+
+### What's Failing (232 tests)
+
+Key failure categories:
+
+1. **`length_prefixed_items` arrays** — items need per-item byte-length prefix (different from array-level length prefix). The `item_length_type` field is not yet handled.
+
+2. **Computed fields (complex)** — `length_of` with `from_after_field`, `position_of`, `crc32_of`, back-patching. The generator writes placeholders but doesn't back-patch.
+
+3. **Optional field decode** — decoded `None` values stay in the result dict but expected output omits them. Need to strip `None` values from decoded dicts.
+
+4. **Conditional fields** — conditional expression conversion to Python is incomplete. BigInt bitmask conditionals and nested parent conditionals fail.
+
+5. **Parent references (`../`)** — computed fields referencing parent struct fields aren't supported yet.
+
+6. **Back references / pointers** — `back_reference` type not implemented.
+
+7. **Variant-terminated arrays** — `variant_terminated` kind not implemented.
+
+8. **String type references** — standalone string types used as struct field types.
+
+9. **DNS compression pointers** — generates invalid Python (empty for loop body).
+
+## Next Steps
+
+Priority order for getting more tests to pass:
+
+1. Fix optional field decode — strip `None` from result dicts (easy win, ~10 tests)
+2. Fix conditional expression conversion (medium, ~15 tests)
+3. Implement `length_prefixed_items` with `item_length_type` (medium, ~10 tests)
+4. Implement computed field back-patching for `length_of`/`from_after_field` (hard, ~30 tests)
+5. Implement parent reference (`../`) support (hard, ~15 tests)
+6. Implement remaining array kinds: variant_terminated, signature_terminated
+
+## Commands
+
+```bash
+just test-python                    # Run all Python tests
+just test-python primitives         # Filter by name
+just test-python-debug              # Debug mode
+```
+
+## Previous Task (Complete)
+
+Inline Choice Field Support for Go Generator — completed 2026-03-05. See git log for details.

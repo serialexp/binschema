@@ -60,6 +60,17 @@ test-rust-errors:
 test-rust-categorize:
     python3 rust/categorize-failures.py < rust/test-output.txt
 
+# Run Python tests
+# Examples:
+#   just test-python
+#   just test-python primitives
+test-python filter="" report="":
+    cd python && PYTHON_TEST_FILTER="{{filter}}" PYTHON_TEST_REPORT="{{report}}" uv run python test/run_tests.py
+
+# Run Python tests with debug output
+test-python-debug filter="" report="":
+    cd python && DEBUG_GENERATED=1 PYTHON_TEST_FILTER="{{filter}}" PYTHON_TEST_REPORT="{{report}}" uv run python test/run_tests.py
+
 # ========== Website ==========
 
 # Regenerate website example code from the demo sensor schema

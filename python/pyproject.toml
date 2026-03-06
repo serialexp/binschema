@@ -1,0 +1,8 @@
+[project]
+name = "binschema-python"
+version = "0.1.0"
+description = "BinSchema Python runtime and test harness"
+requires-python = ">=3.12"
+dependencies = [
+    "json5>=0.13.0",
+]

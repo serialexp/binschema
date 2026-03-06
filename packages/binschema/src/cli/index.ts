@@ -259,6 +259,19 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       console.log(`Generated Rust sources → ${join(absoluteOut, "src", "generated.rs")}`);
       break;
     }
+    case "python": {
+      const typeName = resolveTypeName(schema);
+      if (!typeName) {
+        throw new Error("Schema does not define any types; cannot generate Python code.");
+      }
+      await runPythonGenerator({
+        schema,
+        typeName,
+        outputDir: absoluteOut,
+      });
+      console.log(`Generated Python sources → ${join(absoluteOut, "generated.py")}`);
+      break;
+    }
     default:
       console.error(`Unsupported language: ${command.language}`);
       process.exitCode = 1;
@@ -458,6 +471,56 @@ path = "src/lib.rs"
   }
 
   console.log(`Copied Rust runtime crate → ${runtimeCrateDir}/`);
+}
+
+/**
+ * Find the Python runtime source files. Searches:
+ * 1. python-runtime/ next to the package root (published npm package)
+ * 2. ../../python/runtime/ relative to package root (development in monorepo)
+ */
+function findPythonRuntimeDir(): string | null {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = resolve(__dirname, "..", "..");
+
+  // Published package: python-runtime/ in package root
+  const publishedPath = join(packageRoot, "python-runtime");
+  if (existsSync(publishedPath)) return publishedPath;
+
+  // Development: monorepo structure
+  const devPath = resolve(packageRoot, "..", "..", "python", "runtime");
+  if (existsSync(devPath)) return devPath;
+
+  return null;
+}
+
+async function runPythonGenerator(opts: { schema: BinarySchema; typeName: string; outputDir: string }): Promise<void> {
+  mkdirSync(opts.outputDir, { recursive: true });
+
+  // Copy runtime files to outputDir/binschema_runtime/
+  const runtimeSrcDir = findPythonRuntimeDir();
+  if (!runtimeSrcDir) {
+    throw new Error(
+      "Could not find Python runtime source files. " +
+      "If running from source, ensure the python/runtime/ directory exists."
+    );
+  }
+
+  const runtimeDestDir = join(opts.outputDir, "binschema_runtime");
+  mkdirSync(runtimeDestDir, { recursive: true });
+
+  const runtimeFiles = readdirSync(runtimeSrcDir).filter(f => f.endsWith(".py"));
+  for (const file of runtimeFiles) {
+    const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
+    writeFileSync(join(runtimeDestDir, file), content, "utf-8");
+  }
+
+  const { generatePython } = await import("../generators/python.js");
+  const result = generatePython(opts.schema, opts.typeName);
+
+  const outputPath = join(opts.outputDir, "generated.py");
+  writeFileSync(outputPath, result.code);
+
+  console.log(`Copied Python runtime files → ${runtimeDestDir}/`);
 }
 
 function execCommand(cmd: string, args: string[], options: { cwd: string }): Promise<void> {
