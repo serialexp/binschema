@@ -231,6 +231,36 @@ func BenchmarkCResponseDecode(b *testing.B) {
 	}
 }
 
+// BenchmarkBinSchemaQueryEncode benchmarks BinSchema DNS query encoding
+func BenchmarkBinSchemaQueryEncode(b *testing.B) {
+	msg, err := binschema.DecodeDnsMessage(dnsQueryPacket)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := msg.Encode()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkBinSchemaResponseEncode benchmarks BinSchema DNS response encoding
+func BenchmarkBinSchemaResponseEncode(b *testing.B) {
+	msg, err := binschema.DecodeDnsMessage(dnsResponsePacket)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := msg.Encode()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestBinSchemaDecodeOptimized verifies optimized decoding works
 func TestBinSchemaDecodeOptimized(t *testing.T) {
 	result, err := binschema.DecodeDnsMessageOptimized(dnsQueryPacket)

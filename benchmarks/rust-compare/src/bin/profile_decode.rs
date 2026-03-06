@@ -3,7 +3,7 @@
 /// Then:     perf record -g ./target/release/profile_decode
 ///           perf script | inferno-collapse-perf | inferno-flamegraph > flamegraph.svg
 
-use binschema_bench::dns_message::DnsMessageOutput;
+use binschema_bench::dns_message::DnsMessage;
 
 const ITERATIONS: usize = 2_000_000;
 const WARMUP: usize = 10_000;
@@ -29,8 +29,8 @@ const DNS_RESPONSE_PACKET: &[u8] = &[
 fn main() {
     // Warmup
     for _ in 0..WARMUP {
-        let _ = DnsMessageOutput::decode(DNS_QUERY_PACKET).unwrap();
-        let _ = DnsMessageOutput::decode(DNS_RESPONSE_PACKET).unwrap();
+        let _ = DnsMessage::decode(DNS_QUERY_PACKET).unwrap();
+        let _ = DnsMessage::decode(DNS_RESPONSE_PACKET).unwrap();
     }
 
     let start = std::time::Instant::now();
@@ -38,7 +38,7 @@ fn main() {
     // Main loop — query decode
     for _ in 0..ITERATIONS {
         let _ = std::hint::black_box(
-            DnsMessageOutput::decode(std::hint::black_box(DNS_QUERY_PACKET))
+            DnsMessage::decode(std::hint::black_box(DNS_QUERY_PACKET))
         );
     }
 
@@ -48,7 +48,7 @@ fn main() {
     let start2 = std::time::Instant::now();
     for _ in 0..ITERATIONS {
         let _ = std::hint::black_box(
-            DnsMessageOutput::decode(std::hint::black_box(DNS_RESPONSE_PACKET))
+            DnsMessage::decode(std::hint::black_box(DNS_RESPONSE_PACKET))
         );
     }
 

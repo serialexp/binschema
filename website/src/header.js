@@ -11,8 +11,8 @@ const HEADER_HTML = `
       </div>
       <nav class="site-nav">
         <a href="/" data-page="home">Home</a>
-        <a href="/#schema-reference" data-page="home">Schema Reference</a>
-        <a href="/#examples" data-page="home">Examples</a>
+        <a href="/#schema-reference">Schema Reference</a>
+        <a href="/#examples">Examples</a>
         <a href="/recipes.html" data-page="recipes">Recipes</a>
         <a href="/playground.html" data-page="playground">Playground</a>
         <a href="https://github.com/serialexp/binschema" target="_blank" rel="noreferrer">GitHub</a>
@@ -23,6 +23,19 @@ export function initHeader() {
   const header = document.querySelector('header.site-header');
   if (!header) return;
   header.innerHTML = HEADER_HTML;
+
+  // Determine current page from pathname
+  const path = window.location.pathname;
+  let currentPage = 'home';
+  if (path.includes('recipes')) currentPage = 'recipes';
+  else if (path.includes('playground')) currentPage = 'playground';
+
+  // Mark matching nav links as active
+  header.querySelectorAll('.site-nav a[data-page]').forEach(link => {
+    if (link.dataset.page === currentPage) {
+      link.classList.add('active');
+    }
+  });
 }
 
 initHeader();

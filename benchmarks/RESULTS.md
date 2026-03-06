@@ -15,7 +15,7 @@ The C parser is hand-written and serves as the theoretical floor.
 | **C hand-written**           |          32.2  |         1 |       16 |
 | Go BinSchema (optimized)     |          85.8  |         3 |      288 |
 | Go BinSchema (inline)        |         143.6  |         9 |      328 |
-| **Rust BinSchema**           |       **178**  |       n/a |      n/a |
+| **Rust BinSchema**           |       **136**  |       n/a |      n/a |
 | Go BinSchema (fast/pooled)   |         242.2  |         8 |      336 |
 | Go BinSchema (standard)      |         284.3  |        14 |      376 |
 | Go Kaitai Struct             |         302.9  |        17 |      840 |
@@ -29,7 +29,7 @@ The C parser is hand-written and serves as the theoretical floor.
 | **C hand-written**           |          34.1  |         1 |       16 |
 | Go BinSchema (optimized)     |         151.5  |         5 |      576 |
 | Go BinSchema (inline)        |         230.8  |        17 |      592 |
-| **Rust BinSchema**           |       **296**  |       n/a |      n/a |
+| **Rust BinSchema**           |       **225**  |       n/a |      n/a |
 | Go BinSchema (fast/pooled)   |         402.4  |        17 |      528 |
 | Go BinSchema (standard)      |         472.6  |        24 |      640 |
 | Go Kaitai Struct             |         482.7  |        28 |    1,280 |
@@ -38,18 +38,21 @@ The C parser is hand-written and serves as the theoretical floor.
 
 ### DNS Encode (Rust only — BinSchema is the only tool that encodes)
 
-| Packet   | Encode (ns/op) |
-|----------|---------------:|
-| Query    |         392.2  |
-| Response |         638.2  |
+| Packet   | Encode (ns/op) | Encode reuse (ns/op) |
+|----------|---------------:|---------------------:|
+| Query    |         299.4  |                186.1 |
+| Response |         426.9  |                309.3 |
+
+*"Encode reuse" uses `encode_into` with a pre-allocated encoder — no allocation per call.*
 
 ## Key Takeaways
 
-### Rust BinSchema: ~178 ns query, ~296 ns response
+### Rust BinSchema: ~136 ns query, ~225 ns response
 
 Rust BinSchema (standard generated code, no hand-optimization) decodes a DNS query
-in **178 ns** — faster than standard Go BinSchema (284 ns) and both Kaitai
-implementations, but slower than the hand-optimized Go variants.
+in **136 ns** — faster than standard Go BinSchema (284 ns), both Kaitai
+implementations, and the Go inline variant (144 ns). Only the hand-optimized Go
+variant (86 ns) is faster.
 
 This makes sense: the Rust runtime uses `Vec<u8>` allocations where the optimized Go
 variants use zero-copy slices and value types. The Rust generated code has room for

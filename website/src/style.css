@@ -68,26 +68,21 @@ a:hover {
 }
 
 .site-nav a {
-  color: rgba(255, 255, 255, 0.95);
+  color: rgba(255, 255, 255, 0.9);
   font-weight: 500;
-  position: relative;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  transition: background 150ms ease, color 150ms ease;
 }
 
-.site-nav a::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -0.2rem;
-  width: 100%;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.7);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 150ms ease;
+.site-nav a:hover {
+  background: rgba(255, 255, 255, 0.15);
+  text-decoration: none;
 }
 
-.site-nav a:hover::after {
-  transform: scaleX(1);
+.site-nav a.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 .hero {
@@ -551,6 +546,82 @@ code[class*="language-"] {
   font-size: 0.78rem;
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* === Benchmark Tables === */
+
+.bench-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.bench-table-wrap h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  color: var(--primary-dark);
+}
+
+.bench-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.bench-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.bench-table th:not(:first-child) {
+  text-align: right;
+}
+
+.bench-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.bench-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.bench-table tr.bench-baseline td {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.bench-table tr.bench-highlight td:first-child {
+  font-weight: 600;
+}
+
+.bench-table tr.bench-highlight td:nth-child(2) {
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
+.bench-table td.bench-na {
+  color: var(--border);
+}
+
+.bench-notes {
+  margin-top: 1.25rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.bench-notes p {
+  margin: 0;
 }
 
 .site-footer {

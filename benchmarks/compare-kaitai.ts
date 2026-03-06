@@ -239,6 +239,36 @@ function benchmarkBinSchema(module: any, packet: Uint8Array): BenchResult {
 }
 
 /**
+ * Benchmark BinSchema encode
+ */
+function benchmarkBinSchemaEncode(module: any, packet: Uint8Array): { encodeNs: number; encodeOpsPerSec: number } {
+  const DecoderClass = module.DnsMessageDecoder;
+  const EncoderClass = module.DnsMessageEncoder;
+
+  // Decode first to get a value to encode
+  const value = new DecoderClass(packet).decode();
+
+  // Warmup
+  for (let i = 0; i < WARMUP; i++) {
+    new EncoderClass().encode(value);
+  }
+
+  // Encode benchmark
+  const encodeStart = performance.now();
+  for (let i = 0; i < ITERATIONS; i++) {
+    new EncoderClass().encode(value);
+  }
+  const encodeEnd = performance.now();
+
+  const encodeMs = encodeEnd - encodeStart;
+
+  return {
+    encodeNs: (encodeMs * 1_000_000) / ITERATIONS,
+    encodeOpsPerSec: ITERATIONS / (encodeMs / 1000),
+  };
+}
+
+/**
  * Main entry point
  */
 async function main() {
@@ -306,19 +336,31 @@ async function main() {
 
   responseResults.sort((a, b) => a.decodeNs - b.decodeNs);
 
+  // Run encode benchmarks
+  console.log("\n" + "-".repeat(80));
+  console.log("BinSchema Encode benchmarks (Kaitai is decode-only)");
+  console.log("-".repeat(80));
+
+  console.log("  Benchmarking BinSchema Query Encode...");
+  const queryEncode = benchmarkBinSchemaEncode(binSchemaModule, queryPacket);
+
+  console.log("  Benchmarking BinSchema Response Encode...");
+  const responseEncode = benchmarkBinSchemaEncode(binSchemaModule, responsePacket);
+
   // Print results
   console.log("\n" + "=".repeat(80));
   console.log("Results - DNS Query (no compression)");
   console.log("=".repeat(80));
 
   console.log(
-    `\n${"Library".padEnd(20)} ${"Decode".padStart(12)} ${"Ops/sec".padStart(12)}`
+    `\n${"Library".padEnd(20)} ${"Decode".padStart(12)} ${"Encode".padStart(12)} ${"Ops/sec".padStart(12)}`
   );
-  console.log("-".repeat(48));
+  console.log("-".repeat(60));
 
   for (const r of queryResults) {
+    const encodeStr = r.library === "BinSchema" ? formatNs(queryEncode.encodeNs) : "N/A";
     console.log(
-      `${r.library.padEnd(20)} ${formatNs(r.decodeNs).padStart(12)} ${formatOps(r.decodeOpsPerSec).padStart(12)}`
+      `${r.library.padEnd(20)} ${formatNs(r.decodeNs).padStart(12)} ${encodeStr.padStart(12)} ${formatOps(r.decodeOpsPerSec).padStart(12)}`
     );
   }
 
@@ -327,13 +369,14 @@ async function main() {
   console.log("=".repeat(80));
 
   console.log(
-    `\n${"Library".padEnd(20)} ${"Decode".padStart(12)} ${"Ops/sec".padStart(12)}`
+    `\n${"Library".padEnd(20)} ${"Decode".padStart(12)} ${"Encode".padStart(12)} ${"Ops/sec".padStart(12)}`
   );
-  console.log("-".repeat(48));
+  console.log("-".repeat(60));
 
   for (const r of responseResults) {
+    const encodeStr = r.library === "BinSchema" ? formatNs(responseEncode.encodeNs) : "N/A";
     console.log(
-      `${r.library.padEnd(20)} ${formatNs(r.decodeNs).padStart(12)} ${formatOps(r.decodeOpsPerSec).padStart(12)}`
+      `${r.library.padEnd(20)} ${formatNs(r.decodeNs).padStart(12)} ${encodeStr.padStart(12)} ${formatOps(r.decodeOpsPerSec).padStart(12)}`
     );
   }
 
@@ -351,6 +394,9 @@ async function main() {
   console.log("=".repeat(80));
   console.log(`\nDNS Query:    ${queryFastest.library} is ${queryRatio.toFixed(2)}x faster than ${querySlowest.library}`);
   console.log(`DNS Response: ${respFastest.library} is ${respRatio.toFixed(2)}x faster than ${respSlowest.library}`);
+  console.log(`\nBinSchema Encode:`);
+  console.log(`  Query:    ${formatNs(queryEncode.encodeNs)}/op (${formatOps(queryEncode.encodeOpsPerSec)} ops/s)`);
+  console.log(`  Response: ${formatNs(responseEncode.encodeNs)}/op (${formatOps(responseEncode.encodeOpsPerSec)} ops/s)`);
 
   console.log("\n" + "=".repeat(80));
   console.log("Notes");

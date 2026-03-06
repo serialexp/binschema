@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use binschema_bench::dns_message::DnsMessageOutput;
+use binschema_bench::dns_message::DnsMessage;
+use binschema_runtime::{BitStreamEncoder, BitOrder, EncodeContext};
 
 /// DNS query packet for "example.com" type A (29 bytes)
 /// Same packet used in the Go and TypeScript benchmarks.
@@ -45,107 +46,84 @@ const DNS_RESPONSE_PACKET: &[u8] = &[
 ];
 
 fn bench_decode_query(c: &mut Criterion) {
-    // Verify it works first
-    let msg = DnsMessageOutput::decode(DNS_QUERY_PACKET).expect("decode query");
+    let msg = DnsMessage::decode(DNS_QUERY_PACKET).expect("decode query");
     assert_eq!(msg.id, 0x1234);
     assert_eq!(msg.qdcount, 1);
     assert_eq!(msg.ancount, 0);
 
     c.bench_function("BinSchemaRust_QueryDecode", |b| {
         b.iter(|| {
-            DnsMessageOutput::decode(black_box(DNS_QUERY_PACKET)).unwrap()
+            DnsMessage::decode(black_box(DNS_QUERY_PACKET)).unwrap()
         })
     });
 }
 
 fn bench_decode_response(c: &mut Criterion) {
-    // Verify it works first
-    let msg = DnsMessageOutput::decode(DNS_RESPONSE_PACKET).expect("decode response");
+    let msg = DnsMessage::decode(DNS_RESPONSE_PACKET).expect("decode response");
     assert_eq!(msg.id, 0x1234);
     assert_eq!(msg.qdcount, 1);
     assert_eq!(msg.ancount, 1);
 
     c.bench_function("BinSchemaRust_ResponseDecode", |b| {
         b.iter(|| {
-            DnsMessageOutput::decode(black_box(DNS_RESPONSE_PACKET)).unwrap()
+            DnsMessage::decode(black_box(DNS_RESPONSE_PACKET)).unwrap()
         })
     });
 }
 
 fn bench_encode_query(c: &mut Criterion) {
-    use binschema_bench::dns_message::*;
+    let msg = DnsMessage::decode(DNS_QUERY_PACKET).expect("decode query for encode");
 
-    let msg = DnsMessageOutput::decode(DNS_QUERY_PACKET).expect("decode query for encode");
-
-    // Build the input from the decoded output
-    let input = DnsMessageInput {
-        id: msg.id,
-        flags: msg.flags.clone(),
-        qdcount: msg.qdcount,
-        ancount: msg.ancount,
-        nscount: msg.nscount,
-        arcount: msg.arcount,
-        questions: msg.questions.iter().map(|q| QuestionInput {
-            qname: q.qname.clone(),
-            qtype: q.qtype,
-            qclass: q.qclass,
-        }).collect(),
-        answers: vec![],
-        authority: vec![],
-        additional: vec![],
-    };
-
-    // Verify encode produces valid bytes
-    let encoded = input.encode().expect("encode query");
+    let encoded = msg.encode().expect("encode query");
     assert!(!encoded.is_empty());
 
     c.bench_function("BinSchemaRust_QueryEncode", |b| {
         b.iter(|| {
-            black_box(&input).encode().unwrap()
+            black_box(&msg).encode().unwrap()
+        })
+    });
+}
+
+fn bench_encode_query_reuse(c: &mut Criterion) {
+    let msg = DnsMessage::decode(DNS_QUERY_PACKET).expect("decode query for encode");
+    let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+    let ctx = EncodeContext::new();
+
+    c.bench_function("BinSchemaRust_QueryEncode_Reuse", |b| {
+        b.iter(|| {
+            encoder.clear();
+            black_box(&msg).encode_into_with_context(&mut encoder, &ctx).unwrap();
+            black_box(&encoder);
         })
     });
 }
 
 fn bench_encode_response(c: &mut Criterion) {
-    use binschema_bench::dns_message::*;
+    let msg = DnsMessage::decode(DNS_RESPONSE_PACKET).expect("decode response for encode");
 
-    let msg = DnsMessageOutput::decode(DNS_RESPONSE_PACKET).expect("decode response for encode");
-
-    // Build the input from the decoded output
-    let input = DnsMessageInput {
-        id: msg.id,
-        flags: msg.flags.clone(),
-        qdcount: msg.qdcount,
-        ancount: msg.ancount,
-        nscount: msg.nscount,
-        arcount: msg.arcount,
-        questions: msg.questions.iter().map(|q| QuestionInput {
-            qname: q.qname.clone(),
-            qtype: q.qtype,
-            qclass: q.qclass,
-        }).collect(),
-        answers: msg.answers.iter().map(|rr| ResourceRecordInput {
-            name: rr.name.clone(),
-            r#type: rr.r#type,
-            class: rr.class,
-            ttl: rr.ttl,
-            rdlength: rr.rdlength,
-            rdata: rr.rdata.clone(),
-        }).collect(),
-        authority: vec![],
-        additional: vec![],
-    };
-
-    // Verify encode produces valid bytes
-    let encoded = input.encode().expect("encode response");
+    let encoded = msg.encode().expect("encode response");
     assert!(!encoded.is_empty());
 
     c.bench_function("BinSchemaRust_ResponseEncode", |b| {
         b.iter(|| {
-            black_box(&input).encode().unwrap()
+            black_box(&msg).encode().unwrap()
         })
     });
 }
 
-criterion_group!(benches, bench_decode_query, bench_decode_response, bench_encode_query, bench_encode_response);
+fn bench_encode_response_reuse(c: &mut Criterion) {
+    let msg = DnsMessage::decode(DNS_RESPONSE_PACKET).expect("decode response for encode");
+    let mut encoder = BitStreamEncoder::new(BitOrder::MsbFirst);
+    let ctx = EncodeContext::new();
+
+    c.bench_function("BinSchemaRust_ResponseEncode_Reuse", |b| {
+        b.iter(|| {
+            encoder.clear();
+            black_box(&msg).encode_into_with_context(&mut encoder, &ctx).unwrap();
+            black_box(&encoder);
+        })
+    });
+}
+
+criterion_group!(benches, bench_decode_query, bench_decode_response, bench_encode_query, bench_encode_query_reuse, bench_encode_response, bench_encode_response_reuse);
 criterion_main!(benches);
