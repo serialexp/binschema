@@ -123,6 +123,26 @@ impl FieldValue {
         }
     }
 
+    /// Count the occurrences of a type in an Items list. Used by `last<Type>`
+    /// selectors to compute the index of the final matching item.
+    pub fn count_items_of_type(&self, type_name: &str) -> usize {
+        match self {
+            FieldValue::Items(items) => items.iter().filter(|(t, _)| t == type_name).count(),
+            _ => 0,
+        }
+    }
+
+    /// Convenience accessor for `first<Type>` selectors.
+    pub fn first_item_of_type(&self, type_name: &str) -> Option<&HashMap<std::string::String, FieldValue>> {
+        self.get_nth_item_of_type(type_name, 0)
+    }
+
+    /// Convenience accessor for `last<Type>` selectors.
+    pub fn last_item_of_type(&self, type_name: &str) -> Option<&HashMap<std::string::String, FieldValue>> {
+        let count = self.count_items_of_type(type_name);
+        if count == 0 { None } else { self.get_nth_item_of_type(type_name, count - 1) }
+    }
+
     /// Get the "length_of" value for this field.
     /// For scalar types, returns the value itself (like TypeScript's `typeof x === 'number' ? x : x.length`).
     /// For Bytes/String, returns the byte length.

@@ -361,8 +361,10 @@ export function generateRust(
 /**
  * Parse first/last selector pattern like "../sections[first<FileData>]"
  */
-function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: string; filterType: string; selector: "first" | "last" } | null {
-  const match = target.match(/^((?:\.\.\/)+)([^\[]+)\[(first|last)<(\w+)>\]$/);
+function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: string; filterType: string; selector: "first" | "last"; remainingPath: string } | null {
+  // Allow an optional sub-field path suffix (e.g. ".payload") so we can target
+  // sub-fields of the matched item, mirroring parseCorrespondingTarget.
+  const match = target.match(/^((?:\.\.\/)+)([^\[]+)\[(first|last)<(\w+)>\](\..*)?$/);
   if (!match) return null;
 
   const parentPart = match[1];
@@ -375,7 +377,8 @@ function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: st
     levelsUp,
     arrayPath: match[2],
     filterType: match[4],
-    selector: match[3] as "first" | "last"
+    selector: match[3] as "first" | "last",
+    remainingPath: match[5] || ""
   };
 }
 
@@ -3783,13 +3786,33 @@ function generateEncodeComputedField(
     // Check for first/last selector in length_of target (MUST come before simple parent ref check)
     const firstLastInfoLen = parseFirstLastTarget(target);
     if (firstLastInfoLen) {
-      // length_of with first/last selector - look up item from tracking, compute its encoded size
+      // length_of with first/last selector - find the first/last item of the
+      // given type in the parent array, then take either its `_encoded_size`
+      // (no sub-field path) or the length of a named sub-field.
       const { arrayPath, filterType, selector } = firstLastInfoLen;
-      const positionKey = `${arrayPath}_${filterType}`;
       const ctxRef = ctxVar || "child_ctx";
-      lines.push(`${indent}// Computed field '${fieldName}': length_of with ${selector}<${filterType}>`);
-      // TODO: full implementation of length_of with selectors
-      lines.push(`${indent}let ${computedVarName} = 0_usize; // length_of with selector not fully implemented`);
+      const remainingPath = target.substring(target.indexOf(']') + 1);
+      const fieldAccess = remainingPath ? remainingPath.slice(1) : ""; // strip leading "."
+      const accessor = selector === "first" ? "first_item_of_type" : "last_item_of_type";
+
+      lines.push(`${indent}// Computed field '${fieldName}': length_of '${target}' (${selector}<${filterType}>${remainingPath || ""})`);
+      lines.push(`${indent}let ${computedVarName} = match ${ctxRef}.find_parent_field("${arrayPath}") {`);
+      lines.push(`${indent}    Some(array_val) => {`);
+      lines.push(`${indent}        match array_val.${accessor}("${filterType}") {`);
+      if (fieldAccess) {
+        lines.push(`${indent}            Some(item_fields) => item_fields.get("${fieldAccess}").map(|v| v.length_of_value()).unwrap_or(0),`);
+      } else {
+        lines.push(`${indent}            Some(item_fields) => item_fields.get("_encoded_size").map(|v| v.length_of_value()).unwrap_or(0),`);
+      }
+      lines.push(`${indent}            None => 0,`);
+      lines.push(`${indent}        }`);
+      lines.push(`${indent}    },`);
+      lines.push(`${indent}    None => 0,`);
+      lines.push(`${indent}};`);
+      // Apply offset if specified
+      if (computed.offset !== undefined && computed.offset !== 0) {
+        lines.push(`${indent}let ${computedVarName} = ${computedVarName} + ${computed.offset};`);
+      }
       lines.push(...generateComputedFieldWrite(field, computedVarName, rustEndianness, indent));
       return lines;
     }
@@ -3978,9 +4001,26 @@ function generateEncodeComputedField(
     // Check for first/last selector in crc32_of target
     const firstLastInfoCrc = parseFirstLastTarget(target);
     if (firstLastInfoCrc) {
-      // crc32_of with first/last selector - not yet needed, generate stub
-      lines.push(`${indent}// Computed field '${fieldName}': crc32_of with ${firstLastInfoCrc.selector}<${firstLastInfoCrc.filterType}> (not implemented)`);
-      lines.push(`${indent}let ${computedVarName} = 0_u32;`);
+      const { arrayPath, filterType, selector } = firstLastInfoCrc;
+      const ctxRef = ctxVar || "child_ctx";
+      const remainingPath = target.substring(target.indexOf(']') + 1);
+      const fieldAccess = remainingPath ? remainingPath.slice(1) : "";
+      const accessor = selector === "first" ? "first_item_of_type" : "last_item_of_type";
+
+      lines.push(`${indent}// Computed field '${fieldName}': crc32_of '${target}' (${selector}<${filterType}>${remainingPath || ""})`);
+      lines.push(`${indent}let ${computedVarName} = match ${ctxRef}.find_parent_field("${arrayPath}") {`);
+      lines.push(`${indent}    Some(array_val) => {`);
+      lines.push(`${indent}        match array_val.${accessor}("${filterType}") {`);
+      if (fieldAccess) {
+        lines.push(`${indent}            Some(item_fields) => item_fields.get("${fieldAccess}").map(|v| binschema_runtime::crc32(&v.to_bytes())).unwrap_or(0),`);
+      } else {
+        lines.push(`${indent}            Some(item_fields) => item_fields.get("_encoded_size").map(|v| binschema_runtime::crc32(&v.to_bytes())).unwrap_or(0),`);
+      }
+      lines.push(`${indent}            None => 0,`);
+      lines.push(`${indent}        }`);
+      lines.push(`${indent}    },`);
+      lines.push(`${indent}    None => 0,`);
+      lines.push(`${indent}};`);
       lines.push(`${indent}encoder.write_uint32(${computedVarName}, Endianness::${rustEndianness});`);
       return lines;
     }

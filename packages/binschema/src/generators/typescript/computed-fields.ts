@@ -463,6 +463,7 @@ export function parseCorrespondingTarget(target: string): { arrayPath: string; f
  * Example: "../sections[first<DataBlock>]" -> { arrayPath: "sections", filterType: "DataBlock", selector: "first" }
  */
 export function parseFirstLastTarget(target: string): { arrayPath: string; filterType: string; selector: "first" | "last" } | null {
+  if (typeof target !== "string") return null;
   const match = target.match(/(?:\.\.\/)*([^[]+)\[(first|last)<(\w+)>\]/);
   if (!match) return null;
   return {
@@ -518,7 +519,9 @@ export function detectFirstLastTracking(arrayFieldName: string, schema: BinarySc
 
     for (const field of fields) {
       const fAny = field as any;
-      if (fAny.computed?.type === "position_of") {
+      if (fAny.computed?.type === "position_of" ||
+          fAny.computed?.type === "length_of" ||
+          fAny.computed?.type === "crc32_of") {
         const firstLastInfo = parseFirstLastTarget(fAny.computed.target);
         if (firstLastInfo && firstLastInfo.arrayPath === arrayFieldName) {
           typesNeedingTracking.add(firstLastInfo.filterType);
@@ -966,11 +969,29 @@ export function generateEncodeComputedField(
       const { arrayPath, filterType, selector } = firstLastInfo;
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
-      code += `${indent}// Look up ${selector} item from position tracking\n`;
-      code += `${indent}const ${fieldName}_positions_len = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
-      code += `${indent}const targetIndex = ${fieldName}_positions_len.length > 0 ? ${selector === "first" ? "0" : `${fieldName}_positions_len.length - 1`} : undefined;\n`;
-      code += `${indent}if (targetIndex === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
-      code += `${indent}const targetItem = ${baseObjectPath}.${arrayPath}[targetIndex];\n`;
+      // Resolve the array: prefer the immediate object scope, but fall back to
+      // walking up context.parents (the computed field may live in a sub-type
+      // whose value doesn't have the array directly).
+      code += `${indent}let ${fieldName}_array_len: any = (${baseObjectPath} && (${baseObjectPath} as any).${arrayPath});\n`;
+      code += `${indent}if (!${fieldName}_array_len) {\n`;
+      code += `${indent}  for (const parent of context.parents) {\n`;
+      code += `${indent}    if (parent && (parent as any).${arrayPath}) { ${fieldName}_array_len = (parent as any).${arrayPath}; break; }\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (!${fieldName}_array_len) throw new Error('Array \\'${arrayPath}\\' not found in scope or parent context');\n`;
+      // Walk the array to find the first/last item matching the filter type.
+      // If items have a `.type` discriminator, filter by it; if items have no
+      // `.type` field at all (homogeneous array), every item matches.
+      code += `${indent}let targetItem: any = undefined;\n`;
+      if (selector === "first") {
+        code += `${indent}for (let i = 0; i < ${fieldName}_array_len.length; i++) {\n`;
+      } else {
+        code += `${indent}for (let i = ${fieldName}_array_len.length - 1; i >= 0; i--) {\n`;
+      }
+      code += `${indent}  const it = ${fieldName}_array_len[i];\n`;
+      code += `${indent}  if (it && (it.type === undefined || it.type === '${filterType}')) { targetItem = it; break; }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (targetItem === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
 
       const targetPath = `targetItem${remainingPath}`;
 
@@ -1211,11 +1232,26 @@ export function generateEncodeComputedField(
       const { arrayPath, filterType, selector } = firstLastInfo;
       const remainingPath = targetField.substring(targetField.indexOf(']') + 1);
 
-      code += `${indent}// Look up ${selector} item from position tracking\n`;
-      code += `${indent}const ${fieldName}_positions_crc = context.positions.get('${arrayPath}_${filterType}') || [];\n`;
-      code += `${indent}const targetIndex = ${fieldName}_positions_crc.length > 0 ? ${selector === "first" ? "0" : `${fieldName}_positions_crc.length - 1`} : undefined;\n`;
-      code += `${indent}if (targetIndex === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
-      code += `${indent}const targetItem = ${baseObjectPath}.${arrayPath}[targetIndex];\n`;
+      // Resolve the array: prefer the immediate object scope, but fall back to
+      // walking up context.parents (the computed field may live in a sub-type
+      // whose value doesn't have the array directly).
+      code += `${indent}let ${fieldName}_array_crc: any = (${baseObjectPath} && (${baseObjectPath} as any).${arrayPath});\n`;
+      code += `${indent}if (!${fieldName}_array_crc) {\n`;
+      code += `${indent}  for (const parent of context.parents) {\n`;
+      code += `${indent}    if (parent && (parent as any).${arrayPath}) { ${fieldName}_array_crc = (parent as any).${arrayPath}; break; }\n`;
+      code += `${indent}  }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (!${fieldName}_array_crc) throw new Error('Array \\'${arrayPath}\\' not found in scope or parent context');\n`;
+      code += `${indent}let targetItem: any = undefined;\n`;
+      if (selector === "first") {
+        code += `${indent}for (let i = 0; i < ${fieldName}_array_crc.length; i++) {\n`;
+      } else {
+        code += `${indent}for (let i = ${fieldName}_array_crc.length - 1; i >= 0; i--) {\n`;
+      }
+      code += `${indent}  const it = ${fieldName}_array_crc[i];\n`;
+      code += `${indent}  if (it && (it.type === undefined || it.type === '${filterType}')) { targetItem = it; break; }\n`;
+      code += `${indent}}\n`;
+      code += `${indent}if (targetItem === undefined) throw new Error('${selector} ${filterType} not found in ${arrayPath}');\n`;
 
       const targetPath = `targetItem${remainingPath}`;
       code += `${indent}const ${computedVar} = crc32(${targetPath});\n`;
