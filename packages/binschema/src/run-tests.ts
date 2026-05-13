@@ -9,6 +9,7 @@ import { readdirSync, statSync, readFileSync, mkdirSync, writeFileSync, copyFile
 import { join, relative, dirname } from "path";
 import { fileURLToPath } from "url";
 import { TestSuite } from "./schema/test-schema.js";
+import { monomorphizeTemplates } from "./schema/monomorphize.js";
 import JSON5 from "json5";
 import { setLogLevel, logger } from "./logger.js";
 
@@ -58,8 +59,19 @@ async function exportTestsToJson(filter?: string): Promise<{ filtered: FunctionT
 
       mkdirSync(dirname(outputPath), { recursive: true });
 
+      // Monomorphize templates (e.g. Optional<T>) BEFORE writing the JSON so
+      // the cross-language harnesses (Go, Rust, Python) see flat type names
+      // they can look up directly. Schema-validation tests with
+      // schema_validation_error=true are left alone — those tests assert on
+      // the validator's behavior over the user-authored shape.
+      const exportedSchema =
+        (suite as any).schema_validation_error
+          ? (suite as any).schema
+          : monomorphizeTemplates((suite as any).schema);
+      const exportedSuite = { ...suite, schema: exportedSchema };
+
       // Use JSON5 to support Infinity, -Infinity, NaN
-      const json = JSON5.stringify(suite, (key, value) => {
+      const json = JSON5.stringify(exportedSuite, (key, value) => {
         if (typeof value === 'bigint') {
           return value.toString() + 'n';
         }

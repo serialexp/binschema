@@ -2,6 +2,7 @@
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript and Go runtimes
 
 import { type BinarySchema, type Field, type Endianness, isEnumType } from "../schema/binary-schema.js";
+import { monomorphizeTemplates } from "../schema/monomorphize.js";
 
 /**
  * Options for Rust code generation
@@ -17,6 +18,56 @@ export interface GeneratedRustCode {
   code: string;
   typeName: string;
 }
+
+// ===== Inline encoders used by variant-arm inliners =====
+
+/**
+ * Generate inline encode lines for a `bytes` field at the given accessor.
+ * Handles every `kind` the schema supports (fixed / length_prefixed /
+ * field_referenced / null_terminated / eof_terminated). Used by the
+ * discriminated_union and choice variant inliners, which need to emit
+ * field-by-field code instead of delegating to a method.
+ *
+ * Mirrors the regular path's "transform to array<uint8>" delegation, but
+ * inlined here because the variant-arm inliners don't have a recursive entry
+ * point into `generateEncodeArray`.
+ */
+function generateInlineBytesEncode(field: any, accessor: string, indent: string): string[] {
+  const lines: string[] = [];
+  const kind = field.kind;
+
+  if (kind === "fixed") {
+    // Just write each byte; length is implicit.
+    lines.push(`${indent}for item in &${accessor} {`);
+    lines.push(`${indent}    encoder.write_uint8(*item);`);
+    lines.push(`${indent}}`);
+  } else if (kind === "length_prefixed") {
+    const lt = field.length_type || "uint8";
+    const writer = lt === "uint8"
+      ? `encoder.write_uint8(${accessor}.len() as u8);`
+      : `encoder.write_${lt}(${accessor}.len() as ${lt}, Endianness::BigEndian);`;
+    lines.push(`${indent}${writer}`);
+    lines.push(`${indent}for item in &${accessor} {`);
+    lines.push(`${indent}    encoder.write_uint8(*item);`);
+    lines.push(`${indent}}`);
+  } else if (kind === "field_referenced" || kind === "eof_terminated") {
+    // Length is supplied by another field (already encoded) or by stream end —
+    // in both cases we just write the raw bytes.
+    lines.push(`${indent}for item in &${accessor} {`);
+    lines.push(`${indent}    encoder.write_uint8(*item);`);
+    lines.push(`${indent}}`);
+  } else if (kind === "null_terminated") {
+    lines.push(`${indent}for item in &${accessor} {`);
+    lines.push(`${indent}    encoder.write_uint8(*item);`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}encoder.write_uint8(0);`);
+  } else {
+    lines.push(`${indent}return Err(binschema_runtime::BinSchemaError::NotImplemented("encoding bytes with kind '${kind}' in variant arm".to_string()));`);
+  }
+
+  return lines;
+}
+
 
 // ===== Byte-Alignment Analysis & Helpers =====
 
@@ -178,11 +229,15 @@ function emitDecoderRead(type: string, rustEndianness: string, byteAligned: bool
  * @returns Generated Rust code
  */
 export function generateRust(
-  schema: BinarySchema,
+  schemaInput: BinarySchema,
   typeName: string,
   options?: RustGeneratorOptions
 ): GeneratedRustCode {
   const crateName = options?.crateName || "binschema_runtime";
+
+  // Pre-pass: monomorphize parameterized templates (e.g. Optional<T>) into
+  // concrete types so the rest of the generator only deals with plain names.
+  const schema = monomorphizeTemplates(schemaInput);
 
   // Verify the requested type exists
   if (!schema.types[typeName]) {
@@ -1312,6 +1367,13 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
             lines.push(`                encoder.write_varlength(v.${fieldName}, "${vlEnc}")?;`);
             break;
           }
+          case "bool":
+            lines.push(`                encoder.write_uint8(if v.${fieldName} { 1 } else { 0 });`);
+            break;
+          case "bytes":
+            // Delegate to the inliner's existing array<uint8> path by faking a synthetic array field.
+            lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                "));
+            break;
           case "array": {
             const arrayItems = field.items;
             if (arrayItems) {
@@ -2087,6 +2149,12 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
             lines.push(`                encoder.write_varlength(v.${fieldName}, "${vlEnc}")?;`);
             break;
           }
+          case "bool":
+            lines.push(`                encoder.write_uint8(if v.${fieldName} { 1 } else { 0 });`);
+            break;
+          case "bytes":
+            lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                "));
+            break;
           case "array": {
             // Encode array items inline
             const arrayItems = field.items;

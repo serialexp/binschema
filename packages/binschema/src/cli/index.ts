@@ -285,7 +285,9 @@ function loadSchema(schemaPath: string): BinarySchema {
 }
 
 function resolveTypeName(schema: BinarySchema): string | undefined {
-  const names = Object.keys(schema.types ?? {});
+  // Skip generic-template definitions (e.g. "Optional<T>") — they're not
+  // concrete types, the generators monomorphize them at reference sites.
+  const names = Object.keys(schema.types ?? {}).filter((n) => !/<T>$/.test(n));
   return names.length > 0 ? names.sort()[0] : undefined;
 }
 

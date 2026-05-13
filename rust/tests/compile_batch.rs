@@ -1221,9 +1221,11 @@ fn format_nested_struct_with_suffix(
                     // Optional field - use None
                     result.push_str(&format!("{}: None, ", rust_field_name));
                 } else if field.conditional.is_some() {
-                    // Conditional field - use default value
-                    let default_val = get_default_value_for_type(&field.field_type, schema, prefix);
-                    result.push_str(&format!("{}: {}, ", rust_field_name, default_val));
+                    // Conditional field is `Option<T>` in generated Rust; if the
+                    // test omits the field, the conditional did not fire and the
+                    // correct construction is None — never the type's default
+                    // literal (which wouldn't even type-check against Option<T>).
+                    result.push_str(&format!("{}: None, ", rust_field_name));
                 }
                 // Other fields are just skipped (they might be optional in the test)
                 continue;
