@@ -68,6 +68,52 @@ function generateInlineBytesEncode(field: any, accessor: string, indent: string)
   return lines;
 }
 
+/**
+ * Generate inline encode lines for an `array<T>` field at the given accessor.
+ * Mirrors `generateInlineBytesEncode`: emits the length prefix per `kind`,
+ * then iterates and delegates each item to `generateEncodeArrayItem` so we
+ * pick up every primitive (uint*, int*, float*, bool, …) and named-type case
+ * for free instead of reinventing the per-item-type switch in two places.
+ *
+ * Used by the discriminated_union and choice variant-arm inliners.
+ */
+function generateInlineArrayEncode(
+  field: any,
+  accessor: string,
+  indent: string,
+  endianness: string,
+  rustEndianness: string,
+  schema: BinarySchema | undefined,
+): string[] {
+  const lines: string[] = [];
+  const kind = field.kind;
+  const items = field.items;
+  if (!items) return lines;
+
+  // Length-prefix emission (mirrors the regular array path).
+  if (kind === "length_prefixed") {
+    const lt = field.length_type || "uint8";
+    if (lt === "uint8") {
+      lines.push(`${indent}encoder.write_uint8(${accessor}.len() as u8);`);
+    } else {
+      const castType = lt === "uint16" ? "u16" : lt === "uint32" ? "u32" : "u64";
+      lines.push(`${indent}${emitEncoderWrite(lt, `${accessor}.len() as ${castType}`, rustEndianness, false)}`);
+    }
+  }
+  // Other kinds (fixed / eof_terminated / signature_terminated) need no prefix.
+
+  // Item iteration — delegate body to the shared array-item encoder so every
+  // primitive type is covered. The synthetic Field gives the helper just the
+  // shape it needs (type + any sub-fields like array items / kind).
+  const itemField: Field = { name: "", type: items.type, ...(items as any) } as Field;
+  lines.push(`${indent}for item in &${accessor} {`);
+  const itemLines = generateEncodeArrayItem(itemField, "item", endianness, `${indent}    `, schema);
+  lines.push(...itemLines);
+  lines.push(`${indent}}`);
+
+  return lines;
+}
+
 
 // ===== Byte-Alignment Analysis & Helpers =====
 
@@ -157,10 +203,12 @@ function emitEncoderWrite(type: string, value: string, rustEndianness: string, b
       case "int16": return `encoder.write_u16_${suffix}(${value} as u16);`;
       case "uint32": return `encoder.write_u32_${suffix}(${value});`;
       case "int32": return `encoder.write_u32_${suffix}(${value} as u32);`;
-      case "float32": return `encoder.write_u32_${suffix}(${value}.to_bits());`;
+      // Parenthesize the value so `*item.to_bits()` doesn't get parsed as
+      // `*(item.to_bits())` — Rust binds method-call tighter than unary `*`.
+      case "float32": return `encoder.write_u32_${suffix}((${value}).to_bits());`;
       case "uint64": return `encoder.write_u64_${suffix}(${value});`;
       case "int64": return `encoder.write_u64_${suffix}(${value} as u64);`;
-      case "float64": return `encoder.write_u64_${suffix}(${value}.to_bits());`;
+      case "float64": return `encoder.write_u64_${suffix}((${value}).to_bits());`;
     }
   }
   // Generic path
@@ -1375,52 +1423,12 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
             lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                "));
             break;
           case "array": {
-            const arrayItems = field.items;
-            if (arrayItems) {
-              switch (arrayItems.type) {
-                case "uint8":
-                  lines.push(`                for item in &v.${fieldName} {`);
-                  lines.push(`                    encoder.write_uint8(*item);`);
-                  lines.push(`                }`);
-                  break;
-                case "uint16":
-                  lines.push(`                for item in &v.${fieldName} {`);
-                  lines.push(`                    encoder.write_uint16(*item, Endianness::${fieldEndianness});`);
-                  lines.push(`                }`);
-                  break;
-                case "uint32":
-                  lines.push(`                for item in &v.${fieldName} {`);
-                  lines.push(`                    encoder.write_uint32(*item, Endianness::${fieldEndianness});`);
-                  lines.push(`                }`);
-                  break;
-                default: {
-                  const itemTypeDef = schema.types[arrayItems.type];
-                  if (itemTypeDef) {
-                    if ("sequence" in itemTypeDef) {
-                      const itemTypeName = toRustTypeName(arrayItems.type);
-                      const itemNeedsSplit = typeNeedsInputOutputSplit(arrayItems.type, schema);
-                      lines.push(`                for item in &v.${fieldName} {`);
-                      if (itemNeedsSplit) {
-                        // Composite type with split - convert Output to Input and encode
-                        lines.push(`                    ${itemTypeName}Input::from(item.clone()).encode_into(encoder)?;`);
-                      } else {
-                        // Unified type - encode directly
-                        lines.push(`                    item.encode_into(encoder)?;`);
-                      }
-                      lines.push(`                }`);
-                    } else {
-                      // Simple type alias with encode()
-                      lines.push(`                for item in &v.${fieldName} {`);
-                      lines.push(`                    item.encode_into(encoder)?;`);
-                      lines.push(`                }`);
-                    }
-                  } else {
-                    lines.push(`                return Err(binschema_runtime::BinSchemaError::NotImplemented("encoding array of '${arrayItems.type}' in discriminated union variant".to_string()));`);
-                  }
-                  break;
-                }
-              }
-            }
+            // Delegate to the shared inline-array encoder so every primitive
+            // item type (uint8…uint64, int8…int64, float32/64, bool, …) plus
+            // length-prefix emission is handled once. The previous hand-rolled
+            // switch silently NotImplemented'd anything beyond uint8/16/32 and
+            // never wrote the length prefix.
+            lines.push(...generateInlineArrayEncode(field as any, `v.${fieldName}`, "                ", defaultEndianness, fieldEndianness, schema));
             break;
           }
           default: {
@@ -2156,54 +2164,10 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
             lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                "));
             break;
           case "array": {
-            // Encode array items inline
-            const arrayItems = field.items;
-            if (arrayItems) {
-              switch (arrayItems.type) {
-                case "uint8":
-                  lines.push(`                for item in &v.${fieldName} {`);
-                  lines.push(`                    encoder.write_uint8(*item);`);
-                  lines.push(`                }`);
-                  break;
-                case "uint16":
-                  lines.push(`                for item in &v.${fieldName} {`);
-                  lines.push(`                    encoder.write_uint16(*item, Endianness::${fieldEndianness});`);
-                  lines.push(`                }`);
-                  break;
-                case "uint32":
-                  lines.push(`                for item in &v.${fieldName} {`);
-                  lines.push(`                    encoder.write_uint32(*item, Endianness::${fieldEndianness});`);
-                  lines.push(`                }`);
-                  break;
-                default: {
-                  // Check if item type is a named type with encode()
-                  const itemTypeDef = schema.types[arrayItems.type];
-                  if (itemTypeDef) {
-                    if ("sequence" in itemTypeDef) {
-                      const itemTypeName = toRustTypeName(arrayItems.type);
-                      const itemNeedsSplit = typeNeedsInputOutputSplit(arrayItems.type, schema);
-                      lines.push(`                for item in &v.${fieldName} {`);
-                      if (itemNeedsSplit) {
-                        // Composite type with split - convert Output to Input and encode
-                        lines.push(`                    ${itemTypeName}Input::from(item.clone()).encode_into(encoder)?;`);
-                      } else {
-                        // Unified type - encode directly
-                        lines.push(`                    item.encode_into(encoder)?;`);
-                      }
-                      lines.push(`                }`);
-                    } else {
-                      // Simple type alias with encode()
-                      lines.push(`                for item in &v.${fieldName} {`);
-                      lines.push(`                    item.encode_into(encoder)?;`);
-                      lines.push(`                }`);
-                    }
-                  } else {
-                    lines.push(`                return Err(binschema_runtime::BinSchemaError::NotImplemented("encoding array of '${arrayItems.type}' in choice variant".to_string()));`);
-                  }
-                  break;
-                }
-              }
-            }
+            // Same delegation as the discriminated_union arm — see notes on
+            // generateInlineArrayEncode. Covers length-prefix emission plus
+            // every primitive item type, not just uint8/16/32.
+            lines.push(...generateInlineArrayEncode(field as any, `v.${fieldName}`, "                ", defaultEndianness, fieldEndianness, schema));
             break;
           }
           default: {
@@ -5289,6 +5253,10 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
     case "float64":
       lines.push(`${indent}${emitEncoderWrite(field.type as string, `*${itemVar}`, rustEndianness, aligned)}`);
       break;
+    case "bool":
+      // Single byte: 1 if true, 0 if false. Mirrors the regular field encoder.
+      lines.push(`${indent}encoder.write_uint8(if *${itemVar} { 1 } else { 0 });`);
+      break;
     case "bit":
     case "int": {
       const bitSize = (field as any).size || 1;
@@ -6442,6 +6410,10 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
     case "float32":
     case "float64":
       lines.push(`${indent}let item = ${emitDecoderRead(items.type, rustEndianness, aligned)};`);
+      break;
+    case "bool":
+      // Wire format: single byte; non-zero = true.
+      lines.push(`${indent}let item = decoder.read_uint8()? != 0;`);
       break;
     case "bit":
     case "int": {

@@ -1320,8 +1320,12 @@ fn format_array_with_field(
         }
     }
 
-    // Primitive array
-    let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+    // Primitive array — pass the item type so JSON integers (which serde_json
+    // parses as Int even when the source spelled them `1.0`) get an explicit
+    // `_f32`/`_f64` suffix; otherwise `vec![1]` won't typecheck against `Vec<f32>`.
+    let items: Vec<String> = arr.iter()
+        .map(|v| format_value_typed(v, item_type))
+        .collect();
     format!("vec![{}]", items.join(", "))
 }
 
@@ -1383,8 +1387,12 @@ fn format_array_with_field_and_suffix(
         }
     }
 
-    // Primitive array
-    let items: Vec<String> = arr.iter().map(format_value_simple).collect();
+    // Primitive array — pass the item type so JSON integers (which serde_json
+    // parses as Int even when the source spelled them `1.0`) get an explicit
+    // `_f32`/`_f64` suffix; otherwise `vec![1]` won't typecheck against `Vec<f32>`.
+    let items: Vec<String> = arr.iter()
+        .map(|v| format_value_typed(v, item_type))
+        .collect();
     format!("vec![{}]", items.join(", "))
 }
 
@@ -1459,6 +1467,39 @@ fn format_value_simple(value: &serde_json::Value) -> String {
         }
         serde_json::Value::Object(_) => "/* nested object */".to_string(),
         serde_json::Value::Null => "None".to_string(),
+    }
+}
+
+/// Like `format_value_simple`, but knows the target Rust type so it can
+/// emit the right literal suffix. Used for primitive array items where the
+/// schema gives us the item type unambiguously — without this, a JSON-int
+/// in a float array would be emitted as a bare `1` and fail typechecking.
+fn format_value_typed(value: &serde_json::Value, type_name: &str) -> String {
+    match (value, type_name) {
+        (serde_json::Value::Number(n), "float32") => {
+            if let Some(f) = n.as_f64() {
+                if f.is_nan() { return "f32::NAN".to_string(); }
+                if f.is_infinite() {
+                    return if f > 0.0 { "f32::INFINITY".to_string() } else { "f32::NEG_INFINITY".to_string() };
+                }
+                return format!("{:?}_f32", f);
+            }
+            if let Some(i) = n.as_i64() { return format!("{}_f32", i); }
+            n.to_string()
+        }
+        (serde_json::Value::Number(n), "float64") => {
+            if let Some(f) = n.as_f64() {
+                if f.is_nan() { return "f64::NAN".to_string(); }
+                if f.is_infinite() {
+                    return if f > 0.0 { "f64::INFINITY".to_string() } else { "f64::NEG_INFINITY".to_string() };
+                }
+                return format!("{:?}_f64", f);
+            }
+            if let Some(i) = n.as_i64() { return format!("{}_f64", i); }
+            n.to_string()
+        }
+        // For everything else, the un-typed formatter already does the right thing.
+        _ => format_value_simple(value),
     }
 }
 
