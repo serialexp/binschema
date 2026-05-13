@@ -5731,10 +5731,58 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       break;
     }
 
-    default:
+    default: {
+      // Type reference. Special-case standalone discriminated_union types
+      // with a FIELD-based discriminator: the DU's own decode_with_decoder
+      // can't run (no access to the parent's tag), so TS inlines the dispatch
+      // at the call site. We do the same — match the previously-decoded
+      // sibling discriminator field against each variant's `when` and emit
+      // the correct variant's decode directly, wrapping in the DU enum.
+      const refTypeDef = schema.types[field.type as string];
+      if (
+        refTypeDef &&
+        (refTypeDef as any).type === "discriminated_union" &&
+        (refTypeDef as any).discriminator?.field
+      ) {
+        const duName = toRustTypeName(field.type);
+        const discriminatorRustField = toRustFieldName((refTypeDef as any).discriminator.field);
+        const variants = ((refTypeDef as any).variants ?? []) as any[];
+        const fallback = variants.find((v) => !v.when);
+        const conditional = variants.filter((v) => v.when);
+
+        const wrapVariantDecode = (variant: any) => {
+          const vt = toRustTypeName(variant.type);
+          const vd = typeNeedsInputOutputSuffix(variant.type, schema) ? `${vt}Output` : vt;
+          return `${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`;
+        };
+
+        if (conditional.length === 0 && fallback) {
+          lines.push(`${indent}let ${varName} = ${wrapVariantDecode(fallback)};`);
+        } else {
+          for (let i = 0; i < conditional.length; i++) {
+            const variant = conditional[i];
+            const cond = translateConditionToRust(variant.when).replace(/\bvalue\b/g, discriminatorRustField);
+            const head = i === 0
+              ? `${indent}let ${varName} = if ${cond} {`
+              : `${indent}} else if ${cond} {`;
+            lines.push(head);
+            lines.push(`${indent}    ${wrapVariantDecode(variant)}`);
+          }
+          lines.push(`${indent}} else {`);
+          if (fallback) {
+            lines.push(`${indent}    ${wrapVariantDecode(fallback)}`);
+          } else {
+            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
+          }
+          lines.push(`${indent}};`);
+        }
+        break;
+      }
+
       // Type reference - nested struct
       lines.push(...generateDecodeNestedStruct(field, varName, indent, schema));
       break;
+    }
   }
 
   // Add const field validation - if the decoded value doesn't match the expected const,
@@ -5879,6 +5927,57 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
       // Type reference - nested struct
       const typeName = toRustTypeName(field.type);
       const typeDef = schema.types[field.type as string];
+
+      // Special case: the referenced type is a standalone discriminated_union
+      // with a FIELD-based discriminator. The DU's own decode_with_decoder
+      // can't run (it has no access to the parent's tag) — TS handles this by
+      // inlining the dispatch at the call site, so we do the same. The sibling
+      // discriminator field is already decoded into a local variable named
+      // after the field; we match it against each variant's `when`.
+      if (
+        typeDef &&
+        (typeDef as any).type === "discriminated_union" &&
+        (typeDef as any).discriminator?.field
+      ) {
+        const duName = typeName;
+        const discriminatorRustField = toRustFieldName((typeDef as any).discriminator.field);
+        const variants = ((typeDef as any).variants ?? []) as any[];
+        const fallback = variants.find((v) => !v.when);
+        const conditional = variants.filter((v) => v.when);
+
+        if (conditional.length === 0 && fallback) {
+          // Single fallback — emit the single decode directly, wrapped.
+          const vt = toRustTypeName(fallback.type);
+          const vd = typeNeedsInputOutputSuffix(fallback.type, schema) ? `${vt}Output` : vt;
+          lines.push(`${indent}let ${varName} = ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?);`);
+        } else {
+          // if/else if chain on the parent's discriminator, then fallback or error.
+          for (let i = 0; i < conditional.length; i++) {
+            const variant = conditional[i];
+            const vt = toRustTypeName(variant.type);
+            const vd = typeNeedsInputOutputSuffix(variant.type, schema) ? `${vt}Output` : vt;
+            const cond = translateConditionToRust(variant.when).replace(/\bvalue\b/g, discriminatorRustField);
+            const head = i === 0
+              ? `${indent}let ${varName} = if ${cond} {`
+              : `${indent}} else if ${cond} {`;
+            lines.push(head);
+            lines.push(`${indent}    ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`);
+          }
+          if (fallback) {
+            const vt = toRustTypeName(fallback.type);
+            const vd = typeNeedsInputOutputSuffix(fallback.type, schema) ? `${vt}Output` : vt;
+            lines.push(`${indent}} else {`);
+            lines.push(`${indent}    ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`);
+            lines.push(`${indent}};`);
+          } else {
+            lines.push(`${indent}} else {`);
+            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
+            lines.push(`${indent}};`);
+          }
+        }
+        break;
+      }
+
       const isComposite = typeDef && "sequence" in typeDef;
       const needsSplit = isComposite && typeNeedsInputOutputSplit(field.type, schema);
       const decodeName = needsSplit ? `${typeName}Output` : typeName;
