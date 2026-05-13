@@ -1199,24 +1199,11 @@ func formatInlineChoiceValue(val map[string]interface{}, choiceDef map[string]in
 		return formatValue(val)
 	}
 
-	goTypeName := typePrefix + "_" + variantType
-
-	// Format as pointer to variant struct with fields from the value map
-	result := "&" + goTypeName + "{"
-	if sequence, ok := variantTypeDef["sequence"].([]interface{}); ok {
-		for _, fieldRaw := range sequence {
-			if field, ok := fieldRaw.(map[string]interface{}); ok {
-				fieldName, _ := field["name"].(string)
-				if fieldVal, hasVal := val[fieldName]; hasVal {
-					goFieldName := capitalizeFirst(fieldName)
-					fieldType, _ := field["type"].(string)
-					result += fmt.Sprintf("%s: %s, ", goFieldName, formatValueWithType(fieldVal, fieldType))
-				}
-			}
-		}
-	}
-	result += "}"
-	return result
+	// Variant struct construction is identical to a regular struct value;
+	// delegate so we get bytes/optional/type-reference handling for free
+	// instead of reinventing the per-field-type dispatch and emitting
+	// `[]int{…}` for bytes or bare `OptionalUint64{…}` for nested types.
+	return "&" + formatStructValue(val, variantTypeDef, types, typePrefix, variantType)
 }
 
 func formatDiscriminatedUnionValue(val map[string]interface{}, unionDef map[string]interface{}, types map[string]interface{}, typePrefix string) string {
@@ -1413,6 +1400,27 @@ func formatStructValue(val map[string]interface{}, typeDef map[string]interface{
 				if fieldVal, hasVal := val[fieldName]; hasVal {
 					goFieldName := capitalizeFirst(fieldName)
 					fieldType, _ := field["type"].(string)
+
+					// Check for bytes field — generated Go type is `[]byte`,
+					// so a bare `[]int{…}` literal (the default for an
+					// integer slice) won't typecheck. Mirror the formatting
+					// in formatValueWithSchema's bytes case.
+					if fieldType == "bytes" {
+						if valSlice, ok := fieldVal.([]interface{}); ok {
+							if len(valSlice) == 0 {
+								result += fmt.Sprintf("\t\t\t\t\t\t%s: []byte{},\n", goFieldName)
+							} else {
+								var elems []string
+								for _, e := range valSlice {
+									if f, ok := e.(float64); ok {
+										elems = append(elems, fmt.Sprintf("%d", int(f)))
+									}
+								}
+								result += fmt.Sprintf("\t\t\t\t\t\t%s: []byte{%s},\n", goFieldName, strings.Join(elems, ", "))
+							}
+							continue
+						}
+					}
 
 					// Check for inline array field
 					if fieldType == "array" {
