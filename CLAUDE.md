@@ -420,6 +420,28 @@ just bench-go                        # Go only
 
 ## Development Workflow Guidelines
 
+### Tests-first for codegen features (MANDATORY)
+
+**Before adding, extending, or "fixing" any feature in a code generator, you MUST add a TestSuite that exercises the new shape against every language generator.** No exceptions.
+
+This rule exists because we have been bitten — repeatedly — by features that work in one generator and silently throw `NotImplemented` (or emit broken code) in another. The most expensive class of bug in this repo is "TypeScript handles it, Rust doesn't, nobody notices for two months." The harness only catches what the suite exercises; everything else rots in the dark.
+
+**The discipline is:**
+
+1. **Find the gap.** Before touching the generator, locate the schema shape that is currently unhandled. It might be a real-world example schema (e.g. `examples/superchat.schema.json`), a downstream consumer's schema, or just a combination you suspect is missing.
+2. **Write a `TestSuite` first.** Put it in `packages/binschema/src/tests/<category>/` next to its peers. Hand-compute the expected `bytes` (or `bits`) — don't generate them from the implementation, or you cement bugs as ground truth.
+3. **Verify it passes on the TypeScript reference** (`bun run packages/binschema/src/run-tests.ts --filter=<name>`). TypeScript is the spec; if TS doesn't agree on the bytes, your expected bytes are wrong, not the generator.
+4. **Run it across every other language.** `just test-go <name>`, `just test-rust <name>`, `just test-python <name>`. Anything that fails (codegen failure, compile error, runtime mismatch) is the gap you are about to close.
+5. **Then write the fix.** Land the test commit before — or in the same commit as — the generator change, never after.
+
+**What this rule rules out:**
+
+- Adding an `Optional<T>` template to a schema and trusting "it worked in citybuilder" — citybuilder is one shape; the test corpus is the contract.
+- Fixing a `discriminated_union` branch in `typescript.ts` without adding the same scenario for `go.ts` and `rust.ts`.
+- Patching a `NotImplemented` site by deleting the throw and shipping — if there's no suite that hits the path, the next regression will land silently.
+
+**Concrete repro of why this rule exists:** the variant-arm field inliner in the Rust generator silently `NotImplemented`s for `bool`, `bytes`, and `Optional<T>` fields inside `discriminated_union`/`choice` arms. The downstream consumer (`~/Projects/db`, the `superchat` example) hit it; the test suite never did, because no suite combined those primitives with a union arm. See `packages/binschema/src/tests/composite/variant-inlined-fields.test.ts` for the test scenarios that should have existed from day one.
+
 ### Use Just Commands for Repeated Operations
 
 **If you find yourself running the same command multiple times, create a Just recipe for it.**
