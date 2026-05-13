@@ -712,7 +712,12 @@ function typeNeedsDecodeContext(typeName: string, schema: BinarySchema): boolean
     const fieldAny = field as any;
     if (field.type === "array" && fieldAny.kind === "field_referenced") {
       const lengthField = fieldAny.length_field;
-      if (lengthField && !localFields.has(lengthField)) {
+      if (!lengthField) continue;
+      // `_root.X` is unconditionally non-local.
+      if (typeof lengthField === "string" && lengthField.startsWith("_root.")) {
+        return true;
+      }
+      if (!localFields.has(lengthField)) {
         return true;
       }
     }
@@ -4531,7 +4536,25 @@ function generateInstanceFieldDecoding(
       // Composite type - use appropriate decode_with_decoder (Output if split, plain if unified)
       const instNeedsSplit = typeNeedsInputOutputSplit(instanceType, schema);
       const instDecodeType = instNeedsSplit ? `${rustTypeName}Output` : rustTypeName;
-      lines.push(`${indent}let ${fieldName} = ${instDecodeType}::decode_with_decoder(decoder)?;`);
+      const instNeedsCtx = typeNeedsDecodeContext(instanceType, schema);
+      if (instNeedsCtx) {
+        // Build a context HashMap of the parent's already-decoded scalar
+        // fields so the instance type can resolve `_root.X` references.
+        lines.push(`${indent}let mut __instance_ctx: HashMap<String, u64> = HashMap::new();`);
+        for (const sf of sequenceFields) {
+          if (!sf.name) continue;
+          const sfRust = toRustFieldName(sf.name);
+          const sfType = sf.type as string;
+          if (["uint8", "uint16", "uint32", "uint64"].includes(sfType)) {
+            lines.push(`${indent}__instance_ctx.insert("${sf.name}".to_string(), ${sfRust} as u64);`);
+          } else if (["int8", "int16", "int32", "int64"].includes(sfType)) {
+            lines.push(`${indent}__instance_ctx.insert("${sf.name}".to_string(), ${sfRust} as u64);`);
+          }
+        }
+        lines.push(`${indent}let ${fieldName} = ${instDecodeType}::decode_with_decoder_and_context(decoder, Some(&__instance_ctx))?;`);
+      } else {
+        lines.push(`${indent}let ${fieldName} = ${instDecodeType}::decode_with_decoder(decoder)?;`);
+      }
     } else if (typeDef && "variants" in typeDef) {
       // Discriminated union
       lines.push(`${indent}let ${fieldName} = ${rustTypeName}::decode_with_decoder(decoder)?;`);
@@ -6355,27 +6378,34 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     lines.push(`${indent}for _ in 0..length {`);
   } else if (kind === "field_referenced") {
     const lengthField = field.length_field;
-    const lengthFieldRust = toRustFieldName(lengthField);
 
-    // Check if the length field is local to the current type
+    // Check if the length field is local to the current type. `_root.X` is by
+    // definition non-local — it walks up to the root struct.
     let fieldIsLocal = true;
+    const isRootRef = typeof lengthField === "string" && lengthField.startsWith("_root.");
     if (containingTypeName && schema) {
       const localFields = getTypeFieldNames(containingTypeName, schema);
       const firstPart = lengthField.split('.')[0];
-      fieldIsLocal = localFields.has(firstPart);
+      fieldIsLocal = !isRootRef && localFields.has(firstPart);
     }
 
     if (fieldIsLocal) {
-      // Field is local - access directly
+      // Field is local - access directly. Safe to compute the Rust identifier
+      // here because _root references take the parent-context branch below.
+      const lengthFieldRust = toRustFieldName(lengthField);
       lines.push(`${indent}let mut ${varName} = Vec::with_capacity(${lengthFieldRust} as usize);`);
       lines.push(`${indent}for _ in 0..${lengthFieldRust} {`);
     } else {
-      // Field is in parent context - look it up from ctx
+      // Field is in parent context - look it up from ctx. Strip the `_root.`
+      // prefix when present so the lookup key is just the leaf field name; the
+      // root struct's instance dispatcher inserts its own scalar fields under
+      // those bare names.
+      const ctxKey = isRootRef ? lengthField.slice("_root.".length) : lengthField;
       lines.push(`${indent}// Length field "${lengthField}" is from parent context`);
       lines.push(`${indent}let ${varName}_length = ctx`);
-      lines.push(`${indent}    .and_then(|c| c.get("${lengthField}"))`);
+      lines.push(`${indent}    .and_then(|c| c.get("${ctxKey}"))`);
       lines.push(`${indent}    .copied()`);
-      lines.push(`${indent}    .ok_or_else(|| binschema_runtime::BinSchemaError::ContextMissing("${lengthField}".to_string()))? as usize;`);
+      lines.push(`${indent}    .ok_or_else(|| binschema_runtime::BinSchemaError::ContextMissing("${ctxKey}".to_string()))? as usize;`);
       lines.push(`${indent}let mut ${varName} = Vec::with_capacity(${varName}_length);`);
       lines.push(`${indent}for _ in 0..${varName}_length {`);
     }
