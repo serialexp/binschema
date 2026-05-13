@@ -145,8 +145,8 @@ fn generate_rust_code(schema_json: &str, type_name: &str) -> Result<String, Box<
         .into());
     }
 
-    // Read generated code
-    let code_path = out_dir.join("generated.rs");
+    // Read generated code (CLI now emits a crate layout; source lives at src/generated.rs)
+    let code_path = out_dir.join("src").join("generated.rs");
     let code = fs::read_to_string(&code_path)?;
     Ok(code)
 }
