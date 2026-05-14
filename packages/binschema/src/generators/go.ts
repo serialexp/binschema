@@ -4343,6 +4343,31 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
         lines.push(...generateDecodeString(syntheticField, fieldName, varName, endianness, indent));
         return lines;
       }
+      // Special case: type reference to a standalone discriminated_union with a
+      // FIELD-based discriminator. The DU's own decodeWithDecoder can't run (it
+      // has no access to the parent's tag), so TS/Rust inline the dispatch at
+      // the call site. We do the same — match the previously-decoded sibling
+      // discriminator field against each variant's `when` and call the right
+      // variant's decoder directly. The result (`*Foo`) auto-satisfies the
+      // union interface, so we assign it directly without dereferencing.
+      if (schema) {
+        const refTypeDef = schema.types[field.type as string] as any;
+        if (
+          refTypeDef &&
+          refTypeDef.type === "discriminated_union" &&
+          refTypeDef.discriminator?.field
+        ) {
+          lines.push(...generateDecodeStandaloneDUFieldDiscriminator(
+            field as any,
+            fieldName,
+            refTypeDef,
+            indent,
+            schema,
+            parentTypeName,
+          ));
+          return lines;
+        }
+      }
       // Type reference - nested struct
       lines.push(...generateDecodeNestedStruct(field, fieldName, varName, indent));
       return lines; // Early return - nested struct handling includes assignment
@@ -5771,6 +5796,109 @@ function generateDecodeInlineDiscriminatedUnion(
     lines.push(`${indent}return nil, fmt.Errorf("unsupported discriminator type for ${field.name || 'union'}")`);
   }
 
+  lines.push(``);
+  return lines;
+}
+
+/**
+ * Generates inline dispatch for a field that references a standalone
+ * discriminated_union type with a FIELD-based discriminator.
+ *
+ * The standalone type's own `decodeWithDecoder` can't run because it has no
+ * access to the parent's already-decoded tag value. So instead of calling it
+ * we emit an if/else-if chain right here against the parent's discriminator
+ * field, picking the right variant decoder and assigning its result (which
+ * is `*Variant`, already satisfying the union interface) to the parent's
+ * field.
+ */
+function generateDecodeStandaloneDUFieldDiscriminator(
+  field: any,
+  fieldName: string,
+  refTypeDef: any,
+  indent: string,
+  schema: BinarySchema,
+  parentTypeName?: string
+): string[] {
+  const lines: string[] = [];
+  const variants: any[] = refTypeDef.variants || [];
+  const discriminatorPath = toGoFieldPath(refTypeDef.discriminator.field);
+  const discriminatorVar = `result.${discriminatorPath}`;
+
+  // Enum reverse-map (mirrors the inline-DU code): if the discriminator
+  // field's type is an enum, replace numeric literals in `when` conditions
+  // with the matching Go enum constants.
+  let enumReverseLookup: Map<number, string> | null = null;
+  let goEnumPrefix: string = "";
+  if (parentTypeName) {
+    const parentTypeDef = schema.types?.[parentTypeName];
+    if (parentTypeDef && "sequence" in parentTypeDef) {
+      const rootFieldName = (refTypeDef.discriminator.field as string).split('.')[0];
+      const discField = (parentTypeDef as any).sequence.find((f: any) => f.name === rootFieldName);
+      if (discField && !(refTypeDef.discriminator.field as string).includes('.') && typeof discField.type === 'string') {
+        const discTypeDef = schema.types?.[discField.type];
+        if (discTypeDef && isEnumType(discTypeDef)) {
+          enumReverseLookup = new Map<number, string>();
+          goEnumPrefix = toGoTypeName(discField.type);
+          const enumVariants = (discTypeDef as any).variants as Record<string, number>;
+          for (const [name, value] of Object.entries(enumVariants)) {
+            enumReverseLookup.set(value, name);
+          }
+        }
+      }
+    }
+  }
+
+  const fallbackVariant = variants.find((v) => !v.when);
+  const conditional = variants.filter((v) => v.when);
+
+  const emitVariantCall = (variant: any, innerIndent: string) => {
+    const variantTypeName = toGoTypeName(variant.type);
+    const out: string[] = [];
+    out.push(`${innerIndent}variantValue, err := decode${variantTypeName}WithDecoder(decoder)`);
+    out.push(`${innerIndent}if err != nil {`);
+    out.push(`${innerIndent}\treturn nil, fmt.Errorf("failed to decode ${variant.type} variant: %w", err)`);
+    out.push(`${innerIndent}}`);
+    out.push(`${innerIndent}result.${fieldName} = variantValue`);
+    return out;
+  };
+
+  let isFirst = true;
+  for (const variant of conditional) {
+    let condition = (variant.when as string).replace(/\bvalue\b/g, discriminatorVar);
+    condition = condition.replace(/===/g, '==').replace(/!==/g, '!=');
+    condition = condition.replace(/'([^']*)'/g, '"$1"');
+    if (enumReverseLookup) {
+      condition = condition.replace(/(==|!=)\s*(0x[0-9a-fA-F]+|\d+)/g, (_m: string, op: string, numStr: string) => {
+        const num = Number(numStr);
+        const variantName = enumReverseLookup!.get(num);
+        if (variantName !== undefined) {
+          return `${op} ${goEnumPrefix}${toGoFieldName(variantName)}`;
+        }
+        return _m;
+      });
+    }
+    const ifKeyword = isFirst ? "if" : "} else if";
+    isFirst = false;
+    lines.push(`${indent}${ifKeyword} ${condition} {`);
+    lines.push(...emitVariantCall(variant, indent + "\t"));
+  }
+
+  if (isFirst) {
+    // No conditional variants — single fallback only.
+    if (fallbackVariant) {
+      lines.push(...emitVariantCall(fallbackVariant, indent));
+    } else {
+      lines.push(`${indent}return nil, fmt.Errorf("standalone discriminated_union ${field.type} has no variants")`);
+    }
+  } else {
+    lines.push(`${indent}} else {`);
+    if (fallbackVariant) {
+      lines.push(...emitVariantCall(fallbackVariant, indent + "\t"));
+    } else {
+      lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
+    }
+    lines.push(`${indent}}`);
+  }
   lines.push(``);
   return lines;
 }
