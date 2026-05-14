@@ -94,6 +94,29 @@ function pyEndianness(endianness: string): string {
 }
 
 /**
+ * If `type` names a Python primitive readable directly from the decoder,
+ * return the decode expression (e.g. "decoder.read_uint16(\"big_endian\")").
+ * Returns null for non-primitive types.
+ */
+function pythonPrimitiveDecodeExpr(type: string, endianness: string): string | null {
+  const e = pyEndianness(endianness);
+  switch (type) {
+    case "bool":    return `decoder.read_uint8() != 0`;
+    case "uint8":   return `decoder.read_uint8()`;
+    case "uint16":  return `decoder.read_uint16(${e})`;
+    case "uint32":  return `decoder.read_uint32(${e})`;
+    case "uint64":  return `decoder.read_uint64(${e})`;
+    case "int8":    return `decoder.read_int8()`;
+    case "int16":   return `decoder.read_int16(${e})`;
+    case "int32":   return `decoder.read_int32(${e})`;
+    case "int64":   return `decoder.read_int64(${e})`;
+    case "float32": return `decoder.read_float32(${e})`;
+    case "float64": return `decoder.read_float64(${e})`;
+    default:        return null;
+  }
+}
+
+/**
  * Map field type to Python type hint
  */
 function mapFieldToPythonType(field: any, schema: BinarySchema): string {
@@ -2212,6 +2235,27 @@ function generateTypeRefDecode(field: any, fieldAssign: string, indent: string, 
   let code = '';
   const typeDef = schema.types[field.type];
 
+  // Primitive type fast-path: when field.type is a primitive (uint8/uint16/...),
+  // typeDef is undefined — emit a direct decoder.read_* call.
+  if (!typeDef) {
+    const e = field.endianness || endianness;
+    const ee = pyEndianness(e);
+    switch (field.type) {
+      case "bool":    return `${indent}${fieldAssign} = decoder.read_uint8() != 0\n`;
+      case "uint8":   return `${indent}${fieldAssign} = decoder.read_uint8()\n`;
+      case "uint16":  return `${indent}${fieldAssign} = decoder.read_uint16(${ee})\n`;
+      case "uint32":  return `${indent}${fieldAssign} = decoder.read_uint32(${ee})\n`;
+      case "uint64":  return `${indent}${fieldAssign} = decoder.read_uint64(${ee})\n`;
+      case "int8":    return `${indent}${fieldAssign} = decoder.read_int8()\n`;
+      case "int16":   return `${indent}${fieldAssign} = decoder.read_int16(${ee})\n`;
+      case "int32":   return `${indent}${fieldAssign} = decoder.read_int32(${ee})\n`;
+      case "int64":   return `${indent}${fieldAssign} = decoder.read_int64(${ee})\n`;
+      case "float32": return `${indent}${fieldAssign} = decoder.read_float32(${ee})\n`;
+      case "float64": return `${indent}${fieldAssign} = decoder.read_float64(${ee})\n`;
+    }
+    return `${indent}# TODO: type ref decode for unknown type ${field.type}\n`;
+  }
+
   if (isEnumType(typeDef)) {
     const repr = (typeDef as any).repr;
     const e = field.endianness || endianness;
@@ -2587,8 +2631,26 @@ function generateInstanceDecode(inst: any, schema: BinarySchema, indent: string)
   lines.push(`${indent}decoder.seek(_pos)`);
 
   if (typeof instType === 'string') {
-    // Simple type reference - dispatch to its decoder
-    lines.push(`${indent}result["${name}"] = decode_${toSnakeCase(instType)}(decoder, _root)`);
+    // Resolve alias chain in case instType is a wrapper around a primitive.
+    let resolved: string = instType;
+    let resolvedEndianness = 'little_endian';
+    const seen = new Set<string>();
+    while (schema.types[resolved] && !seen.has(resolved)) {
+      seen.add(resolved);
+      const td: any = schema.types[resolved];
+      if (typeof td.type === 'string' && !('sequence' in td) && !('variants' in td) && !('repr' in td)) {
+        resolved = td.type;
+        if (td.endianness) resolvedEndianness = td.endianness;
+        continue;
+      }
+      break;
+    }
+    const prim = pythonPrimitiveDecodeExpr(resolved, resolvedEndianness);
+    if (prim) {
+      lines.push(`${indent}result["${name}"] = ${prim}`);
+    } else {
+      lines.push(`${indent}result["${name}"] = decode_${toSnakeCase(instType)}(decoder, _root)`);
+    }
   } else if (instType && typeof instType === 'object' && instType.discriminator && Array.isArray(instType.variants)) {
     // Inline discriminated union
     const union = instType;
