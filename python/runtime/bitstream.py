@@ -39,6 +39,37 @@ def _resolve_deferred_patches(encoder, patches, array_offsets, array_iterations)
     import re
     remaining = []
     for p in patches:
+        # Parent-ref patches: look up the field offset in the captured parent
+        # dict by reference. Resolves once the parent records the offset.
+        if "parent_field_dict" in p:
+            pdict = p["parent_field_dict"]
+            pname = p["parent_field_name"]
+            if pname in pdict:
+                resolved = pdict[pname]
+                alignment = p.get("alignment", 1)
+                if alignment > 1:
+                    resolved = resolved + ((alignment - (resolved % alignment)) % alignment)
+                off = p["local_offset"]
+                ptype = p["patch_type"]
+                e = p["endianness"]
+                if ptype == "uint8":
+                    encoder.patch_uint8(off, resolved & 0xFF)
+                elif ptype == "uint16":
+                    encoder.patch_uint16(off, resolved & 0xFFFF, e)
+                elif ptype == "uint32":
+                    encoder.patch_uint32(off, resolved & 0xFFFFFFFF, e)
+                elif ptype == "uint64":
+                    v = resolved & 0xFFFFFFFFFFFFFFFF
+                    if e == "big_endian":
+                        for i in range(8):
+                            encoder._bytes[off + i] = (v >> (56 - i * 8)) & 0xFF
+                    else:
+                        for i in range(8):
+                            encoder._bytes[off + i] = (v >> (i * 8)) & 0xFF
+                continue
+            else:
+                remaining.append(p)
+                continue
         target = p.get("target_spec", "")
         resolved = None
         m_fl = re.match(r"^(?:\.\./)*([^[]+)\[(first|last)<(\w+)>\](.*)$", target)

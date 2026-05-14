@@ -928,6 +928,24 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
           `"alignment": ${alignment}, ` +
           `"target_spec": ${JSON.stringify(target)}` +
           `})\n`;
+      } else if (target && target.startsWith('../')) {
+        // Plain parent-ref position_of: capture the target parent's field-offset
+        // dict by reference. Resolution kicks in when the parent encodes that
+        // field (records the offset in the captured dict) and the resolver
+        // runs at the parent's end-of-encode.
+        let rem = target;
+        let levels = 0;
+        while (rem.startsWith('../')) { levels++; rem = rem.substring(3); }
+        const fieldName = rem;
+        const alignment = computed.alignment || 1;
+        code += `${indent}_ctx["deferred_patches"].append({` +
+          `"local_offset": _pos_${field.name}, ` +
+          `"patch_type": "${field.type}", ` +
+          `"endianness": "${e}", ` +
+          `"alignment": ${alignment}, ` +
+          `"parent_field_dict": _ctx["field_offset_stacks"][${-(levels + 1)}], ` +
+          `"parent_field_name": ${JSON.stringify(fieldName)}` +
+          `})\n`;
       }
     }
   } else if (computed.type === "sum_of_field_sizes") {
@@ -972,17 +990,22 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
 
 function resolveComputedTarget(target: string, valuePath: string): string {
   if (target.startsWith('../')) {
-    // Parent reference - count levels and resolve
+    // Parent reference - count levels and resolve via the parents stack in _ctx.
+    // _ctx["parents"][-1] is `value` (self); [-2] is the direct parent, etc.
     let remaining = target;
     let levels = 0;
     while (remaining.startsWith('../')) {
       levels++;
       remaining = remaining.substring(3);
     }
-    // For single parent: _parent_value["field"]
-    // For grandparent etc, we'd need deeper context - for now assume _parent_value
-    // handles the common single-parent case
-    return `_parent_value["${remaining}"]`;
+    // Walk dotted path segments: foo.bar.baz → ["foo"]["bar"]["baz"]
+    const parts = remaining.split('.').filter(p => p);
+    const stackIdx = -(levels + 1);
+    let access = `_ctx["parents"][${stackIdx}]`;
+    for (const p of parts) {
+      access += `["${p}"]`;
+    }
+    return access;
   }
   return `${valuePath}["${target}"]`;
 }
@@ -1144,11 +1167,10 @@ function generateSelectorLength(
   let code = '';
   const { arrayPath, parents, selector, filterType, remainingPath } = flInfo;
   const lengthVar = `_computed_length_${field.name}`;
-  // Build access for arrayPath: walk `parents` levels up via _parent_value.
+  // Build access for arrayPath: walk N levels up the parents stack.
   let arrAccess: string;
   if (parents > 0) {
-    // Single level supported via _parent_value; deeper levels fall back to same.
-    arrAccess = `_parent_value["${arrayPath}"]`;
+    arrAccess = `_ctx["parents"][${-(parents + 1)}]["${arrayPath}"]`;
   } else {
     arrAccess = `${valuePath}["${arrayPath}"]`;
   }
@@ -1232,7 +1254,7 @@ function generateCorrespondingLength(
   if (remainingPath) {
     const parts = remainingPath.split('.').filter(p => p);
     code += `${indent}    _corr_v = _corr_target_${field.name}\n`;
-    code += `${indent}    if isinstance(_corr_v, dict) and "value" in _corr_v and "type" in _corr_v:\n`;
+    code += `${indent}    if isinstance(_corr_v, dict) and "value" in _corr_v and "type" in _corr_v and isinstance(_corr_v.get("value"), dict):\n`;
     code += `${indent}        _corr_v = _corr_v["value"]\n`;
     for (const p of parts) {
       code += `${indent}    _corr_v = _corr_v["${p}"]\n`;
@@ -1358,6 +1380,8 @@ function generateLengthCalculation(field: any, target: string, targetAccess: str
     code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
     code += `${indent}elif isinstance(_target_val_${field.name}, str):\n`;
     code += `${indent}    ${lengthVar} = len(_target_val_${field.name}.encode("utf-8"))\n`;
+    code += `${indent}elif isinstance(_target_val_${field.name}, (int, float)):\n`;
+    code += `${indent}    ${lengthVar} = int(_target_val_${field.name})\n`;
     code += `${indent}else:\n`;
     code += `${indent}    ${lengthVar} = 0  # unknown target type for length_of\n`;
   }
@@ -2146,8 +2170,11 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   //   array_iterations - {arrname: {"index": int, "typeIndices": {T: int}}}
   //                      tracks current iteration state for corresponding<T>.
   lines.push(`        if _ctx is None:`);
-  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": []}`);
+  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": []}`);
+  lines.push(`        if "field_offset_stacks" not in _ctx:`);
+  lines.push(`            _ctx["field_offset_stacks"] = []`);
   lines.push(`        _ctx["parents"].append(value)`);
+  lines.push(`        _ctx["field_offset_stacks"].append({})`);
   // Default _self_variant_type to this struct's name so corresponding<T> in
   // computed fields can identify the current iteration's variant. Choice/DU
   // inliners override this within each arm.
@@ -2194,6 +2221,11 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
     // Track field byte offsets for position_of / crc32_of back-patching
     if (needsFieldTracking && fieldAny.name) {
       lines.push(`        _field_offset_${fieldAny.name} = encoder.byte_offset`);
+    }
+    // Record this field's offset in the parents' field-offset dict so children
+    // can resolve `../<fieldname>` parent-ref position_of via deferred patches.
+    if (fieldAny.name) {
+      lines.push(`        _ctx["field_offset_stacks"][-1]["${fieldAny.name}"] = encoder.byte_offset`);
     }
 
     // Handle from_after_field length computed fields specially
@@ -2295,6 +2327,7 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(`        _ctx["deferred_patches"] = _resolve_deferred_patches(encoder, _ctx["deferred_patches"], _ctx["array_offsets"], _ctx["array_iterations"])`);
 
   lines.push(`        _ctx["parents"].pop()`);
+  lines.push(`        _ctx["field_offset_stacks"].pop()`);
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
@@ -2535,10 +2568,14 @@ function generateDiscriminatedUnionCode(name: string, typeDef: any, schema: Bina
   lines.push(`    def encode(self, value: dict[str, Any], _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
   lines.push(`        if _ctx is None:`);
-  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": []}`);
+  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": []}`);
+  lines.push(`        if "field_offset_stacks" not in _ctx:`);
+  lines.push(`            _ctx["field_offset_stacks"] = []`);
   lines.push(`        _ctx["parents"].append(value)`);
+  lines.push(`        _ctx["field_offset_stacks"].append({})`);
   lines.push(generateDiscriminatedUnionEncode(typeDef, 'value', '        ', endianness, schema, bitOrder));
   lines.push(`        _ctx["parents"].pop()`);
+  lines.push(`        _ctx["field_offset_stacks"].pop()`);
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
