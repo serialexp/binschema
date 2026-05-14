@@ -502,6 +502,207 @@ function typeHasParentReferences(fields: Field[]): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Recursive-type detection (Box-insertion to break Rust E0072 "infinite size"
+// errors).
+//
+// Rust requires indirection (Box, Rc, &, Vec) anywhere a type contains itself
+// transitively through "rigid" (size-contributing) fields. The generator emits
+// inline structs and inline-enum variants, so without help it produces
+// `struct Expr { node: ExprNode } ... enum ExprNode { Binary(ExprBinaryOutput) }
+// ... struct ExprBinaryOutput { lhs: Expr, rhs: Expr }` — three mutually
+// recursive types of unbounded size. We need to insert a `Box<T>` at one edge
+// of every cycle.
+//
+// Strategy:
+//   1. Build a directed graph of rigid type→type edges. `Vec<T>` (array
+//      fields) is heap-allocated and breaks cycles, so it's NOT a rigid edge.
+//      Inline DUs and choices contribute one edge per variant target.
+//   2. For each (containingType, field, fieldTargetType) edge, check whether
+//      fieldTargetType can transitively reach containingType via rigid edges.
+//      If yes, this field is on a cycle and must be Box-wrapped.
+//
+// The algorithm intentionally over-boxes (every back-reaching edge instead of
+// one per SCC). Over-boxing is always correct, just slightly heavier on heap
+// allocations. A minimum-feedback-vertex-set approach can come later.
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect the set of schema type names directly reachable from a field via a
+ * "rigid" reference (one that contributes to the parent type's size in Rust).
+ *
+ * Returns the empty set when the field's representation provides indirection
+ * (e.g. `Vec<T>` for arrays).
+ */
+function collectRigidFieldTargets(field: Field, schema: BinarySchema): Set<string> {
+  const targets = new Set<string>();
+  if (!field || !field.type) return targets;
+  const fieldAny = field as any;
+  const fieldType = field.type as string;
+
+  // Arrays compile to Vec<T>, which is heap-allocated and breaks the cycle.
+  if (fieldType === "array") return targets;
+  // Padding fields don't reference user types.
+  if (fieldType === "padding") return targets;
+
+  // Inline discriminated unions: each variant target is a rigid edge.
+  if (fieldType === "discriminated_union") {
+    const variants = fieldAny.variants || [];
+    for (const v of variants) {
+      if (v?.type && schema.types?.[v.type]) targets.add(v.type);
+    }
+    return targets;
+  }
+
+  // Inline choice fields: each option target is a rigid edge.
+  if (fieldType === "choice") {
+    const choices = fieldAny.choices || fieldAny.types || [];
+    for (const c of choices) {
+      if (c?.type && schema.types?.[c.type]) targets.add(c.type);
+    }
+    return targets;
+  }
+
+  // Inline optional (`type: "optional"` shape): Option<T> is rigid.
+  if (fieldType === "optional") {
+    const innerType = fieldAny.value_type?.type ?? fieldAny.inner?.type;
+    if (typeof innerType === "string" && schema.types?.[innerType]) {
+      targets.add(innerType);
+    }
+    return targets;
+  }
+
+  // Generic Optional<T> (post-monomorphization should already be flattened,
+  // but be defensive — Optional<T> is still rigid).
+  const optMatch = typeof fieldType === "string"
+    ? fieldType.match(/^Optional<(.+)>$/)
+    : null;
+  if (optMatch && schema.types?.[optMatch[1]]) {
+    targets.add(optMatch[1]);
+    return targets;
+  }
+
+  // Bitfields and primitives don't reference user types.
+  if (fieldType === "bitfield") return targets;
+
+  // Direct struct/type-alias reference.
+  if (schema.types?.[fieldType]) {
+    targets.add(fieldType);
+  }
+  return targets;
+}
+
+/**
+ * Collect all rigid outgoing edges (target type names) for a schema type.
+ */
+function collectRigidOutgoingEdges(typeName: string, schema: BinarySchema): Set<string> {
+  const targets = new Set<string>();
+  const def = schema.types?.[typeName];
+  if (!def) return targets;
+
+  if ("sequence" in def) {
+    const seq = (def as any).sequence as Field[];
+    for (const field of seq) {
+      for (const t of collectRigidFieldTargets(field, schema)) targets.add(t);
+    }
+    return targets;
+  }
+  const defAny = def as any;
+  // Top-level discriminated union or choice
+  if (defAny.type === "discriminated_union" || Array.isArray(defAny.variants)) {
+    const variants = defAny.variants || [];
+    for (const v of variants) {
+      if (v?.type && schema.types?.[v.type]) targets.add(v.type);
+    }
+    return targets;
+  }
+  if (defAny.type === "choice") {
+    const choices = defAny.choices || defAny.types || [];
+    for (const c of choices) {
+      if (c?.type && schema.types?.[c.type]) targets.add(c.type);
+    }
+    return targets;
+  }
+  // Type alias: `{ type: "<user type>" }` — rigid pass-through.
+  if (typeof defAny.type === "string" && schema.types?.[defAny.type]) {
+    targets.add(defAny.type);
+  }
+  return targets;
+}
+
+/**
+ * Compute the rigid type graph for the entire schema.
+ */
+function buildRigidTypeGraph(schema: BinarySchema): Map<string, Set<string>> {
+  const graph = new Map<string, Set<string>>();
+  for (const typeName of Object.keys(schema.types || {})) {
+    graph.set(typeName, collectRigidOutgoingEdges(typeName, schema));
+  }
+  return graph;
+}
+
+/**
+ * Module-level cache keyed by the schema object identity. The generator runs
+ * synchronously per schema so a WeakMap keyed on the schema works fine.
+ */
+const __rigidGraphCache = new WeakMap<BinarySchema, Map<string, Set<string>>>();
+
+function getRigidGraph(schema: BinarySchema): Map<string, Set<string>> {
+  let g = __rigidGraphCache.get(schema);
+  if (!g) {
+    g = buildRigidTypeGraph(schema);
+    __rigidGraphCache.set(schema, g);
+  }
+  return g;
+}
+
+/**
+ * Reachability via the rigid type graph: can `from` reach `to`?
+ */
+function rigidReaches(from: string, to: string, graph: Map<string, Set<string>>): boolean {
+  if (!graph.has(from)) return false;
+  const visited = new Set<string>();
+  const stack: string[] = [from];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (visited.has(node)) continue;
+    visited.add(node);
+    if (node === to) return true;
+    const edges = graph.get(node);
+    if (!edges) continue;
+    for (const next of edges) {
+      if (!visited.has(next)) stack.push(next);
+    }
+  }
+  return false;
+}
+
+/**
+ * Decide whether a field's emission should be wrapped in `Box<...>` to break
+ * a type cycle.
+ *
+ * A field is on a cycle when:
+ *   - `containingType` is a schema type, AND
+ *   - the field has at least one rigid target type that can reach back to
+ *     `containingType` via the rigid type graph.
+ *
+ * For inline DU / choice fields with multiple targets, boxing the field once
+ * is enough — Box wraps the whole inline-DU enum, which is correct since the
+ * enum's variants are what create the cycle.
+ */
+function fieldIsRecursive(containingType: string | undefined, field: Field, schema: BinarySchema): boolean {
+  if (!containingType) return false;
+  if (!schema.types?.[containingType]) return false;
+  const targets = collectRigidFieldTargets(field, schema);
+  if (targets.size === 0) return false;
+  const graph = getRigidGraph(schema);
+  for (const target of targets) {
+    if (target === containingType) return true;
+    if (rigidReaches(target, containingType, graph)) return true;
+  }
+  return false;
+}
+
 /**
  * Check if a type has any nested struct fields
  * Returns true if any field references another struct type
@@ -1274,7 +1475,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
       // Build per-variant context if needed
       if (variantHasNestedStructNeedingContext) {
         lines.push(`                // Build per-variant context for nested struct sub-fields`);
-        lines.push(`                let mut variant_fields: HashMap<String, FieldValue> = HashMap::new();`);
+        lines.push(`                let mut variant_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
         for (const vf of sequence) {
           const vfAny = vf as any;
           if (!vf.name || vf.type === "padding" || vfAny.computed || vfAny.const != null) continue;
@@ -1497,7 +1698,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
     lines.push(``);
 
     // Context-aware version
-    lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<String, u64>>) -> Result<Self> {`);
+    lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<std::string::String, u64>>) -> Result<Self> {`);
   }
 
   // Handle peek-based discriminator
@@ -1886,7 +2087,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
       // Build per-variant context if needed
       if (variantHasNestedStructNeedingContext) {
         lines.push(`                // Build per-variant context for nested struct sub-fields`);
-        lines.push(`                let mut variant_fields: HashMap<String, FieldValue> = HashMap::new();`);
+        lines.push(`                let mut variant_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
         for (const vf of sequence) {
           const vfAny = vf as any;
           if (!vf.name || vf.type === "padding" || vfAny.computed || vfAny.const != null) continue;
@@ -2237,7 +2438,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
     lines.push(``);
 
     // Context-aware version
-    lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<String, u64>>) -> Result<Self> {`);
+    lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<std::string::String, u64>>) -> Result<Self> {`);
   }
   lines.push(`        // Union type - try each variant in order until one succeeds`);
 
@@ -2413,6 +2614,11 @@ function generateInputStruct(name: string, schemaTypeName: string, fields: Field
     if (isFieldConditional(field)) {
       rustType = `Option<${rustType}>`;
     }
+    // Wrap in Box<> if this field is on a type cycle, otherwise Rust will
+    // refuse to compile with E0072 "recursive type has infinite size".
+    if (fieldIsRecursive(schemaTypeName, field, schema)) {
+      rustType = `Box<${rustType}>`;
+    }
     const fieldName = toRustFieldName(field.name);
     lines.push(`    pub ${fieldName}: ${rustType},`);
   }
@@ -2454,6 +2660,10 @@ function generateOutputStruct(name: string, schemaTypeName: string, fields: Fiel
     // Wrap conditional fields in Option<>
     if (isFieldConditional(field)) {
       rustType = `Option<${rustType}>`;
+    }
+    // Wrap in Box<> if this field is on a type cycle (see fieldIsRecursive).
+    if (fieldIsRecursive(schemaTypeName, field, schema)) {
+      rustType = `Box<${rustType}>`;
     }
     const fieldName = toRustFieldName(field.name);
     lines.push(`    pub ${fieldName}: ${rustType},`);
@@ -2512,6 +2722,10 @@ function generateUnifiedStruct(name: string, schemaTypeName: string, fields: Fie
     // Wrap conditional fields in Option<>
     if (isFieldConditional(field)) {
       rustType = `Option<${rustType}>`;
+    }
+    // Wrap in Box<> if this field is on a type cycle (see fieldIsRecursive).
+    if (fieldIsRecursive(schemaTypeName, field, schema)) {
+      rustType = `Box<${rustType}>`;
     }
     const fieldName = toRustFieldName(field.name);
     lines.push(`    pub ${fieldName}: ${rustType},`);
@@ -2596,7 +2810,7 @@ function generateImpl(name: string, schemaTypeName: string, fields: Field[], def
     lines.push(``);
 
     lines.push(`impl ${name}Output {`);
-    lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema, instances));
+    lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema, instances, schemaTypeName));
     // Also add encode delegation methods on Output so callers can call .encode()
     // on Output types without manually converting to Input first
     lines.push(...generateOutputEncodeDelegation(name, fields, schema));
@@ -2610,7 +2824,7 @@ function generateImpl(name: string, schemaTypeName: string, fields: Field[], def
     // Unified mode: single impl with both encode and decode
     lines.push(`impl ${name} {`);
     lines.push(...generateEncodeMethod(fields, defaultEndianness, defaultBitOrder, schema, schemaTypeName));
-    lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema, instances));
+    lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema, instances, schemaTypeName));
     lines.push(`}`);
     lines.push(``);
   }
@@ -2850,7 +3064,7 @@ function generateSimpleImpl(name: string, schemaTypeName: string, fields: Field[
   lines.push(...generateEncodeMethod(fields, defaultEndianness, defaultBitOrder, schema, schemaTypeName));
 
   // Generate decode methods
-  lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema));
+  lines.push(...generateDecodeMethod(name, fields, defaultEndianness, defaultBitOrder, schema, undefined, schemaTypeName));
 
   lines.push(`}`);
   lines.push(``);
@@ -2952,7 +3166,7 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   if (hasNestedStructs) {
     lines.push(``);
     lines.push(`        // Build parent context for nested struct encoding`);
-    lines.push(`        let mut parent_fields: HashMap<String, FieldValue> = HashMap::new();`);
+    lines.push(`        let mut parent_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
     for (const field of fields) {
       if (!field.name) continue;
       // Skip padding, const, and computed fields - they don't have input values
@@ -2982,10 +3196,10 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
 
           lines.push(`        // Collect items with sub-field values for choice array '${field.name}'`);
           lines.push(`        {`);
-          lines.push(`            let mut items_data: Vec<(String, HashMap<String, FieldValue>)> = Vec::new();`);
+          lines.push(`            let mut items_data: Vec<(std::string::String, HashMap<std::string::String, FieldValue>)> = Vec::new();`);
           lines.push(`            for item in &self.${rustFieldName} {`);
           lines.push(`                let item_bytes = item.encode().unwrap_or_default();`);
-          lines.push(`                let mut item_fields: HashMap<String, FieldValue> = HashMap::new();`);
+          lines.push(`                let mut item_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
           lines.push(`                item_fields.insert("_encoded_size".to_string(), FieldValue::U64(item_bytes.len() as u64));`);
           // Match on the enum to extract sub-field values from each variant's Output struct
           lines.push(`                match item {`);
@@ -3071,14 +3285,14 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
 
           lines.push(`        // Collect items with sub-field values for typed array '${field.name}'`);
           lines.push(`        {`);
-          lines.push(`            let mut items_data: Vec<(String, HashMap<String, FieldValue>)> = Vec::new();`);
+          lines.push(`            let mut items_data: Vec<(std::string::String, HashMap<std::string::String, FieldValue>)> = Vec::new();`);
           lines.push(`            for item in &self.${rustFieldName} {`);
           if (!itemsNeedCtx) {
             lines.push(`                let item_bytes = item.encode()?;`);
           } else {
             lines.push(`                let item_bytes = Vec::<u8>::new(); // Items need context, skip encoding for now`);
           }
-          lines.push(`                let mut item_fields: HashMap<String, FieldValue> = HashMap::new();`);
+          lines.push(`                let mut item_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
           lines.push(`                item_fields.insert("_encoded_size".to_string(), FieldValue::U64(item_bytes.len() as u64));`);
           lines.push(`                items_data.push(("${itemTypeName}".to_string(), item_fields));`);
           lines.push(`            }`);
@@ -4344,9 +4558,9 @@ function generateEncodeConstField(field: Field, constValue: any, defaultEndianne
 /**
  * Generates the decode methods
  * If the type needs decode context (has field_referenced arrays with external fields),
- * generates decode_with_decoder_and_context that accepts a HashMap<String, u64> context.
+ * generates decode_with_decoder_and_context that accepts a HashMap<std::string::String, u64> context.
  */
-function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema, instances?: any[]): string[] {
+function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema, instances?: any[], schemaTypeName?: string): string[] {
   const lines: string[] = [];
   const bitOrder = mapBitOrder(defaultBitOrder);
   const needsContext = typeNeedsDecodeContext(name, schema);
@@ -4371,7 +4585,7 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
     lines.push(``);
 
     // Context-aware version
-    lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<String, u64>>) -> Result<Self> {`);
+    lines.push(`    pub fn decode_with_decoder_and_context(decoder: &mut BitStreamDecoder, ctx: Option<&HashMap<std::string::String, u64>>) -> Result<Self> {`);
   }
 
   // Compute per-field byte-alignment for optimized decode calls
@@ -4403,7 +4617,12 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
       continue;
     }
     const fieldName = toRustFieldName(field.name);
-    lines.push(`            ${fieldName},`);
+    // Box-wrap recursive fields so the struct has a fixed size (E0072).
+    if (fieldIsRecursive(schemaTypeName, field, schema)) {
+      lines.push(`            ${fieldName}: Box::new(${fieldName}),`);
+    } else {
+      lines.push(`            ${fieldName},`);
+    }
   }
   // Include instance fields in the struct
   if (hasInstances) {
@@ -4516,7 +4735,7 @@ function generateInstanceFieldDecoding(
       if (instNeedsCtx) {
         // Build a context HashMap of the parent's already-decoded scalar
         // fields so the instance type can resolve `_root.X` references.
-        lines.push(`${indent}let mut __instance_ctx: HashMap<String, u64> = HashMap::new();`);
+        lines.push(`${indent}let mut __instance_ctx: HashMap<std::string::String, u64> = HashMap::new();`);
         for (const sf of sequenceFields) {
           if (!sf.name) continue;
           const sfRust = toRustFieldName(sf.name);
@@ -5664,7 +5883,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
           if (needsCtx && vNeedsCtx) {
             // Need context for this variant
             const ctxLines: string[] = [];
-            ctxLines.push(`${vi}let mut union_ctx: HashMap<String, u64> = HashMap::new();`);
+            ctxLines.push(`${vi}let mut union_ctx: HashMap<std::string::String, u64> = HashMap::new();`);
             if (allFields) {
               for (const prevField of allFields) {
                 if (prevField.name === field.name) break;
@@ -5751,7 +5970,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       } else if (needsCtx) {
         // Peek-based with context - delegate to enum
         lines.push(`${indent}// Build context for discriminated union variants`);
-        lines.push(`${indent}let mut union_ctx: HashMap<String, u64> = HashMap::new();`);
+        lines.push(`${indent}let mut union_ctx: HashMap<std::string::String, u64> = HashMap::new();`);
         if (allFields) {
           for (const prevField of allFields) {
             if (prevField.name === field.name) break;

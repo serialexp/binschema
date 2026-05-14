@@ -1792,69 +1792,59 @@ function findCircularDependency(
     return null;
   }
 
-  // Handle type aliases that can have dependencies (discriminated unions and pointers)
+  // Handle type aliases. Discriminated_union variants are "weak" edges
+  // (data-controlled — runtime picks one variant at a time), so we don't
+  // follow them when looking for hard cycles. See the comment further down
+  // about weak edges.
+  //
+  // back_reference is special: it's a pointer/offset, finite in size, but its
+  // `target_type` is the type whose value is reached by dereferencing. A
+  // pointer-to-self or A→B→A pointer chain is an unbounded dereferencing
+  // structure (you never reach a non-pointer payload), so we DO follow
+  // back_reference.target_type as a hard edge.
   if (isTypeAlias(typeDef)) {
-    const typeDefAny = typeDef as any;
-
-    // Check discriminated union variants for circular dependencies
-    if (typeDefAny.type === "discriminated_union" && typeDefAny.variants) {
-      for (const variant of typeDefAny.variants) {
-        if (variant.type && schema.types[variant.type]) {
-          const cycle = findCircularDependency(variant.type, schema, new Set(visited), [...path]);
-          if (cycle) return cycle;
-        }
-      }
-    }
-
-    // Check back_reference target_type for circular dependencies
-    if (typeDefAny.type === "back_reference" && typeDefAny.target_type) {
-      if (schema.types[typeDefAny.target_type]) {
-        const cycle = findCircularDependency(typeDefAny.target_type, schema, new Set(visited), [...path]);
+    const td = typeDef as any;
+    if (td.type === "back_reference" && typeof td.target_type === "string") {
+      const targetType = td.target_type;
+      if (schema.types[targetType]) {
+        const cycle = findCircularDependency(
+          targetType,
+          schema,
+          new Set(visited),
+          [...path]
+        );
         if (cycle) return cycle;
       }
     }
-
-    // Other type aliases (primitives, arrays) don't have dependencies
     return null;
   }
 
-  // Check all fields for type references
+  // Check all fields for type references.
+  //
+  // Note on "weak" edges: we skip recursion through `discriminated_union`
+  // variants, `choice` options, `array` items, `optional` value_types, and
+  // conditional fields. Those edges are data-controlled — encoding can
+  // terminate by picking a different variant / empty array / None /
+  // false-condition, so a type cycle that closes through one of them is a
+  // legitimate structural-recursion pattern (linked lists, ASTs, etc.) and
+  // not an unbounded definition. Code generators handle these via natural
+  // indirection (TS references, Go pointers, Rust `Box<T>` inserted at one
+  // edge per cycle). The validator was previously rejecting these schemas
+  // outright; that was too strict.
   const fields = getTypeFields(typeDef);
   for (const field of fields) {
     if (!("type" in field)) continue;
 
     const fieldType = field.type;
+    // Conditional fields are data-controlled — skip them as cycle edges.
+    if ((field as any).conditional != null || (field as any).if != null) {
+      continue;
+    }
 
-    // Skip built-in types
+    // Skip built-in types entirely — their inner type references (array
+    // items, DU variants, choice options, optional value_type, back_reference
+    // targets) are all "weak" edges that don't establish a hard cycle.
     if (BUILT_IN_TYPES.includes(fieldType)) {
-      // Check array items recursively
-      if (fieldType === "array" && "items" in field && field.items) {
-        const itemType = (field.items as any).type;
-        if (itemType && !BUILT_IN_TYPES.includes(itemType)) {
-          const cycle = findCircularDependency(itemType, schema, new Set(visited), [...path]);
-          if (cycle) return cycle;
-        }
-      }
-
-      // Check discriminated union variants recursively
-      if (fieldType === "discriminated_union" && "variants" in field && Array.isArray(field.variants)) {
-        for (const variant of field.variants) {
-          if (variant.type && !BUILT_IN_TYPES.includes(variant.type)) {
-            const cycle = findCircularDependency(variant.type, schema, new Set(visited), [...path]);
-            if (cycle) return cycle;
-          }
-        }
-      }
-
-      // Check back_reference target type recursively
-      if (fieldType === "back_reference" && "target_type" in field) {
-        const targetType = (field as any).target_type;
-        if (targetType && !BUILT_IN_TYPES.includes(targetType)) {
-          const cycle = findCircularDependency(targetType, schema, new Set(visited), [...path]);
-          if (cycle) return cycle;
-        }
-      }
-
       continue;
     }
 

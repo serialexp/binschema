@@ -466,9 +466,15 @@ const DISCRIMINATED_UNION_VALIDATION_TESTS: DiscriminatedUnionTestCase[] = [
   },
 
   {
-    description: "Discriminated union with circular reference (variant points to self)",
-    shouldPass: false,
-    expectedErrors: ["circular", "dependency", "Recursive"],
+    // Previously this was rejected as a hard cycle, but discriminated_union
+    // variants are data-controlled edges — at decode time the discriminator
+    // can select a different variant or the chain can be terminated by the
+    // data. The schema is structurally legal; whether the encoded stream
+    // actually terminates is the producer's responsibility. Generators
+    // handle the type-size aspect via natural indirection (Box in Rust,
+    // pointer-like references in Go/TS).
+    description: "Discriminated union with self-referential variant is valid",
+    shouldPass: true,
     schema: {
       types: {
         "Recursive": {
@@ -477,7 +483,7 @@ const DISCRIMINATED_UNION_VALIDATION_TESTS: DiscriminatedUnionTestCase[] = [
             peek: "uint8",
           },
           variants: [
-            { when: "value == 0x01", type: "Recursive" }, // Points to self!
+            { when: "value == 0x01", type: "Recursive" }, // Self-reference allowed
           ],
         } as any,
       },
@@ -485,9 +491,8 @@ const DISCRIMINATED_UNION_VALIDATION_TESTS: DiscriminatedUnionTestCase[] = [
   },
 
   {
-    description: "Discriminated union with indirect circular reference",
-    shouldPass: false,
-    expectedErrors: ["circular", "dependency"],
+    description: "Discriminated union with indirect cycle is valid (data-controlled)",
+    shouldPass: true,
     schema: {
       types: {
         "A": {
@@ -501,7 +506,7 @@ const DISCRIMINATED_UNION_VALIDATION_TESTS: DiscriminatedUnionTestCase[] = [
           type: "discriminated_union",
           discriminator: { peek: "uint8" },
           variants: [
-            { when: "value == 0x01", type: "A" }, // A → B → A cycle
+            { when: "value == 0x01", type: "A" }, // A → B → A is data-controlled
           ],
         } as any,
       },
@@ -576,15 +581,19 @@ const DISCRIMINATED_UNION_VALIDATION_TESTS: DiscriminatedUnionTestCase[] = [
   },
 
   {
-    description: "CRITICAL: Circular ref through struct field (union → struct → union)",
-    shouldPass: false,
-    expectedErrors: ["circular", "dependency"],
+    // This is the canonical "AST recursive type" pattern — a struct holds a
+    // discriminated union whose variants include the struct itself. The
+    // recursion terminates via the `Leaf` variant. Generators handle the
+    // type-size cycle via natural indirection (Box in Rust, references in
+    // TS/Go).
+    description: "Recursive AST: struct holds DU with variant referencing struct (valid)",
+    shouldPass: true,
     schema: {
       types: {
         "Leaf": { sequence: [{ name: "value", type: "uint8" }] },
         "Container": {
           sequence: [
-            { name: "child", type: "UnionType" } // Points back to union!
+            { name: "child", type: "UnionType" }
           ],
         },
         "UnionType": {
@@ -592,7 +601,7 @@ const DISCRIMINATED_UNION_VALIDATION_TESTS: DiscriminatedUnionTestCase[] = [
           discriminator: { peek: "uint8" },
           variants: [
             { when: "value == 0x01", type: "Leaf" },
-            { when: "value == 0x02", type: "Container" }, // Container → UnionType cycle
+            { when: "value == 0x02", type: "Container" },
           ],
         } as any,
       },
