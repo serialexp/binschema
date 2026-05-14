@@ -47,3 +47,4 @@ isolate-*.log
 
 # Test debug output
 go/test/tmp-go-debug/
+python/runtime/__pycache__/
