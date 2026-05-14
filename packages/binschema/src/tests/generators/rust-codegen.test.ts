@@ -610,27 +610,32 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     };
 
     const result = generateRust(schema, "Foo");
-    const required = [
+    // Regression guard: we do NOT want the blanket
+    // #![allow(unused_mut)] / #![allow(unused_variables)] /
+    // #![allow(clippy::all)] hammer at the crate root. The generator
+    // should emit clean code; if it doesn't, fix the generator, don't
+    // silence the warnings.
+    const forbidden = [
       "#![allow(unused_mut)]",
       "#![allow(unused_variables)]",
       "#![allow(clippy::all)]",
     ];
-    const missing = required.filter((s) => !result.code.includes(s));
-    if (missing.length === 0) {
+    const present = forbidden.filter((s) => result.code.includes(s));
+    if (present.length === 0) {
       passed++;
-      checks.push({ description: "Generated code suppresses noisy warnings", passed: true });
+      checks.push({ description: "Generated code does NOT blanket-allow noisy warnings", passed: true });
     } else {
       failed++;
       checks.push({
-        description: "Generated code suppresses noisy warnings",
+        description: "Generated code does NOT blanket-allow noisy warnings",
         passed: false,
-        message: `Missing attrs: ${missing.join(", ")}`,
+        message: `Forbidden blanket allows present: ${present.join(", ")} — fix the generator instead of silencing`,
       });
     }
   } catch (error: any) {
     failed++;
     checks.push({
-      description: "Generated code suppresses noisy warnings",
+      description: "Generated code does NOT blanket-allow noisy warnings",
       passed: false,
       message: `Exception: ${error.message}`,
     });

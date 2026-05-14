@@ -278,11 +278,6 @@ export function generateRust(
   lines.push(`#![allow(non_camel_case_types)]`);
   lines.push(`#![allow(dead_code)]`);
   lines.push(`#![allow(unreachable_code)]`);
-  lines.push(`#![allow(unused_mut)]`);
-  lines.push(`#![allow(unused_variables)]`);
-  lines.push(`#![allow(unused_assignments)]`);
-  lines.push(`#![allow(unused_parens)]`);
-  lines.push(`#![allow(clippy::all)]`);
   lines.push(``);
 
   // Determine default endianness and bit order
@@ -1502,6 +1497,100 @@ function generateRustEnumType(name: string, typeDef: any, defaultEndianness: str
  * Generates a discriminated union as a Rust enum
  * Uses Output types for variants that have Input/Output separation
  */
+/**
+ * Post-emission helper: if the body of a match arm (or any block) doesn't
+ * reference its bound variable name, rewrite the binding to `_` so rustc
+ * doesn't warn about an unused variable.
+ *
+ * `headerIdx` is the index of the line containing `Variant(v) => {` (or
+ * similar `fn from(v: T)` etc.). The body is `lines[headerIdx+1 ..]` —
+ * we scan up to the current end of the buffer.
+ *
+ * `varName` defaults to `"v"`. Pattern: matches `\bvarName\b` in the body.
+ */
+function rewriteBindingIfUnused(
+  lines: string[],
+  headerIdx: number,
+  varName: string = "v",
+  bodyEndIdx?: number,
+): void {
+  const end = bodyEndIdx ?? lines.length;
+  const body = lines.slice(headerIdx + 1, end).join("\n");
+  const re = new RegExp(`\\b${varName}\\b`);
+  if (!re.test(body)) {
+    lines[headerIdx] = lines[headerIdx].replace(`(${varName})`, `(_)`);
+    // Also handle `fn from(v: T) -> Self {` → `fn from(_: T) -> Self {`
+    lines[headerIdx] = lines[headerIdx].replace(
+      new RegExp(`\\b${varName}:`),
+      `_${varName}:`,
+    );
+  }
+}
+
+/**
+ * Post-emission helper: if a `let ${varName} = ...;` (or `let mut`)
+ * binding is never referenced in the body that follows, prefix the
+ * binding name with `_` to silence `unused variable`.
+ */
+function prefixLetBindingIfUnused(
+  lines: string[],
+  lineIdx: number,
+  varName: string,
+  bodyEndIdx?: number,
+): void {
+  const end = bodyEndIdx ?? lines.length;
+  const body = lines.slice(lineIdx + 1, end).join("\n");
+  const re = new RegExp(`\\b${varName}\\b`);
+  if (!re.test(body)) {
+    lines[lineIdx] = lines[lineIdx].replace(
+      new RegExp(`(let(?:\\s+mut)?\\s+)${varName}\\b`),
+      `$1_${varName}`,
+    );
+  }
+}
+
+/**
+ * Post-emission helper: if the body after `lineIdx` never mutates the
+ * variable bound on that line (via `.insert(`, `.entry(`, `.push(`,
+ * `.remove(`, `.clear(`, `.extend(`, `= ...`), demote `let mut foo`
+ * to `let foo` to silence the `variable does not need to be mutable`
+ * lint.
+ *
+ * The line at `lineIdx` must contain `let mut ${varName}` for this to
+ * do anything.
+ */
+function demoteLetMutIfNeverMutated(
+  lines: string[],
+  lineIdx: number,
+  varName: string,
+  bodyEndIdx?: number,
+): void {
+  const end = bodyEndIdx ?? lines.length;
+  const body = lines.slice(lineIdx + 1, end).join("\n");
+  // Mutation signatures we know the generator can emit for the typical
+  // bindings (HashMap, Vec, BitStreamDecoder, etc).
+  const mutators = [
+    `${varName}.insert(`,
+    `${varName}.entry(`,
+    `${varName}.push(`,
+    `${varName}.remove(`,
+    `${varName}.clear(`,
+    `${varName}.extend(`,
+    `${varName} = `,
+    `${varName} +=`,
+    `${varName} -=`,
+    `${varName} *=`,
+    `${varName} /=`,
+    `&mut ${varName}`,
+  ];
+  if (!mutators.some((m) => body.includes(m))) {
+    lines[lineIdx] = lines[lineIdx].replace(
+      `let mut ${varName}`,
+      `let ${varName}`,
+    );
+  }
+}
+
 function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema): string[] {
   const lines: string[] = [];
   const discriminator = unionDef.discriminator;
@@ -1567,6 +1656,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
     if (needsSuffix && typeDef && "sequence" in typeDef) {
       // Composite type wrapped in Output - encode all fields inline
       const sequence = (typeDef as any).sequence;
+      const variantArmHeaderIdx = lines.length;
       lines.push(`            ${name}::${variantTypeName}(v) => {`);
       const rustEndianness = mapEndianness(defaultEndianness);
 
@@ -1580,8 +1670,11 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
       });
 
       // Build per-variant context if needed
+      let variantFieldsLineIdx = -1;
+      let variantCtxLineIdx = -1;
       if (variantHasNestedStructNeedingContext) {
         lines.push(`                // Build per-variant context for nested struct sub-fields`);
+        variantFieldsLineIdx = lines.length;
         lines.push(`                let mut variant_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
         for (const vf of sequence) {
           const vfAny = vf as any;
@@ -1602,6 +1695,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
             lines.push(`                variant_fields.insert("${vf.name}".to_string(), ${conversion}(v.${vfRustName}));`);
           }
         }
+        variantCtxLineIdx = lines.length;
         lines.push(`                let variant_ctx = ctx.extend_with_parent(variant_fields);`);
       }
 
@@ -1748,6 +1842,17 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
         }
       }
       lines.push(`            }`);
+      // If the variant arm's body never references `v` (e.g. a tag-only
+      // variant whose sole field is a const), rust would warn
+      // `unused variable: v`. Rewrite the binding to `_`.
+      rewriteBindingIfUnused(lines, variantArmHeaderIdx);
+      // The `variant_fields` HashMap may have nothing to .insert() if the
+      // variant's sequence is all const/computed/nested-struct fields, and
+      // `variant_ctx` may go unused if no nested struct consumes it.
+      if (variantFieldsLineIdx >= 0) {
+        demoteLetMutIfNeverMutated(lines, variantFieldsLineIdx, "variant_fields");
+        prefixLetBindingIfUnused(lines, variantCtxLineIdx, "variant_ctx");
+      }
     } else if (needsSuffix) {
       // Composite type alias with Input/Output split - convert Output to Input and encode directly
       lines.push(`            ${name}::${variantTypeName}(v) => {`);
@@ -2163,6 +2268,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
     lines.push(`        Ok(encoder.finish())`);
     lines.push(`    }`);
     lines.push(``);
+    var inlineDuEncodeIntoCtxSigIdx = lines.length;
     lines.push(`    pub fn encode_into_with_context(&self, encoder: &mut BitStreamEncoder, ctx: &EncodeContext) -> Result<()> {`);
   } else {
     lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
@@ -2172,6 +2278,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
     lines.push(`    }`);
     lines.push(``);
     lines.push(`    pub fn encode_into(&self, encoder: &mut BitStreamEncoder) -> Result<()> {`);
+    var inlineDuEncodeIntoCtxSigIdx = -1;
   }
   lines.push(`        match self {`);
   for (const typeName of variantTypes) {
@@ -2179,6 +2286,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
     const typeDef = schema.types[typeName];
     if (typeDef && "sequence" in typeDef) {
       const sequence = (typeDef as any).sequence;
+      const inlineVariantArmHeaderIdx = lines.length;
       lines.push(`            ${enumName}::${rustTypeName}(v) => {`);
       const rustEndianness = mapEndianness(defaultEndianness);
 
@@ -2192,8 +2300,11 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
       });
 
       // Build per-variant context if needed
+      let inlineVariantFieldsLineIdx = -1;
+      let inlineVariantCtxLineIdx = -1;
       if (variantHasNestedStructNeedingContext) {
         lines.push(`                // Build per-variant context for nested struct sub-fields`);
+        inlineVariantFieldsLineIdx = lines.length;
         lines.push(`                let mut variant_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
         for (const vf of sequence) {
           const vfAny = vf as any;
@@ -2213,6 +2324,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
             lines.push(`                variant_fields.insert("${vf.name}".to_string(), ${conversion}(v.${vfRustName}));`);
           }
         }
+        inlineVariantCtxLineIdx = lines.length;
         lines.push(`                let variant_ctx = EncodeContext::new().extend_with_parent(variant_fields);`);
       }
 
@@ -2496,6 +2608,11 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
         }
       }
       lines.push(`            }`);
+      rewriteBindingIfUnused(lines, inlineVariantArmHeaderIdx);
+      if (inlineVariantFieldsLineIdx >= 0) {
+        demoteLetMutIfNeverMutated(lines, inlineVariantFieldsLineIdx, "variant_fields");
+        prefixLetBindingIfUnused(lines, inlineVariantCtxLineIdx, "variant_ctx");
+      }
     } else {
       // Non-sequence type - try calling encode()
       if (anyVariantNeedsEncodeContext && typeTransitivelyContainsBackReference(typeName, schema)) {
@@ -2512,6 +2629,12 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
   lines.push(`        }`);
   lines.push(`        Ok(())`);
   lines.push(`    }`);
+  // If `ctx` was never threaded through (no variant references it), rename
+  // the parameter so rustc doesn't warn — the API is still
+  // `encode_into_with_context` because the caller path needs that name.
+  if (inlineDuEncodeIntoCtxSigIdx >= 0) {
+    rewriteBindingIfUnused(lines, inlineDuEncodeIntoCtxSigIdx, "ctx");
+  }
   lines.push(``);
 
   // Generate type_name method - returns the original schema type name for sum_of_type_sizes
@@ -2555,7 +2678,8 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
     const rustTypeName = toRustTypeName(typeName);
     const variantNeedsContext = typesNeedingContext.has(typeName);
 
-    if (i === 0) {
+    if (i === 0 && variantTypes.length > 1) {
+      // Only needed when there's a follow-up variant to seek back for.
       lines.push(`        let start_pos = decoder.position();`);
     }
     const variantNeedsSplit = typeNeedsInputOutputSplit(typeName, schema);
@@ -3020,7 +3144,12 @@ function generateOutputEncodeDelegation(name: string, fields: Field[], schema: B
 function generateFromFieldConversion(fieldName: string, field: Field, schema: BinarySchema): string {
   const isConditional = isFieldConditional(field);
 
-  // Helper: check if an array item type needs conversion
+  // Helper: check if an array item type needs conversion. A type only
+  // needs `.into()` when its Output and Input differ — i.e. when it has
+  // an Input/Output split. Non-split composites (sequences with no
+  // const/computed fields, type aliases, enums) emit the same Rust type
+  // for both, so `.into()` would be a useless self-conversion (clippy
+  // warns).
   function arrayItemNeedsConversion(items: any): boolean {
     if (!items || !items.type) return false;
     const itemType = items.type;
@@ -3037,8 +3166,8 @@ function generateFromFieldConversion(fieldName: string, field: Field, schema: Bi
     if (itemType === "array") {
       return arrayItemNeedsConversion(items.items);
     }
-    // Named type reference - check if composite
-    return isCompositeType(itemType, schema);
+    // Named type reference - only convert if it actually has a split.
+    return typeNeedsInputOutputSuffix(itemType, schema);
   }
 
   // Helper: determine if the base (unwrapped) field type needs conversion
@@ -3058,16 +3187,16 @@ function generateFromFieldConversion(fieldName: string, field: Field, schema: Bi
       case "optional": {
         const valueTypeName = (field as any).value_type;
         if (!valueTypeName || typeof valueTypeName === "object") return false;
-        return isCompositeType(valueTypeName, schema);
+        return typeNeedsInputOutputSuffix(valueTypeName, schema);
       }
       case "back_reference": {
         const targetType = (field as any).target_type;
         if (!targetType) return false;
-        return isCompositeType(targetType, schema);
+        return typeNeedsInputOutputSuffix(targetType, schema);
       }
       default: {
-        // Named type reference
-        return isCompositeType(field.type, schema);
+        // Named type reference - convert only when there's an actual split.
+        return typeNeedsInputOutputSuffix(field.type, schema);
       }
     }
   }
@@ -3143,6 +3272,7 @@ function generateFromOutputToInput(name: string, fields: Field[], schema: Binary
   const inputFields = fields.filter(f => f.name && f.type && f.type !== "padding" && isInputField(f));
 
   lines.push(`impl From<${name}Output> for ${name}Input {`);
+  const fromSigIdx = lines.length;
   lines.push(`    fn from(o: ${name}Output) -> Self {`);
   lines.push(`        Self {`);
   for (const field of inputFields) {
@@ -3154,6 +3284,11 @@ function generateFromOutputToInput(name: string, fields: Field[], schema: Binary
   lines.push(`    }`);
   lines.push(`}`);
   lines.push(``);
+
+  // If the body never references `o` (Input struct has no fields to forward
+  // — e.g. all fields are const/computed and live only in Output), rust
+  // warns `unused variable: o`. Rewrite the parameter to `_o`.
+  rewriteBindingIfUnused(lines, fromSigIdx, "o");
 
   return lines;
 }
@@ -3270,9 +3405,11 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   }
 
   // If we have nested structs, build parent context for them
+  let parentFieldsLineIdx = -1;
   if (hasNestedStructs) {
     lines.push(``);
     lines.push(`        // Build parent context for nested struct encoding`);
+    parentFieldsLineIdx = lines.length;
     lines.push(`        let mut parent_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
     for (const field of fields) {
       if (!field.name) continue;
@@ -3393,7 +3530,11 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
           lines.push(`        // Collect items with sub-field values for typed array '${field.name}'`);
           lines.push(`        {`);
           lines.push(`            let mut items_data: Vec<(std::string::String, HashMap<std::string::String, FieldValue>)> = Vec::new();`);
-          lines.push(`            for item in &self.${rustFieldName} {`);
+          // When items_need_ctx, we don't actually use `item` inside the loop
+          // (we just push an empty placeholder), so bind to `_` to avoid the
+          // `unused variable: item` lint.
+          const itemBinding = itemsNeedCtx ? "_" : "item";
+          lines.push(`            for ${itemBinding} in &self.${rustFieldName} {`);
           if (!itemsNeedCtx) {
             lines.push(`                let item_bytes = item.encode()?;`);
           } else {
@@ -3623,6 +3764,12 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   lines.push(`        Ok(())`);
   lines.push(`    }`);
   lines.push(``);
+
+  // If parent_fields has no .insert() calls (all fields were const/computed/
+  // optional/conditional), drop the `mut` so rustc doesn't warn.
+  if (parentFieldsLineIdx >= 0) {
+    demoteLetMutIfNeverMutated(lines, parentFieldsLineIdx, "parent_fields");
+  }
 
   return lines;
 }
