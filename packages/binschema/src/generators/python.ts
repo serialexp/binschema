@@ -678,7 +678,7 @@ function generateChoiceEncode(field: any, fieldAccess: string, indent: string, e
       const typeDef = schema.types[choice.type];
       if ('sequence' in typeDef) {
         for (const subfield of typeDef.sequence) {
-          code += generateFieldEncode(subfield, fieldAccess, indent + '    ', endianness, schema, bitOrder);
+          code += generateFieldEncode(subfield, fieldAccess, indent + '    ', endianness, schema, bitOrder, typeDef.sequence);
         }
       }
     }
@@ -764,6 +764,9 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
     code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess})\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
+  } else if (typeof (typeDef as any).type === 'string' && schema.types[(typeDef as any).type]) {
+    // Alias: typeDef is { type: "OtherType" } - recurse with target type
+    code += generateTypeRefEncode({ ...field, type: (typeDef as any).type }, fieldAccess, indent, endianness, schema, bitOrder, valuePath);
   } else {
     code += `${indent}# TODO: type ref encode for ${field.type}\n`;
   }
@@ -951,9 +954,20 @@ function generateLengthCalculation(field: any, target: string, targetAccess: str
 
   code += `${indent}_target_val_${field.name} = ${targetAccess}\n`;
 
-  if (targetType && schema.types[targetType]) {
+  // Resolve alias chain: { type: "OtherType" } → follow until we hit a real type
+  let resolvedType = targetType;
+  while (resolvedType && schema.types[resolvedType]) {
+    const td = schema.types[resolvedType] as any;
+    if (typeof td.type === 'string' && schema.types[td.type]) {
+      resolvedType = td.type;
+    } else {
+      break;
+    }
+  }
+
+  if (resolvedType && schema.types[resolvedType]) {
     // Schema-typed target — trial-encode via the dedicated encoder.
-    const encClass = `${toPascalCase(targetType)}Encoder`;
+    const encClass = `${toPascalCase(resolvedType)}Encoder`;
     code += `${indent}if isinstance(_target_val_${field.name}, (list, bytes, bytearray)):\n`;
     code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
     code += `${indent}elif isinstance(_target_val_${field.name}, str):\n`;
@@ -1663,6 +1677,9 @@ function generateTypeRefDecode(field: any, fieldAssign: string, indent: string, 
     code += generateDiscriminatedUnionDecode(typeDef as any, fieldAssign, indent, endianness, schema, bitOrder, '');
   } else if ((typeDef as any).type === 'choice') {
     code += generateChoiceDecode(typeDef as any, fieldAssign, indent, endianness, schema, bitOrder);
+  } else if (typeof (typeDef as any).type === 'string' && schema.types[(typeDef as any).type]) {
+    // Alias: typeDef is { type: "OtherType" } - recurse with target type
+    code += generateTypeRefDecode({ ...field, type: (typeDef as any).type }, fieldAssign, indent, endianness, schema, bitOrder);
   } else {
     code += `${indent}# TODO: type ref decode for ${field.type}\n`;
   }
