@@ -56,6 +56,35 @@ function pyFieldAccess(basePath: string, fieldPath: string): string {
 }
 
 /**
+ * Convert a dotted field path to a Python expression that resolves against
+ * either the local `result` dict or the top-level `_root` dict. This is used
+ * for decode-time field references (length_field, count_field, discriminator
+ * field, etc.) which may live in a parent scope.
+ *
+ * Rules:
+ *   - Paths starting with "_root." are resolved against `_root`.
+ *   - Other paths are tried against `result` first, then `_root`. We emit a
+ *     conditional expression so the lookup falls through at runtime.
+ *
+ * This mirrors the Kaitai-style "walk up the scope chain" behavior the TS
+ * reference relies on via context threading.
+ */
+function pyFieldAccessWithRootFallback(fieldPath: string): string {
+  const parts = fieldPath.split('.');
+  if (parts[0] === '_root') {
+    let access = '_root';
+    for (const part of parts.slice(1)) access += `[${JSON.stringify(part)}]`;
+    return access;
+  }
+  const firstKey = JSON.stringify(parts[0]);
+  const suffix = parts.map(p => `[${JSON.stringify(p)}]`).join('');
+  // (result if "X" in result else _root)["X"]...
+  // Relies on _root being initialized at the top of decode_X to `result` when
+  // no caller passed one in (top-level decode case), so this is always safe.
+  return `(result if ${firstKey} in result else _root)${suffix}`;
+}
+
+/**
  * Map endianness string to Python string literal
  */
 function pyEndianness(endianness: string): string {
@@ -1128,7 +1157,7 @@ function generateStringDecode(field: any, fieldAssign: string, resultPath: strin
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
     code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
   } else if (kind === "field_referenced" && field.length_field) {
-    code += `${indent}_str_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
+    code += `${indent}_str_len = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
     code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
   } else if (field.length !== undefined) {
@@ -1140,7 +1169,7 @@ function generateStringDecode(field: any, fieldAssign: string, resultPath: strin
       code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
     }
   } else if (field.length_field) {
-    code += `${indent}_str_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
+    code += `${indent}_str_len = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
     code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
   } else {
@@ -1162,12 +1191,12 @@ function generateBytesDecode(field: any, fieldAssign: string, resultPath: string
     code += generateLengthPrefixDecode(lengthType, '_bytes_len', indent, endianness);
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(_bytes_len))\n`;
   } else if (kind === "field_referenced" && field.length_field) {
-    code += `${indent}_bytes_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
+    code += `${indent}_bytes_len = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(_bytes_len))\n`;
   } else if (field.length !== undefined) {
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(${field.length}))\n`;
   } else if (field.length_field) {
-    code += `${indent}_bytes_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
+    code += `${indent}_bytes_len = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(_bytes_len))\n`;
   } else {
     code += `${indent}_remaining = len(decoder._bytes) - decoder.position\n`;
@@ -1219,7 +1248,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}for ${iVar} in range(${lenVar}):\n`;
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "field_referenced" && field.length_field) {
-    code += `${indent}${countVar} = ${pyFieldAccess(resultPath, field.length_field)}\n`;
+    code += `${indent}${countVar} = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
@@ -1234,7 +1263,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
       });
       code += `${indent}${countVar} = ${pyExpr}\n`;
     } else if (countField) {
-      code += `${indent}${countVar} = ${pyFieldAccess(resultPath, countField)}\n`;
+      code += `${indent}${countVar} = ${pyFieldAccessWithRootFallback(countField)}\n`;
     } else {
       code += `${indent}${countVar} = 0  # computed_count without field reference\n`;
     }
@@ -1311,7 +1340,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}for ${iVar} in range(${field.length}):\n`;
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (field.length_field) {
-    code += `${indent}${countVar} = ${pyFieldAccess(resultPath, field.length_field)}\n`;
+    code += `${indent}${countVar} = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
@@ -1385,7 +1414,7 @@ function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, inden
     // Discriminator references a previously decoded field
     const discField = field.discriminator.field;
     const rp = resultPath || 'result';
-    code += `${indent}_disc_val = ${pyFieldAccess(rp, discField)}\n`;
+    code += `${indent}_disc_val = ${pyFieldAccessWithRootFallback(discField)}\n`;
   }
 
   // Check if variants use `when` conditions or `value` matching
@@ -1408,7 +1437,7 @@ function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, inden
       } else {
         code += `${indent}${cond} True:\n`;
       }
-      code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder)}\n`;
+      code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder, _root)}\n`;
     }
   } else {
     for (let i = 0; i < variants.length; i++) {
@@ -1416,7 +1445,7 @@ function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, inden
       const discValue = variant.value !== undefined ? variant.value : i;
       const cond = i === 0 ? 'if' : 'elif';
       code += `${indent}${cond} _disc_val == ${discValue}:\n`;
-      code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder)}\n`;
+      code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder, _root)}\n`;
     }
     code += `${indent}else:\n`;
     code += `${indent}    raise ValueError(f"Unknown discriminator value: {_disc_val}")\n`;
@@ -1471,7 +1500,7 @@ function generateChoiceDecode(field: any, fieldAssign: string, indent: string, e
     }
 
     code += `${indent}${cond} _choice_disc == ${constValue}:\n`;
-    code += `${indent}    _choice_result = decode_${toSnakeCase(choice.type)}(decoder)\n`;
+    code += `${indent}    _choice_result = decode_${toSnakeCase(choice.type)}(decoder, _root)\n`;
     code += `${indent}    _choice_result["type"] = "${choice.type}"\n`;
     code += `${indent}    ${fieldAssign} = _choice_result\n`;
   }
@@ -1527,7 +1556,7 @@ function generateTypeRefDecode(field: any, fieldAssign: string, indent: string, 
         break;
     }
   } else if ('sequence' in typeDef) {
-    code += `${indent}${fieldAssign} = decode_${toSnakeCase(field.type)}(decoder)\n`;
+    code += `${indent}${fieldAssign} = decode_${toSnakeCase(field.type)}(decoder, _root)\n`;
   } else if ((typeDef as any).type === 'string') {
     code += generateStringDecode(typeDef as any, fieldAssign, '', indent, endianness);
   } else if ((typeDef as any).type === 'array') {
@@ -1757,11 +1786,11 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(``);
   lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder, _root: dict[str, Any] | None = None) -> dict[str, Any]:`);
   lines.push(`    result: dict[str, Any] = {}`);
-  if (hasInstances) {
-    // If we're the top of a decode (no _root passed), make `result` itself the root.
-    lines.push(`    if _root is None:`);
-    lines.push(`        _root = result`);
-  }
+  // If we're the top of a decode (no _root passed), make `result` itself the
+  // root. Subsequent field lookups can fall back to _root when a referenced
+  // field doesn't live in the local scope.
+  lines.push(`    if _root is None:`);
+  lines.push(`        _root = result`);
 
   for (const field of fields) {
     lines.push(generateFieldDecode(field, 'result', '    ', endianness, schema, bitOrder));
@@ -2022,15 +2051,20 @@ function generateStringTypeCode(name: string, typeDef: any, endianness: string):
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
+  // Standalone decode function so DU/choice/instance call sites can use the
+  // uniform `decode_<name>(decoder, _root)` convention.
+  lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder, _root: dict[str, Any] | None = None) -> str:`);
+  lines.push(`    result = ""`);
+  lines.push(generateStringDecode(typeDef, 'result', '', '    ', endianness));
+  lines.push(`    return result`);
+  lines.push(``);
+
   lines.push(`class ${className}Decoder(SeekableBitStreamDecoder):`);
   lines.push(`    def __init__(self, data: bytes | bytearray | list[int]):`);
   lines.push(`        super().__init__(data, "msb_first")`);
   lines.push(``);
   lines.push(`    def decode(self) -> str:`);
-  lines.push(`        decoder = self`);
-  lines.push(`        result = ""`);
-  lines.push(generateStringDecode(typeDef, 'result', '', '        ', endianness));
-  lines.push(`        return result`);
+  lines.push(`        return decode_${toSnakeCase(name)}(self)`);
 
   return lines;
 }
@@ -2049,15 +2083,20 @@ function generateArrayTypeCode(name: string, typeDef: any, schema: BinarySchema,
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
+  // Standalone decode function so DU/choice/instance call sites can use the
+  // uniform `decode_<name>(decoder, _root)` convention.
+  lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder, _root: dict[str, Any] | None = None) -> list:`);
+  lines.push(`    result: list = []`);
+  lines.push(generateArrayDecode(typeDef, 'result', '', '    ', endianness, schema, bitOrder));
+  lines.push(`    return result`);
+  lines.push(``);
+
   lines.push(`class ${className}Decoder(SeekableBitStreamDecoder):`);
   lines.push(`    def __init__(self, data: bytes | bytearray | list[int]):`);
   lines.push(`        super().__init__(data, "${bitOrder}")`);
   lines.push(``);
   lines.push(`    def decode(self) -> list:`);
-  lines.push(`        decoder = self`);
-  lines.push(`        result = []`);
-  lines.push(generateArrayDecode(typeDef, 'result', '', '        ', endianness, schema, bitOrder));
-  lines.push(`        return result`);
+  lines.push(`        return decode_${toSnakeCase(name)}(self)`);
 
   return lines;
 }
