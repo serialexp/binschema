@@ -374,12 +374,13 @@ def values_equal(actual, expected) -> bool:
 
 
 def to_pascal_case(name: str) -> str:
-    if not '_' in name and name[0:1].isupper():
+    if '_' not in name and '-' not in name and name[0:1].isupper():
         return name
-    return ''.join(part.capitalize() for part in name.split('_'))
+    return ''.join(part.capitalize() for part in re.split(r'[-_]', name))
 
 
 def to_snake_case(name: str) -> str:
+    name = name.replace('-', '_')
     name = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
     name = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
     return name.lower()

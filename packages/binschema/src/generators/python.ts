@@ -19,6 +19,7 @@ export interface PythonGeneratorOptions {
  */
 function toSnakeCase(name: string): string {
   return name
+    .replace(/-/g, '_')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .toLowerCase();
@@ -28,11 +29,12 @@ function toSnakeCase(name: string): string {
  * Convert to PascalCase for class names
  */
 function toPascalCase(name: string): string {
-  // Already PascalCase? Return as-is
-  if (/^[A-Z]/.test(name) && !name.includes('_')) return name;
+  // Already PascalCase? Return as-is. Hyphens disqualify since they're
+  // not valid in Python identifiers — we must transform them.
+  if (/^[A-Z]/.test(name) && !name.includes('_') && !name.includes('-')) return name;
   return name
     .split(/[-_]/)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join('');
 }
 
@@ -209,7 +211,7 @@ function convertConditionalToPython(condition: string, basePath: string = "value
 /**
  * Generate Python encode expression for a single field
  */
-function generateFieldEncode(field: any, valuePath: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+function generateFieldEncode(field: any, valuePath: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string, parentFields?: any[]): string {
   let code = '';
 
   // Handle conditional fields
@@ -232,7 +234,7 @@ function generateFieldEncode(field: any, valuePath: string, indent: string, endi
 
   // Handle computed fields
   if (field.computed) {
-    code += generateComputedFieldEncode(field, valuePath, indent, endianness, schema);
+    code += generateComputedFieldEncode(field, valuePath, indent, endianness, schema, parentFields);
     return code;
   }
 
@@ -769,7 +771,7 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
   return code;
 }
 
-function generateComputedFieldEncode(field: any, valuePath: string, indent: string, endianness: string, schema: BinarySchema): string {
+function generateComputedFieldEncode(field: any, valuePath: string, indent: string, endianness: string, schema: BinarySchema, parentFields?: any[]): string {
   let code = '';
   const computed = field.computed;
   const e = field.endianness || endianness;
@@ -796,7 +798,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
     // Calculate length by trial encoding the target field
     const targetAccess = resolveComputedTarget(target, valuePath);
     code += `${indent}# Computed: length_of ${target}\n`;
-    code += generateLengthCalculation(field, target, targetAccess, valuePath, indent, bitOrder, e, schema);
+    code += generateLengthCalculation(field, target, targetAccess, valuePath, indent, bitOrder, e, schema, parentFields);
   } else if (computed.type === "crc32_of") {
     const target = computed.target;
     const targetAccess = resolveComputedTarget(target, valuePath);
@@ -846,31 +848,126 @@ function getTargetFieldType(target: string, schema: BinarySchema, valuePath: str
   return target;
 }
 
-function generateLengthCalculation(field: any, target: string, targetAccess: string, valuePath: string, indent: string, bitOrder: string, endianness: string, schema: BinarySchema): string {
+/**
+ * Generate Python lines that encode a `length_of` + `from_after_field`
+ * computed field into the named target encoder. Handles nested from_after_field
+ * fields by recursing — when the outer's `fieldsAfter` contains another
+ * from_after_field length field, we delegate the tail (including that length
+ * field itself) to a nested invocation against a fresh temp encoder.
+ *
+ * Generated code shape (for outer encoder `enc`, indent `<I>`):
+ *   <I># Content-first encoding for from_after_field <name>
+ *   <I>_pieces_<uniq> = []
+ *   <I>_total_<uniq> = 0
+ *   <I>_temp_<uniq>_<af> = BitStreamEncoder(...)
+ *   <I>... (encode field <af> into _temp_<uniq>_<af>) ...
+ *   <I>_piece_<uniq>_<af> = _temp_<uniq>_<af>.finish()
+ *   <I>_pieces_<uniq>.append(_piece_<uniq>_<af>)
+ *   <I>_total_<uniq> += len(_piece_<uniq>_<af>)
+ *   ... [repeat for each afterField, recursing into nested from_after_field] ...
+ *   <I>enc.write_varlength_der(_total_<uniq>)   # the length field itself
+ *   <I>for _p in _pieces_<uniq>:
+ *   <I>    enc.write_bytes(_p)
+ */
+function generateFromAfterFieldEncode(
+  lengthField: any,
+  parentFields: any[],
+  schema: BinarySchema,
+  endianness: string,
+  bitOrder: string,
+  targetEncoder: string,
+  indent: string
+): string[] {
+  const lines: string[] = [];
+  const uniq = `${lengthField.name}_${_varCounter++}`;
+  const fromAfterFieldName = lengthField.computed.from_after_field;
+  const fromAfterIdx = parentFields.findIndex((f: any) => f.name === fromAfterFieldName);
+  const fieldsAfter = parentFields
+    .slice(fromAfterIdx + 1)
+    .filter((f: any) => f.name !== lengthField.name);
+
+  lines.push(`${indent}# Content-first encoding for from_after_field ${lengthField.name}`);
+  lines.push(`${indent}_pieces_${uniq} = []`);
+  lines.push(`${indent}_total_${uniq} = 0`);
+
+  for (let i = 0; i < fieldsAfter.length; i++) {
+    const af = fieldsAfter[i] as any;
+
+    if (af.computed?.type === "length_of" && af.computed.from_after_field) {
+      // Nested from_after_field: this field plus all remaining fields after it
+      // get handled together by a recursive call. We collect their bytes into a
+      // dedicated nested encoder, then add that as one big piece.
+      const innerEnc = `_temp_${uniq}_${af.name}`;
+      lines.push(`${indent}${innerEnc} = BitStreamEncoder("${bitOrder}")`);
+      const nestedLines = generateFromAfterFieldEncode(
+        af, parentFields, schema, endianness, bitOrder, innerEnc, indent
+      );
+      lines.push(...nestedLines);
+      lines.push(`${indent}_piece_${uniq}_${af.name} = ${innerEnc}.finish()`);
+      lines.push(`${indent}_pieces_${uniq}.append(_piece_${uniq}_${af.name})`);
+      lines.push(`${indent}_total_${uniq} += len(_piece_${uniq}_${af.name})`);
+      // Nested call handled the rest of the fields, stop the outer loop.
+      break;
+    }
+
+    const innerEnc = `_temp_${uniq}_${af.name || `idx${i}`}`;
+    lines.push(`${indent}${innerEnc} = BitStreamEncoder("${bitOrder}")`);
+    const fieldCode = generateFieldEncode(af, 'value', indent, endianness, schema, bitOrder, parentFields);
+    lines.push(fieldCode.replace(/\bencoder\b/g, innerEnc));
+    lines.push(`${indent}_piece_${uniq}_${af.name || `idx${i}`} = ${innerEnc}.finish()`);
+    lines.push(`${indent}_pieces_${uniq}.append(_piece_${uniq}_${af.name || `idx${i}`})`);
+    lines.push(`${indent}_total_${uniq} += len(_piece_${uniq}_${af.name || `idx${i}`})`);
+  }
+
+  // Write the computed length to the OUTER encoder
+  const e = lengthField.endianness || endianness;
+  const writeLen = generateComputedWrite(lengthField.type, `_total_${uniq}`, indent, e).trimEnd();
+  // generateComputedWrite hard-codes "encoder" as the target; rewrite to the
+  // caller-supplied encoder name.
+  lines.push(writeLen.replace(/\bencoder\b/g, targetEncoder));
+
+  // Write content pieces to the OUTER encoder
+  lines.push(`${indent}for _p in _pieces_${uniq}:`);
+  lines.push(`${indent}    ${targetEncoder}.write_bytes(_p)`);
+
+  return lines;
+}
+
+function generateLengthCalculation(field: any, target: string, targetAccess: string, valuePath: string, indent: string, bitOrder: string, endianness: string, schema: BinarySchema, parentFields?: any[]): string {
   let code = '';
   const lengthVar = `_computed_length_${field.name}`;
   const offset = field.computed.offset || 0;
 
-  // Look up the target field's type in the schema to determine how to calculate length
-  // For arrays/bytes/strings: use trial encoding
-  // For simple types: use known sizes
-  code += `${indent}_temp_enc_${field.name} = BitStreamEncoder("${bitOrder}")\n`;
+  // Look up the target field's static type in the parent struct's sequence so
+  // we can dispatch to the right encoder class for trial-encoding. Falls back
+  // to runtime introspection if we can't find it.
+  let targetType: string | undefined;
+  if (parentFields) {
+    // Strip "../" prefixes from target — those are parent-relative refs.
+    const cleanTarget = target.replace(/^(\.\.\/)+/, '');
+    const targetField = parentFields.find((f: any) => f && f.name === cleanTarget);
+    if (targetField) targetType = (targetField as any).type;
+  }
 
-  // Find the target field definition to determine encoding strategy
-  // We need to encode the target value to measure its byte length
   code += `${indent}_target_val_${field.name} = ${targetAccess}\n`;
-  code += `${indent}if isinstance(_target_val_${field.name}, (list, bytes, bytearray)):\n`;
-  code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
-  code += `${indent}elif isinstance(_target_val_${field.name}, str):\n`;
-  code += `${indent}    ${lengthVar} = len(_target_val_${field.name}.encode("utf-8"))\n`;
-  code += `${indent}elif isinstance(_target_val_${field.name}, dict):\n`;
-  // For struct types, need to trial-encode
-  code += `${indent}    # Try to find encoder for this struct\n`;
-  code += `${indent}    ${lengthVar} = 0\n`;
-  code += `${indent}    for _enc_cls_name in dir():\n`;
-  code += `${indent}        pass  # Will be improved with type-specific encoding\n`;
-  code += `${indent}else:\n`;
-  code += `${indent}    ${lengthVar} = 0\n`;
+
+  if (targetType && schema.types[targetType]) {
+    // Schema-typed target — trial-encode via the dedicated encoder.
+    const encClass = `${toPascalCase(targetType)}Encoder`;
+    code += `${indent}if isinstance(_target_val_${field.name}, (list, bytes, bytearray)):\n`;
+    code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
+    code += `${indent}elif isinstance(_target_val_${field.name}, str):\n`;
+    code += `${indent}    ${lengthVar} = len(_target_val_${field.name}.encode("utf-8"))\n`;
+    code += `${indent}else:\n`;
+    code += `${indent}    ${lengthVar} = len(${encClass}().encode(_target_val_${field.name}))\n`;
+  } else {
+    code += `${indent}if isinstance(_target_val_${field.name}, (list, bytes, bytearray)):\n`;
+    code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
+    code += `${indent}elif isinstance(_target_val_${field.name}, str):\n`;
+    code += `${indent}    ${lengthVar} = len(_target_val_${field.name}.encode("utf-8"))\n`;
+    code += `${indent}else:\n`;
+    code += `${indent}    ${lengthVar} = 0  # unknown target type for length_of\n`;
+  }
 
   if (offset) {
     code += `${indent}${lengthVar} += ${offset}\n`;
@@ -1691,36 +1788,11 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
 
     // Handle from_after_field length computed fields specially
     if (fieldAny.computed?.type === "length_of" && fieldAny.computed.from_after_field) {
-      const fromAfterFieldName = fieldAny.computed.from_after_field;
-      const fromAfterIdx = fields.findIndex((f: any) => f.name === fromAfterFieldName);
-      const fieldsAfter = fields.slice(fromAfterIdx + 1).filter((f: any) => (f as any).name !== fieldAny.name);
-
-      lines.push(`        # Content-first encoding for from_after_field`);
-      lines.push(`        _content_pieces = []`);
-      lines.push(`        _total_content_length = 0`);
-
-      for (const afterField of fieldsAfter) {
-        const af = afterField as any;
-        lines.push(`        _temp_enc = BitStreamEncoder("${bitOrder}")`);
-        // Generate the field encode code but targeting _temp_enc instead of encoder
-        const fieldCode = generateFieldEncode(af, 'value', '        ', endianness, schema, bitOrder);
-        lines.push(fieldCode.replace(/\bencoder\b/g, '_temp_enc'));
-        lines.push(`        _piece = _temp_enc.finish()`);
-        lines.push(`        _content_pieces.append(_piece)`);
-        lines.push(`        _total_content_length += len(_piece)`);
-      }
-
-      // Write the computed length
-      const e = fieldAny.endianness || endianness;
-      lines.push(generateComputedWrite(fieldAny.type, '_total_content_length', '        ', e));
-
-      // Write the content pieces
-      lines.push(`        for _piece in _content_pieces:`);
-      lines.push(`            encoder.write_bytes(_piece)`);
+      lines.push(...generateFromAfterFieldEncode(fieldAny, fields, schema, endianness, bitOrder, 'encoder', '        '));
       continue;
     }
 
-    lines.push(generateFieldEncode(field, 'value', '        ', endianness, schema, bitOrder));
+    lines.push(generateFieldEncode(field, 'value', '        ', endianness, schema, bitOrder, fields));
   }
 
   // Mark end of encoding for field offset tracking
