@@ -897,10 +897,38 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
     code += generateLengthCalculation(field, target, targetAccess, valuePath, indent, bitOrder, e, schema, parentFields);
   } else if (computed.type === "crc32_of") {
     const target = computed.target;
-    const targetAccess = resolveComputedTarget(target, valuePath);
-    code += `${indent}# CRC32 computed field - write placeholder, back-patch later\n`;
-    code += `${indent}_crc_pos_${field.name} = encoder.byte_offset\n`;
-    code += generatePlaceholderWrite(field.type, indent, e);
+    const flInfo = parseFirstLastTarget(target);
+    const corrInfo = parseCorrespondingTarget(target);
+    if (flInfo || corrInfo) {
+      // Selector-target CRC: look up the matching item from array_offsets, pull
+      // the relevant sub-field from its Python value, and compute CRC32 over
+      // its serialized bytes. This is synchronous at the call site — the array
+      // must have been encoded before this point (Container encodes items
+      // before summary).
+      code += `${indent}# CRC32 of selector target ${target}\n`;
+      code += generateSelectorCrc32(field, flInfo || corrInfo, !!corrInfo, indent, e, schema);
+    } else {
+      code += `${indent}# CRC32 computed field - write placeholder, back-patch later\n`;
+      code += `${indent}_crc_pos_${field.name} = encoder.byte_offset\n`;
+      code += generatePlaceholderWrite(field.type, indent, e);
+      if (target && target.startsWith('../')) {
+        // Plain parent-ref crc32_of: capture parent's field dict for deferred
+        // resolution. The resolver computes CRC32 of the field's byte range.
+        let rem = target;
+        let levels = 0;
+        while (rem.startsWith('../')) { levels++; rem = rem.substring(3); }
+        const fieldName = rem;
+        code += `${indent}_ctx["deferred_patches"].append({` +
+          `"local_offset": _crc_pos_${field.name}, ` +
+          `"patch_type": "${field.type}", ` +
+          `"endianness": "${e}", ` +
+          `"alignment": 1, ` +
+          `"operation": "crc32", ` +
+          `"parent_field_dict": _ctx["field_offset_stacks"][${-(levels + 1)}], ` +
+          `"parent_field_name": ${JSON.stringify(fieldName)}` +
+          `})\n`;
+      }
+    }
   } else if (computed.type === "position_of") {
     const target = computed.target;
     // corresponding<T> refers to an already-encoded same-array peer, so resolve
@@ -1307,6 +1335,77 @@ function generateCorrespondingPositionOf(
     code += `${indent}${posVar} = ${posVar} // ${alignment}\n`;
   }
   code += generateComputedWrite(field.type, posVar, indent, endianness);
+  return code;
+}
+
+/**
+ * Generate inline CRC32 for a first<T>/last<T>/corresponding<T> selector.
+ * Resolves the target array item via _ctx[array_offsets], traverses any
+ * remainingPath, serializes (or coerces) to bytes, and writes CRC32 directly.
+ */
+function generateSelectorCrc32(
+  field: any,
+  info: any,
+  isCorresponding: boolean,
+  indent: string,
+  endianness: string,
+  schema: BinarySchema
+): string {
+  if (!info) return '';
+  let code = '';
+  const { arrayPath, filterType, remainingPath } = info;
+  const itemVar = `_crc_item_${field.name}`;
+  code += `${indent}_crc_arr_${field.name} = _ctx["array_offsets"].get("${arrayPath}", [])\n`;
+  code += `${indent}${itemVar} = None\n`;
+  if (isCorresponding) {
+    code += `${indent}if _ctx.get("current_array") == "${arrayPath}":\n`;
+    code += `${indent}    _crc_n_${field.name} = _ctx["array_iterations"].get("${arrayPath}", {}).get("typeIndices", {}).get(_self_variant_type, _ctx["array_iterations"].get("${arrayPath}", {}).get("typeIndices", {}).get("${filterType}", 0))\n`;
+    code += `${indent}else:\n`;
+    code += `${indent}    _crc_n_${field.name} = _ctx["array_iterations"].get(_ctx.get("current_array") or "", {}).get("index", 0) + 1\n`;
+    code += `${indent}_crc_seen_${field.name} = 0\n`;
+    code += `${indent}for _coff, _citem in _crc_arr_${field.name}:\n`;
+    code += `${indent}    _ct = _citem.get("type") if isinstance(_citem, dict) else None\n`;
+    code += `${indent}    if _ct == "${filterType}" or _ct is None:\n`;
+    code += `${indent}        _crc_seen_${field.name} += 1\n`;
+    code += `${indent}        if _crc_seen_${field.name} == _crc_n_${field.name}:\n`;
+    code += `${indent}            ${itemVar} = _citem\n`;
+    code += `${indent}            break\n`;
+  } else {
+    const sel = info.selector;
+    const iter = sel === "first" ? `_crc_arr_${field.name}` : `reversed(_crc_arr_${field.name})`;
+    code += `${indent}for _coff, _citem in ${iter}:\n`;
+    code += `${indent}    _ct = _citem.get("type") if isinstance(_citem, dict) else None\n`;
+    code += `${indent}    if _ct == "${filterType}" or _ct is None:\n`;
+    code += `${indent}        ${itemVar} = _citem\n`;
+    code += `${indent}        break\n`;
+  }
+  code += `${indent}if ${itemVar} is None:\n`;
+  code += `${indent}    _crc_val_${field.name} = 0\n`;
+  code += `${indent}else:\n`;
+  // Traverse remainingPath if any
+  if (remainingPath) {
+    const parts = remainingPath.split('.').filter((p: string) => p);
+    code += `${indent}    _crc_v = ${itemVar}\n`;
+    code += `${indent}    if isinstance(_crc_v, dict) and "value" in _crc_v and "type" in _crc_v and isinstance(_crc_v.get("value"), dict):\n`;
+    code += `${indent}        _crc_v = _crc_v["value"]\n`;
+    for (const p of parts) {
+      code += `${indent}    _crc_v = _crc_v["${p}"]\n`;
+    }
+    code += `${indent}    if isinstance(_crc_v, (bytes, bytearray)):\n`;
+    code += `${indent}        _crc_bytes = bytes(_crc_v)\n`;
+    code += `${indent}    elif isinstance(_crc_v, list):\n`;
+    code += `${indent}        _crc_bytes = bytes(_crc_v)\n`;
+    code += `${indent}    elif isinstance(_crc_v, str):\n`;
+    code += `${indent}        _crc_bytes = _crc_v.encode("utf-8")\n`;
+    code += `${indent}    else:\n`;
+    code += `${indent}        _crc_bytes = bytes([int(_crc_v)])\n`;
+    code += `${indent}    _crc_val_${field.name} = compute_crc32(_crc_bytes)\n`;
+  } else {
+    // No sub-path: CRC the whole item by trial-encoding via its type encoder
+    code += `${indent}    _crc_payload = ${itemVar}.get("value", ${itemVar}) if isinstance(${itemVar}, dict) else ${itemVar}\n`;
+    code += `${indent}    _crc_val_${field.name} = compute_crc32(${toPascalCase(filterType)}Encoder().encode(_crc_payload))\n`;
+  }
+  code += generateComputedWrite(field.type, `_crc_val_${field.name}`, indent, endianness);
   return code;
 }
 
@@ -2222,10 +2321,11 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
     if (needsFieldTracking && fieldAny.name) {
       lines.push(`        _field_offset_${fieldAny.name} = encoder.byte_offset`);
     }
-    // Record this field's offset in the parents' field-offset dict so children
-    // can resolve `../<fieldname>` parent-ref position_of via deferred patches.
+    // Record this field's start offset in the parents' field-extents dict so
+    // children can resolve `../<fieldname>` parent-ref position_of / crc32_of
+    // via deferred patches. End offset is recorded after the field is written.
     if (fieldAny.name) {
-      lines.push(`        _ctx["field_offset_stacks"][-1]["${fieldAny.name}"] = encoder.byte_offset`);
+      lines.push(`        _ctx["field_offset_stacks"][-1]["${fieldAny.name}"] = {"start": encoder.byte_offset, "end": encoder.byte_offset}`);
     }
 
     // Handle from_after_field length computed fields specially
@@ -2235,6 +2335,10 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
     }
 
     lines.push(generateFieldEncode(field, 'value', '        ', endianness, schema, bitOrder, fields));
+    // Update end offset post-write so crc32_of ../<fieldname> can range over it.
+    if (fieldAny.name) {
+      lines.push(`        _ctx["field_offset_stacks"][-1]["${fieldAny.name}"]["end"] = encoder.byte_offset`);
+    }
   }
 
   // Mark end of encoding for field offset tracking

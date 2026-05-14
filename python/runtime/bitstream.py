@@ -44,11 +44,22 @@ def _resolve_deferred_patches(encoder, patches, array_offsets, array_iterations)
         if "parent_field_dict" in p:
             pdict = p["parent_field_dict"]
             pname = p["parent_field_name"]
+            op = p.get("operation", "position")
             if pname in pdict:
-                resolved = pdict[pname]
-                alignment = p.get("alignment", 1)
-                if alignment > 1:
-                    resolved = resolved + ((alignment - (resolved % alignment)) % alignment)
+                entry = pdict[pname]
+                start = entry["start"] if isinstance(entry, dict) else entry
+                end = entry.get("end", start) if isinstance(entry, dict) else start
+                if op == "crc32":
+                    # Field must be fully written before CRC is meaningful.
+                    if end <= start:
+                        remaining.append(p)
+                        continue
+                    resolved = zlib.crc32(bytes(encoder._bytes[start:end])) & 0xFFFFFFFF
+                else:
+                    resolved = start
+                    alignment = p.get("alignment", 1)
+                    if alignment > 1:
+                        resolved = resolved + ((alignment - (resolved % alignment)) % alignment)
                 off = p["local_offset"]
                 ptype = p["patch_type"]
                 e = p["endianness"]
