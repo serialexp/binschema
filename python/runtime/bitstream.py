@@ -41,6 +41,33 @@ def _resolve_deferred_patches(encoder, patches, array_offsets, array_iterations)
     for p in patches:
         # Parent-ref patches: look up the field offset in the captured parent
         # dict by reference. Resolves once the parent records the offset.
+        if p.get("operation") == "sum_of_sizes":
+            total = 0
+            all_done = True
+            for pdict, pname in p.get("parent_field_targets", []):
+                if pname not in pdict:
+                    all_done = False
+                    break
+                entry = pdict[pname]
+                start = entry["start"] if isinstance(entry, dict) else entry
+                end = entry.get("end", start) if isinstance(entry, dict) else start
+                if end <= start:
+                    all_done = False
+                    break
+                total += end - start
+            if not all_done:
+                remaining.append(p)
+                continue
+            off = p["local_offset"]
+            ptype = p["patch_type"]
+            e = p["endianness"]
+            if ptype == "uint8":
+                encoder.patch_uint8(off, total & 0xFF)
+            elif ptype == "uint16":
+                encoder.patch_uint16(off, total & 0xFFFF, e)
+            elif ptype == "uint32":
+                encoder.patch_uint32(off, total & 0xFFFFFFFF, e)
+            continue
         if "parent_field_dict" in p:
             pdict = p["parent_field_dict"]
             pname = p["parent_field_name"]

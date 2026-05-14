@@ -742,9 +742,15 @@ function generateChoiceEncode(field: any, fieldAccess: string, indent: string, e
         // Make the current variant's type name available for corresponding<T>
         // resolution inside computed fields emitted in this arm.
         code += `${indent}    _self_variant_type = "${choice.type}"\n`;
+        // Push the arm value as a logical "self" frame so `../` from inside
+        // the variant resolves to the enclosing struct rather than skipping it.
+        code += `${indent}    _ctx["parents"].append(${fieldAccess})\n`;
+        code += `${indent}    _ctx["field_offset_stacks"].append({})\n`;
         for (const subfield of typeDef.sequence) {
           code += generateFieldEncode(subfield, fieldAccess, indent + '    ', endianness, schema, bitOrder, typeDef.sequence);
         }
+        code += `${indent}    _ctx["parents"].pop()\n`;
+        code += `${indent}    _ctx["field_offset_stacks"].pop()\n`;
       }
     }
   }
@@ -976,17 +982,42 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
           `})\n`;
       }
     }
-  } else if (computed.type === "sum_of_field_sizes") {
+  } else if (computed.type === "sum_of_field_sizes" || computed.type === "sum_of_sizes") {
     const targets = computed.targets || [];
-    code += `${indent}# Computed: sum_of_field_sizes\n`;
-    const terms = targets.map((t: string) => {
-      const tAccess = resolveComputedTarget(t, valuePath);
-      return `len(${toPascalCase(getTargetFieldType(t, schema, valuePath))}Encoder().encode(${tAccess}))`;
-    });
-    if (terms.length > 0) {
-      code += generateComputedWrite(field.type, terms.join(' + '), indent, e);
+    const parentRefTargets = targets.filter((t: string) => typeof t === 'string' && t.startsWith('../'));
+    const isAllParentRef = parentRefTargets.length === targets.length && targets.length > 0;
+    if (isAllParentRef) {
+      // Defer until the parent has recorded all field extents. Resolver sums
+      // (end - start) across the captured parent dicts.
+      code += `${indent}# Computed: ${computed.type} (deferred parent-ref sum)\n`;
+      code += `${indent}_sum_pos_${field.name} = encoder.byte_offset\n`;
+      code += generatePlaceholderWrite(field.type, indent, e);
+      const tuples: string[] = [];
+      for (const t of parentRefTargets) {
+        let rem = t;
+        let levels = 0;
+        while (rem.startsWith('../')) { levels++; rem = rem.substring(3); }
+        tuples.push(`(_ctx["field_offset_stacks"][${-(levels + 1)}], ${JSON.stringify(rem)})`);
+      }
+      code += `${indent}_ctx["deferred_patches"].append({` +
+        `"local_offset": _sum_pos_${field.name}, ` +
+        `"patch_type": "${field.type}", ` +
+        `"endianness": "${e}", ` +
+        `"alignment": 1, ` +
+        `"operation": "sum_of_sizes", ` +
+        `"parent_field_targets": [${tuples.join(', ')}]` +
+        `})\n`;
     } else {
-      code += generateComputedWrite(field.type, '0', indent, e);
+      code += `${indent}# Computed: sum_of_field_sizes\n`;
+      const terms = targets.map((t: string) => {
+        const tAccess = resolveComputedTarget(t, valuePath);
+        return `len(${toPascalCase(getTargetFieldType(t, schema, valuePath))}Encoder().encode(${tAccess}))`;
+      });
+      if (terms.length > 0) {
+        code += generateComputedWrite(field.type, terms.join(' + '), indent, e);
+      } else {
+        code += generateComputedWrite(field.type, '0', indent, e);
+      }
     }
   } else if (computed.type === "sum_of_type_sizes") {
     // Sum encoded sizes of array items matching element_type
@@ -2359,14 +2390,17 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
     const flInfo = parseFirstLastTarget(target);
     const corrInfo = parseCorrespondingTarget(target);
 
-    if (flInfo || corrInfo) {
-      // Selector targets may reference array items not yet encoded (forward
-      // reference). Defer the patch — record the placeholder's local offset
-      // along with the target spec. A wrapper around every sub-encoder call
-      // re-bases the offset to absolute in the outer buffer. At the end of
-      // every struct encode, we try to resolve all deferred patches against
-      // the current _ctx["array_offsets"]; the outermost encoder, with the
-      // fullest data, resolves the rest.
+    // corresponding<T> is handled synchronously inline (no _pos_<name> var),
+    // so don't try to register a deferred patch for it here.
+    if (corrInfo) continue;
+    if (flInfo) {
+      // first<T>/last<T> targets may reference array items not yet encoded
+      // (forward reference). Defer the patch — record the placeholder's local
+      // offset along with the target spec. A wrapper around every sub-encoder
+      // call re-bases the offset to absolute in the outer buffer. At the end
+      // of every struct encode, we try to resolve all deferred patches
+      // against the current _ctx["array_offsets"]; the outermost encoder,
+      // with the fullest data, resolves the rest.
       lines.push(`        # Defer position_of ${target} (selector resolved later)`);
       const patchEntry: any = {
         local_offset: `_pos_${pfAny.name}`,
