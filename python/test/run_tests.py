@@ -293,7 +293,7 @@ def run_single_test(
             return {
                 "description": description,
                 "pass": False,
-                "error": f"Encode error: {e}",
+                "error": f"Encode error: {e}\n{__import__('traceback').format_exc()}",
             }
 
     # Test decoding

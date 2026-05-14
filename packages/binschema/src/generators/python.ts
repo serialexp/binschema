@@ -543,13 +543,20 @@ function generateArrayIterationInit(arrName: string | undefined, indent: string)
   let c = '';
   c += `${indent}_ctx["array_offsets"]["${arrName}"] = []\n`;
   c += `${indent}_ctx["array_iterations"]["${arrName}"] = {"index": 0, "typeIndices": {}, "done": False}\n`;
+  // Save/restore the current_array marker so cross-array corresponding<T>
+  // resolution can ask "what array am I in right now?"
+  c += `${indent}_prev_curr_arr_${arrName} = _ctx.get("current_array")\n`;
+  c += `${indent}_ctx["current_array"] = "${arrName}"\n`;
   return c;
 }
 
 /** Mark the named array as fully encoded (called right after the loop). */
 function generateArrayIterationDone(arrName: string | undefined, indent: string): string {
   if (!arrName) return '';
-  return `${indent}_ctx["array_iterations"]["${arrName}"]["done"] = True\n`;
+  let c = '';
+  c += `${indent}_ctx["array_iterations"]["${arrName}"]["done"] = True\n`;
+  c += `${indent}_ctx["current_array"] = _prev_curr_arr_${arrName}\n`;
+  return c;
 }
 
 function generateArrayEncode(field: any, fieldAccess: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
@@ -732,6 +739,9 @@ function generateChoiceEncode(field: any, fieldAccess: string, indent: string, e
     if (schema.types[choice.type]) {
       const typeDef = schema.types[choice.type];
       if ('sequence' in typeDef) {
+        // Make the current variant's type name available for corresponding<T>
+        // resolution inside computed fields emitted in this arm.
+        code += `${indent}    _self_variant_type = "${choice.type}"\n`;
         for (const subfield of typeDef.sequence) {
           code += generateFieldEncode(subfield, fieldAccess, indent + '    ', endianness, schema, bitOrder, typeDef.sequence);
         }
@@ -873,6 +883,14 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
       return code;
     }
 
+    // Check for corresponding<T> selector: ../arr[corresponding<T>].subfield
+    const corrInfo = parseCorrespondingTarget(target);
+    if (corrInfo) {
+      code += `${indent}# Computed: length_of ${target}\n`;
+      code += generateCorrespondingLength(field, corrInfo, indent, e);
+      return code;
+    }
+
     // Calculate length by trial encoding the target field
     const targetAccess = resolveComputedTarget(target, valuePath);
     code += `${indent}# Computed: length_of ${target}\n`;
@@ -884,25 +902,33 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
     code += `${indent}_crc_pos_${field.name} = encoder.byte_offset\n`;
     code += generatePlaceholderWrite(field.type, indent, e);
   } else if (computed.type === "position_of") {
-    code += `${indent}# Position computed field - write placeholder, back-patch later\n`;
-    code += `${indent}_pos_${field.name} = encoder.byte_offset\n`;
-    code += generatePlaceholderWrite(field.type, indent, e);
-    // If the target uses a selector (first/last/corresponding), register a
-    // deferred patch right here. The struct-level back-patch loop only fires
-    // for non-inlined struct encodes; choice/DU inliners skip that loop, so
-    // we register inline to cover both paths. The struct-level loop has been
-    // updated to do the same registration — duplicate is harmless because the
-    // resolver only finalizes once it can resolve a target.
     const target = computed.target;
-    if (target && (target.includes('[first<') || target.includes('[last<') || target.includes('[corresponding<'))) {
-      const alignment = computed.alignment || 1;
-      code += `${indent}_ctx["deferred_patches"].append({` +
-        `"local_offset": _pos_${field.name}, ` +
-        `"patch_type": "${field.type}", ` +
-        `"endianness": "${e}", ` +
-        `"alignment": ${alignment}, ` +
-        `"target_spec": ${JSON.stringify(target)}` +
-        `})\n`;
+    // corresponding<T> refers to an already-encoded same-array peer, so resolve
+    // synchronously via _ctx["array_offsets"]. No deferred patch needed.
+    const corrInfo = target ? parseCorrespondingTarget(target) : null;
+    if (corrInfo) {
+      code += `${indent}# Position: ${target} (corresponding resolved inline)\n`;
+      code += generateCorrespondingPositionOf(field, corrInfo, indent, e);
+    } else {
+      code += `${indent}# Position computed field - write placeholder, back-patch later\n`;
+      code += `${indent}_pos_${field.name} = encoder.byte_offset\n`;
+      code += generatePlaceholderWrite(field.type, indent, e);
+      // first<T>/last<T> may reference forward (not yet encoded) elements, so
+      // defer. The struct-level back-patch loop only fires for non-inlined
+      // struct encodes; choice/DU inliners skip that loop, so we register
+      // inline to cover both paths. The struct-level loop has been updated
+      // to do the same registration — duplicate is harmless because the
+      // resolver only finalizes once it can resolve a target.
+      if (target && (target.includes('[first<') || target.includes('[last<'))) {
+        const alignment = computed.alignment || 1;
+        code += `${indent}_ctx["deferred_patches"].append({` +
+          `"local_offset": _pos_${field.name}, ` +
+          `"patch_type": "${field.type}", ` +
+          `"endianness": "${e}", ` +
+          `"alignment": ${alignment}, ` +
+          `"target_spec": ${JSON.stringify(target)}` +
+          `})\n`;
+      }
     }
   } else if (computed.type === "sum_of_field_sizes") {
     const targets = computed.targets || [];
@@ -1164,6 +1190,101 @@ function generateSelectorLength(
     code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_sel_payload))\n`;
   }
   code += generateComputedWrite(field.type, lengthVar, indent, endianness);
+  return code;
+}
+
+/**
+ * Generate inline length_of for a corresponding<T> selector.
+ * Same-array same-index correlation: look up array_offsets[arr], find the Nth
+ * T where N = current iteration's typeIndices[T]. If a remainingPath is given
+ * (e.g. ".payload"), traverse it on the matched item; otherwise measure the
+ * whole item by trial-encoding.
+ */
+function generateCorrespondingLength(
+  field: any,
+  corrInfo: ReturnType<typeof parseCorrespondingTarget>,
+  indent: string,
+  endianness: string
+): string {
+  if (!corrInfo) return '';
+  const { arrayPath, filterType, remainingPath } = corrInfo;
+  const lengthVar = `_computed_length_${field.name}`;
+  let code = '';
+  code += `${indent}_corr_arr_${field.name} = _ctx["array_offsets"].get("${arrayPath}", [])\n`;
+  // Same-array: use self-variant occurrence index. Cross-array: use the
+  // current outer array's iteration index (1-based).
+  code += `${indent}if _ctx.get("current_array") == "${arrayPath}":\n`;
+  code += `${indent}    _corr_n_${field.name} = _ctx["array_iterations"].get("${arrayPath}", {}).get("typeIndices", {}).get(_self_variant_type, _ctx["array_iterations"].get("${arrayPath}", {}).get("typeIndices", {}).get("${filterType}", 0))\n`;
+  code += `${indent}else:\n`;
+  code += `${indent}    _corr_n_${field.name} = _ctx["array_iterations"].get(_ctx.get("current_array") or "", {}).get("index", 0) + 1\n`;
+  code += `${indent}_corr_seen_${field.name} = 0\n`;
+  code += `${indent}_corr_target_${field.name} = None\n`;
+  code += `${indent}for _coff, _citem in _corr_arr_${field.name}:\n`;
+  code += `${indent}    _ct = _citem.get("type") if isinstance(_citem, dict) else None\n`;
+  code += `${indent}    if _ct == "${filterType}" or _ct is None:\n`;
+  code += `${indent}        _corr_seen_${field.name} += 1\n`;
+  code += `${indent}        if _corr_seen_${field.name} == _corr_n_${field.name}:\n`;
+  code += `${indent}            _corr_target_${field.name} = _citem\n`;
+  code += `${indent}            break\n`;
+  code += `${indent}if _corr_target_${field.name} is None:\n`;
+  code += `${indent}    ${lengthVar} = 0\n`;
+  code += `${indent}else:\n`;
+  if (remainingPath) {
+    const parts = remainingPath.split('.').filter(p => p);
+    code += `${indent}    _corr_v = _corr_target_${field.name}\n`;
+    code += `${indent}    if isinstance(_corr_v, dict) and "value" in _corr_v and "type" in _corr_v:\n`;
+    code += `${indent}        _corr_v = _corr_v["value"]\n`;
+    for (const p of parts) {
+      code += `${indent}    _corr_v = _corr_v["${p}"]\n`;
+    }
+    code += `${indent}    if isinstance(_corr_v, (list, bytes, bytearray)):\n`;
+    code += `${indent}        ${lengthVar} = len(_corr_v)\n`;
+    code += `${indent}    elif isinstance(_corr_v, str):\n`;
+    code += `${indent}        ${lengthVar} = len(_corr_v.encode("utf-8"))\n`;
+    code += `${indent}    else:\n`;
+    code += `${indent}        ${lengthVar} = int(_corr_v)\n`;
+  } else {
+    code += `${indent}    _corr_payload = _corr_target_${field.name}.get("value", _corr_target_${field.name}) if isinstance(_corr_target_${field.name}, dict) else _corr_target_${field.name}\n`;
+    code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_corr_payload))\n`;
+  }
+  code += generateComputedWrite(field.type, lengthVar, indent, endianness);
+  return code;
+}
+
+/**
+ * Generate inline position_of for a corresponding<T> selector.
+ * Resolution: look up the Nth T in array_offsets[arr] (N = current
+ * typeIndices[T]), then write its byte offset directly to the field.
+ */
+function generateCorrespondingPositionOf(
+  field: any,
+  corrInfo: ReturnType<typeof parseCorrespondingTarget>,
+  indent: string,
+  endianness: string
+): string {
+  if (!corrInfo) return '';
+  const { arrayPath, filterType } = corrInfo;
+  const posVar = `_corr_pos_${field.name}`;
+  let code = '';
+  code += `${indent}_corr_arr_${field.name} = _ctx["array_offsets"].get("${arrayPath}", [])\n`;
+  code += `${indent}if _ctx.get("current_array") == "${arrayPath}":\n`;
+  code += `${indent}    _corr_n_${field.name} = _ctx["array_iterations"].get("${arrayPath}", {}).get("typeIndices", {}).get(_self_variant_type, _ctx["array_iterations"].get("${arrayPath}", {}).get("typeIndices", {}).get("${filterType}", 0))\n`;
+  code += `${indent}else:\n`;
+  code += `${indent}    _corr_n_${field.name} = _ctx["array_iterations"].get(_ctx.get("current_array") or "", {}).get("index", 0) + 1\n`;
+  code += `${indent}_corr_seen_${field.name} = 0\n`;
+  code += `${indent}${posVar} = 0\n`;
+  code += `${indent}for _coff, _citem in _corr_arr_${field.name}:\n`;
+  code += `${indent}    _ct = _citem.get("type") if isinstance(_citem, dict) else None\n`;
+  code += `${indent}    if _ct == "${filterType}" or _ct is None:\n`;
+  code += `${indent}        _corr_seen_${field.name} += 1\n`;
+  code += `${indent}        if _corr_seen_${field.name} == _corr_n_${field.name}:\n`;
+  code += `${indent}            ${posVar} = _coff\n`;
+  code += `${indent}            break\n`;
+  const alignment = field.computed?.alignment || 1;
+  if (alignment > 1) {
+    code += `${indent}${posVar} = ${posVar} // ${alignment}\n`;
+  }
+  code += generateComputedWrite(field.type, posVar, indent, endianness);
   return code;
 }
 
@@ -2027,6 +2148,10 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(`        if _ctx is None:`);
   lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": []}`);
   lines.push(`        _ctx["parents"].append(value)`);
+  // Default _self_variant_type to this struct's name so corresponding<T> in
+  // computed fields can identify the current iteration's variant. Choice/DU
+  // inliners override this within each arm.
+  lines.push(`        _self_variant_type = "${className}"`);
 
   // Validate: error if user provides computed fields
   const computedFields = fields.filter((f: any) => f.computed);
