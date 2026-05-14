@@ -420,6 +420,34 @@ just bench-go                        # Go only
 
 ## Development Workflow Guidelines
 
+### Two-pass encoding + context threading from day one (MANDATORY for new generators)
+
+**When adding a new target language, the encode pipeline MUST be two-pass with full context threading from the very first commit. No exceptions, no "we'll add it later."**
+
+This rule exists because *every single generator we've written* (Go, Rust, Python) was initially written as a single-pass forward emitter, and *every single one* had to be partially or fully rewritten weeks later when we hit the first schema that needs forward references. The classes of feature that *cannot* be expressed in a single forward pass are not exotic edge cases — they are the common shapes in real protocols:
+
+- **`length_of` with `from_after_field`** — write content first, measure, then back-patch the length prefix (DER, ASN.1, every Kerberos message, every TLS record)
+- **`position_of` referencing a later field** — write a placeholder, remember the offset, patch when the target lands (ZIP central directory, anything seekable)
+- **`first<T>` / `last<T>` / `corresponding<T>` array selectors** — resolve to an array element that hasn't been encoded yet
+- **`sum_of_type_sizes` / aggregate computed fields** — need the encoded sizes of fields that come later
+- **`crc32_of` over a range of later fields** — measure-then-patch
+- **Parent / sibling references via `../`** — child encoder needs access to fields from outer scopes, including ones not yet finalized
+
+Trying to bolt these on after the fact means going back and threading `parentFields`, `_root`, a placeholder/patch table, and a context stack through *every* code path you already wrote — type refs, choice/DU inliners, array item encoders, optional encoders, nested struct encoders. It is always more work than doing it correctly the first time, and the half-finished single-pass version usually ships and silently miscomputes lengths as `0` until a downstream user notices.
+
+**What "two-pass + context threading from day one" means concretely:**
+
+1. **Encode emits to a buffer, not directly to the stream.** The top-level encode for a struct produces `bytes`; the bytes get written to the outer encoder. This makes "encode the tail, then prepend the length" trivial.
+2. **A placeholder + patch table is part of the runtime, not the generator.** Generated code calls `encoder.placeholder_u32() → handle`, then later `encoder.patch_u32(handle, value)`. The buffer knows how to back-patch by offset.
+3. **`parentFields` is threaded through every `generateXEncode`/`generateXDecode` recursive call.** Choice variant inliners, DU arms, type-ref encoders, optional encoders, array item encoders — all of them accept the parent struct's sequence so `length_of target=fieldname` can resolve the target's type.
+4. **A `_root` (or equivalent context object) is threaded through every nested decode call** so `../../foo` references can walk up. Decoders should always set `if _root is None: _root = result` at entry.
+5. **Aliases are resolved through the chain.** `{ type: "Realm" }` where `Realm` is `{ type: "KerberosString" }` must follow the chain to the concrete encoder class.
+6. **The first test you write for the new generator includes at least one schema with `from_after_field`, one with `position_of` to a later field, and one with `../` parent reference.** If those three don't pass on day one, the generator's architecture is wrong, not the generator's coverage.
+
+**The TypeScript generator (`packages/binschema/src/generators/typescript.ts`) already does all of this correctly.** Read it. Copy the structure. Do not invent a new approach that "starts simple" — simple here means "broken in three weeks."
+
+If you are tempted to skip this because "the first few tests don't need it" — they don't, and that is precisely how every prior generator got stuck. The cost of building the two-pass machinery upfront is hours. The cost of retrofitting it across a generator that already has ~3000 lines of single-pass logic is days, plus the bug tail of features that were silently emitting `0` for computed values until someone hand-verified bytes.
+
 ### Tests-first for codegen features (MANDATORY)
 
 **Before adding, extending, or "fixing" any feature in a code generator, you MUST add a TestSuite that exercises the new shape against every language generator.** No exceptions.
