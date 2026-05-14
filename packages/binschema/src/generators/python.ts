@@ -1061,7 +1061,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
       code += `${indent}# Computed: sum_of_field_sizes\n`;
       const terms = targets.map((t: string) => {
         const tAccess = resolveComputedTarget(t, valuePath);
-        return `len(${toPascalCase(getTargetFieldType(t, schema, valuePath))}Encoder().encode(${tAccess}))`;
+        return `len(${toPascalCase(getTargetFieldType(t, schema, valuePath))}Encoder().encode(${tAccess}, None, {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "trial_mode": True}))`;
       });
       if (terms.length > 0) {
         code += generateComputedWrite(field.type, terms.join(' + '), indent, e);
@@ -1085,7 +1085,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
     if (schema.types[elementType]) {
       // Items may be wrapped { type, value } for choice arrays — unwrap.
       code += `${indent}        _sot_payload = _sot_item.get("value", _sot_item) if isinstance(_sot_item, dict) else _sot_item\n`;
-      code += `${indent}        ${sumVar} += len(${toPascalCase(elementType)}Encoder().encode(_sot_payload))\n`;
+      code += `${indent}        ${sumVar} += len(${toPascalCase(elementType)}Encoder().encode(_sot_payload, None, {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "trial_mode": True}))\n`;
     } else {
       code += `${indent}        ${sumVar} += 0  # unknown element_type ${elementType}\n`;
     }
@@ -1318,7 +1318,7 @@ function generateSelectorLength(
     // No sub-path: measure the whole item by trial-encoding via its type encoder.
     code += `${indent}    _sel_v = _sel_target_${field.name}\n`;
     code += `${indent}    _sel_payload = _sel_v.get("value", _sel_v) if isinstance(_sel_v, dict) else _sel_v\n`;
-    code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_sel_payload))\n`;
+    code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_sel_payload, None, {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "trial_mode": True}))\n`;
   }
   code += generateComputedWrite(field.type, lengthVar, indent, endianness);
   return code;
@@ -1358,8 +1358,11 @@ function generateCorrespondingLength(
   code += `${indent}            _corr_target_${field.name} = _citem\n`;
   code += `${indent}            break\n`;
   code += `${indent}if _corr_target_${field.name} is None:\n`;
-  code += `${indent}    ${lengthVar} = 0\n`;
-  code += `${indent}else:\n`;
+  code += `${indent}    if _ctx.get("trial_mode"):\n`;
+  code += `${indent}        ${lengthVar} = 0\n`;
+  code += `${indent}    else:\n`;
+  code += `${indent}        raise RuntimeError("corresponding<${filterType}> in '${arrayPath}' found no match at occurrence " + str(_corr_n_${field.name}) + " (length_of for field '${field.name}')")\n`;
+  code += `${indent}if _corr_target_${field.name} is not None:\n`;
   if (remainingPath) {
     const parts = remainingPath.split('.').filter(p => p);
     code += `${indent}    _corr_v = _corr_target_${field.name}\n`;
@@ -1376,7 +1379,7 @@ function generateCorrespondingLength(
     code += `${indent}        ${lengthVar} = int(_corr_v)\n`;
   } else {
     code += `${indent}    _corr_payload = _corr_target_${field.name}.get("value", _corr_target_${field.name}) if isinstance(_corr_target_${field.name}, dict) else _corr_target_${field.name}\n`;
-    code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_corr_payload))\n`;
+    code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_corr_payload, None, {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "trial_mode": True}))\n`;
   }
   code += generateComputedWrite(field.type, lengthVar, indent, endianness);
   return code;
@@ -1404,13 +1407,17 @@ function generateCorrespondingPositionOf(
   code += `${indent}    _corr_n_${field.name} = _ctx["array_iterations"].get(_ctx.get("current_array") or "", {}).get("index", 0) + 1\n`;
   code += `${indent}_corr_seen_${field.name} = 0\n`;
   code += `${indent}${posVar} = 0\n`;
+  code += `${indent}_corr_found_${field.name} = False\n`;
   code += `${indent}for _coff, _citem in _corr_arr_${field.name}:\n`;
   code += `${indent}    _ct = _citem.get("type") if isinstance(_citem, dict) else None\n`;
   code += `${indent}    if _ct == "${filterType}" or _ct is None:\n`;
   code += `${indent}        _corr_seen_${field.name} += 1\n`;
   code += `${indent}        if _corr_seen_${field.name} == _corr_n_${field.name}:\n`;
   code += `${indent}            ${posVar} = _coff\n`;
+  code += `${indent}            _corr_found_${field.name} = True\n`;
   code += `${indent}            break\n`;
+  code += `${indent}if not _corr_found_${field.name} and not _ctx.get("trial_mode"):\n`;
+  code += `${indent}    raise RuntimeError("corresponding<${filterType}> in '${arrayPath}' found no match at occurrence " + str(_corr_n_${field.name}) + " (position_of for field '${field.name}')")\n`;
   const alignment = field.computed?.alignment || 1;
   if (alignment > 1) {
     code += `${indent}${posVar} = ${posVar} // ${alignment}\n`;
@@ -1484,7 +1491,7 @@ function generateSelectorCrc32(
   } else {
     // No sub-path: CRC the whole item by trial-encoding via its type encoder
     code += `${indent}    _crc_payload = ${itemVar}.get("value", ${itemVar}) if isinstance(${itemVar}, dict) else ${itemVar}\n`;
-    code += `${indent}    _crc_val_${field.name} = compute_crc32(${toPascalCase(filterType)}Encoder().encode(_crc_payload))\n`;
+    code += `${indent}    _crc_val_${field.name} = compute_crc32(${toPascalCase(filterType)}Encoder().encode(_crc_payload, None, {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "trial_mode": True}))\n`;
   }
   code += generateComputedWrite(field.type, `_crc_val_${field.name}`, indent, endianness);
   return code;
