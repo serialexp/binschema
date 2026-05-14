@@ -270,10 +270,19 @@ export function generateRust(
 
   const lines: string[] = [];
 
-  // Suppress common warnings for generated code
+  // Suppress common warnings for generated code. We blanket-allow clippy
+  // because the generator emits a fixed set of patterns (parent_fields
+  // mut HashMaps that may not get reassigned, redundant primitive casts in
+  // write_uint8 paths, etc.) that aren't worth contorting the generator
+  // to dodge. Consumers can still run -D warnings against their own crate.
   lines.push(`#![allow(non_camel_case_types)]`);
   lines.push(`#![allow(dead_code)]`);
   lines.push(`#![allow(unreachable_code)]`);
+  lines.push(`#![allow(unused_mut)]`);
+  lines.push(`#![allow(unused_variables)]`);
+  lines.push(`#![allow(unused_assignments)]`);
+  lines.push(`#![allow(unused_parens)]`);
+  lines.push(`#![allow(clippy::all)]`);
   lines.push(``);
 
   // Determine default endianness and bit order
@@ -1039,6 +1048,91 @@ function getBackReferenceTypes(schema: BinarySchema): Map<string, any> {
 }
 
 /**
+ * Generates ergonomic trait impls for a string newtype alias.
+ *
+ * The newtype is `pub struct ${name}(pub std::string::String)`. Without
+ * these impls, every caller has to write `${name}("x".to_string())` and
+ * reach through `.0` to compare. With them, `"x".into()` and
+ * `assert_eq!(field, "x")` Just Work.
+ */
+function generateStringNewtypeErgonomicImpls(name: string): string[] {
+  const lines: string[] = [];
+  lines.push(`impl From<&str> for ${name} {`);
+  lines.push(`    fn from(s: &str) -> Self { Self(s.to_string()) }`);
+  lines.push(`}`);
+  lines.push(`impl From<std::string::String> for ${name} {`);
+  lines.push(`    fn from(s: std::string::String) -> Self { Self(s) }`);
+  lines.push(`}`);
+  lines.push(`impl From<${name}> for std::string::String {`);
+  lines.push(`    fn from(w: ${name}) -> Self { w.0 }`);
+  lines.push(`}`);
+  lines.push(`impl std::ops::Deref for ${name} {`);
+  lines.push(`    type Target = str;`);
+  lines.push(`    fn deref(&self) -> &str { &self.0 }`);
+  lines.push(`}`);
+  lines.push(`impl AsRef<str> for ${name} {`);
+  lines.push(`    fn as_ref(&self) -> &str { &self.0 }`);
+  lines.push(`}`);
+  lines.push(`impl std::fmt::Display for ${name} {`);
+  lines.push(`    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {`);
+  lines.push(`        std::fmt::Display::fmt(&self.0, f)`);
+  lines.push(`    }`);
+  lines.push(`}`);
+  lines.push(`impl PartialEq<str> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &str) -> bool { self.0 == other }`);
+  lines.push(`}`);
+  lines.push(`impl PartialEq<&str> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &&str) -> bool { self.0 == *other }`);
+  lines.push(`}`);
+  lines.push(`impl PartialEq<std::string::String> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &std::string::String) -> bool { &self.0 == other }`);
+  lines.push(`}`);
+  lines.push(``);
+  return lines;
+}
+
+/**
+ * Generates ergonomic trait impls for a bytes newtype alias.
+ *
+ * Mirrors the string variant but for `Vec<u8>` / `&[u8]`. The bytes alias
+ * is currently emitted as a named-field struct `pub struct Foo { pub value: Vec<u8> }`,
+ * so all reach-throughs go via `self.value` (not `self.0`).
+ */
+function generateBytesNewtypeErgonomicImpls(name: string): string[] {
+  const lines: string[] = [];
+  lines.push(`impl From<&[u8]> for ${name} {`);
+  lines.push(`    fn from(b: &[u8]) -> Self { Self { value: b.to_vec() } }`);
+  lines.push(`}`);
+  lines.push(`impl From<Vec<u8>> for ${name} {`);
+  lines.push(`    fn from(b: Vec<u8>) -> Self { Self { value: b } }`);
+  lines.push(`}`);
+  lines.push(`impl From<${name}> for Vec<u8> {`);
+  lines.push(`    fn from(w: ${name}) -> Self { w.value }`);
+  lines.push(`}`);
+  lines.push(`impl std::ops::Deref for ${name} {`);
+  lines.push(`    type Target = [u8];`);
+  lines.push(`    fn deref(&self) -> &[u8] { &self.value }`);
+  lines.push(`}`);
+  lines.push(`impl AsRef<[u8]> for ${name} {`);
+  lines.push(`    fn as_ref(&self) -> &[u8] { &self.value }`);
+  lines.push(`}`);
+  lines.push(`impl PartialEq<[u8]> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &[u8]) -> bool { self.value == other }`);
+  lines.push(`}`);
+  lines.push(`impl PartialEq<&[u8]> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &&[u8]) -> bool { self.value == *other }`);
+  lines.push(`}`);
+  lines.push(`impl<const N: usize> PartialEq<[u8; N]> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &[u8; N]) -> bool { self.value == other }`);
+  lines.push(`}`);
+  lines.push(`impl PartialEq<Vec<u8>> for ${name} {`);
+  lines.push(`    fn eq(&self, other: &Vec<u8>) -> bool { &self.value == other }`);
+  lines.push(`}`);
+  lines.push(``);
+  return lines;
+}
+
+/**
  * Generates a type alias as a wrapper struct
  */
 function generateTypeAlias(name: string, schemaTypeName: string, typeDef: any, defaultEndianness: string, defaultBitOrder: string, schema: BinarySchema): string[] {
@@ -1087,6 +1181,12 @@ function generateTypeAlias(name: string, schemaTypeName: string, typeDef: any, d
     lines.push(`    }`);
     lines.push(`}`);
     lines.push(``);
+
+    // Ergonomic impls so callers don't have to write `Foo("x".to_string())`
+    // and `assert_eq!(x.0, "y")` everywhere. The std namespace is
+    // fully-qualified throughout because the alias may itself be named
+    // `String` (shadowing std's String inside the module).
+    lines.push(...generateStringNewtypeErgonomicImpls(name));
 
     return lines;
   }
@@ -1245,6 +1345,13 @@ function generateTypeAlias(name: string, schemaTypeName: string, typeDef: any, d
     // Simple wrappers (primitives, other type aliases) don't need Input/Output
     lines.push(...generateSimpleStruct(name, [field], schemaTypeName));
     lines.push(...generateSimpleImpl(name, schemaTypeName, [field], defaultEndianness, defaultBitOrder, schema));
+
+    // Ergonomic impls for bytes-kind aliases — see comment on the string
+    // newtype path above. Reach-throughs are via `self.value` because this
+    // path uses the named-field generateSimpleStruct.
+    if (typeDef.type === "bytes") {
+      lines.push(...generateBytesNewtypeErgonomicImpls(name));
+    }
   }
 
   return lines;

@@ -456,5 +456,185 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     });
   }
 
+  // Test: String-kind alias newtype emits ergonomic trait impls
+  // (From<&str>, From<std::string::String>, Deref, AsRef<str>, Display,
+  // PartialEq<&str>/<str>/<std::string::String>). Without these, callers
+  // have to write `Foo("x".to_string())` everywhere and reach through
+  // `.0` to compare — see BINSCHEMA_RUST_GEN_ISSUES_3.md.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        WireStr: {
+          type: "string",
+          kind: "length_prefixed",
+          length_type: "uint32",
+          encoding: "utf8",
+        },
+      },
+    };
+
+    const result = generateRust(schema, "WireStr");
+    const requiredSnippets = [
+      "impl From<&str> for WireStr",
+      "impl From<std::string::String> for WireStr",
+      "impl From<WireStr> for std::string::String",
+      "impl std::ops::Deref for WireStr",
+      "impl AsRef<str> for WireStr",
+      "impl std::fmt::Display for WireStr",
+      "impl PartialEq<str> for WireStr",
+      "impl PartialEq<&str> for WireStr",
+      "impl PartialEq<std::string::String> for WireStr",
+    ];
+    const missing = requiredSnippets.filter((s) => !result.code.includes(s));
+    if (missing.length === 0) {
+      passed++;
+      checks.push({ description: "String alias newtype emits ergonomic impls", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "String alias newtype emits ergonomic impls",
+        passed: false,
+        message: `Missing impls: ${missing.join(", ")}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "String alias newtype emits ergonomic impls",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
+  // Test: same shadowing-safe ergonomics on an alias literally named `String`
+  // (the rustyql case). The generator must reference std::string::String
+  // everywhere — otherwise the `From<std::string::String>` impl would
+  // collide with itself.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        String: {
+          type: "string",
+          kind: "length_prefixed",
+          length_type: "uint32",
+          encoding: "utf8",
+        },
+      },
+    };
+
+    const result = generateRust(schema, "String");
+    const hasStdStringFrom = result.code.includes("impl From<std::string::String> for String");
+    const hasIntoStdString = result.code.includes("impl From<String> for std::string::String");
+    const hasFromStr = result.code.includes("impl From<&str> for String");
+    const noBareStringFrom =
+      !result.code.includes("impl From<String> for String"); // would collide with Self
+
+    if (hasStdStringFrom && hasIntoStdString && hasFromStr && noBareStringFrom) {
+      passed++;
+      checks.push({ description: "String alias named 'String' is shadowing-safe", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "String alias named 'String' is shadowing-safe",
+        passed: false,
+        message: `from(std)=${hasStdStringFrom} into(std)=${hasIntoStdString} from(&str)=${hasFromStr} noSelfFrom=${noBareStringFrom}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "String alias named 'String' is shadowing-safe",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
+  // Test: bytes-kind alias emits the analogous bytes ergonomic impls.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Blob: {
+          type: "bytes",
+          kind: "length_prefixed",
+          length_type: "uint32",
+        },
+      },
+    };
+
+    const result = generateRust(schema, "Blob");
+    const required = [
+      "impl From<&[u8]> for Blob",
+      "impl From<Vec<u8>> for Blob",
+      "impl From<Blob> for Vec<u8>",
+      "impl std::ops::Deref for Blob",
+      "impl AsRef<[u8]> for Blob",
+      "impl PartialEq<[u8]> for Blob",
+      "impl PartialEq<&[u8]> for Blob",
+      "impl PartialEq<Vec<u8>> for Blob",
+    ];
+    const missing = required.filter((s) => !result.code.includes(s));
+    if (missing.length === 0) {
+      passed++;
+      checks.push({ description: "Bytes alias newtype emits ergonomic impls", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Bytes alias newtype emits ergonomic impls",
+        passed: false,
+        message: `Missing impls: ${missing.join(", ")}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Bytes alias newtype emits ergonomic impls",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
+  // Test: generated code suppresses common rustc/clippy warnings at the
+  // crate root so consumers can run -D warnings against their own crate
+  // without the generated tree breaking their build.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Foo: {
+          sequence: [{ name: "x", type: "uint8" }],
+        },
+      },
+    };
+
+    const result = generateRust(schema, "Foo");
+    const required = [
+      "#![allow(unused_mut)]",
+      "#![allow(unused_variables)]",
+      "#![allow(clippy::all)]",
+    ];
+    const missing = required.filter((s) => !result.code.includes(s));
+    if (missing.length === 0) {
+      passed++;
+      checks.push({ description: "Generated code suppresses noisy warnings", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Generated code suppresses noisy warnings",
+        passed: false,
+        message: `Missing attrs: ${missing.join(", ")}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Generated code suppresses noisy warnings",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
   return { passed, failed, checks };
 }
