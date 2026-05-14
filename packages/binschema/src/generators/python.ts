@@ -196,11 +196,23 @@ function convertConditionalToPython(condition: string, basePath: string = "value
     if (/^\d/.test(match)) return match;
     if (match === basePath || match.startsWith(`${basePath}.`)) return match;
 
-    // Convert dotted path to nested dict access
+    // Convert dotted path to nested dict access. Use .get() chains so that
+    // missing parent fields short-circuit to None (Python truthiness handles
+    // it), letting conditionals like `header.flags & 0x01` evaluate False
+    // when `header` itself is absent.
     const parts = match.split('.');
+    if (parts.length === 1) {
+      return `${basePath}.get(${JSON.stringify(parts[0])})`;
+    }
     let access = basePath;
-    for (const part of parts) {
-      access += `["${part}"]`;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      if (isLast) {
+        access = `(${access} or {}).get(${JSON.stringify(part)}, 0)`;
+      } else {
+        access = `(${access} or {}).get(${JSON.stringify(part)})`;
+      }
     }
     return access;
   });
