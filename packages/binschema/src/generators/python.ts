@@ -1748,12 +1748,33 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(``);
 
   // Decode function
+  // Optional _root parameter lets nested instance fields resolve "_root.X"
+  // paths to the top-level decoded result. When called from a top-level
+  // decoder, _root defaults to the result of this very call.
+  const instances = (typeDef.instances || []) as any[];
+  const hasInstances = instances.length > 0;
+
   lines.push(``);
-  lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder) -> dict[str, Any]:`);
+  lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder, _root: dict[str, Any] | None = None) -> dict[str, Any]:`);
   lines.push(`    result: dict[str, Any] = {}`);
+  if (hasInstances) {
+    // If we're the top of a decode (no _root passed), make `result` itself the root.
+    lines.push(`    if _root is None:`);
+    lines.push(`        _root = result`);
+  }
 
   for (const field of fields) {
     lines.push(generateFieldDecode(field, 'result', '    ', endianness, schema, bitOrder));
+  }
+
+  // Decode instance (random-access) fields
+  if (hasInstances) {
+    lines.push(`    # Decode instance fields (position-based, random access)`);
+    lines.push(`    _saved_pos = decoder.position`);
+    for (const inst of instances) {
+      lines.push(...generateInstanceDecode(inst, schema, '    '));
+    }
+    lines.push(`    decoder.seek(_saved_pos)`);
   }
 
   lines.push(`    return result`);
@@ -1768,6 +1789,120 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(`        return decode_${toSnakeCase(name)}(self)`);
 
   return lines;
+}
+
+/**
+ * Generate Python code that decodes a single instance (random-access lazy field)
+ * after the sequence has been decoded. Seeks the decoder to the resolved
+ * position, optionally validates alignment, decodes the typed payload, and
+ * stores it under result[instance.name].
+ *
+ * The schema instance shape:
+ *   { name, type, position: number | string, alignment?: number, description? }
+ *
+ * `position` may be:
+ *   - a literal number (positive = absolute, negative = from EOF)
+ *   - a field name reachable from `result` ("data_offset", "header.offset")
+ *   - a "_root."-prefixed path resolved against `_root`
+ */
+function generateInstanceDecode(inst: any, schema: BinarySchema, indent: string): string[] {
+  const lines: string[] = [];
+  const name = inst.name;
+  const position = inst.position;
+  const alignment = inst.alignment;
+  const instType = inst.type;
+
+  // 1. Resolve position into a local _pos variable
+  if (typeof position === 'number') {
+    if (position < 0) {
+      lines.push(`${indent}_pos = len(decoder._bytes) + (${position})`);
+    } else {
+      lines.push(`${indent}_pos = ${position}`);
+    }
+  } else if (typeof position === 'string') {
+    lines.push(`${indent}_pos = ${pyPositionPath(position)}`);
+    lines.push(`${indent}if not isinstance(_pos, int):`);
+    lines.push(`${indent}    raise RuntimeError(f"Instance '${name}' position field '${position}' is not numeric (got {type(_pos).__name__})")`);
+  } else {
+    throw new Error(`Unsupported instance position type for '${name}': ${JSON.stringify(position)}`);
+  }
+
+  // 2. Alignment validation
+  if (alignment && alignment > 1) {
+    lines.push(`${indent}if _pos % ${alignment} != 0:`);
+    lines.push(`${indent}    raise RuntimeError(f"Instance '${name}' position {_pos} not aligned to ${alignment} bytes")`);
+  }
+
+  // 3. Seek and decode
+  lines.push(`${indent}decoder.seek(_pos)`);
+
+  if (typeof instType === 'string') {
+    // Simple type reference - dispatch to its decoder
+    lines.push(`${indent}result["${name}"] = decode_${toSnakeCase(instType)}(decoder, _root)`);
+  } else if (instType && typeof instType === 'object' && instType.discriminator && Array.isArray(instType.variants)) {
+    // Inline discriminated union
+    const union = instType;
+    // Resolve discriminator value
+    if (union.discriminator.field) {
+      lines.push(`${indent}_disc = ${pyPositionPath(union.discriminator.field)}`);
+    } else if (union.discriminator.peek) {
+      const peekType = union.discriminator.peek;
+      const peekEnd = union.discriminator.endianness || 'little_endian';
+      if (peekType === 'uint8') {
+        lines.push(`${indent}_disc = decoder.peek_uint8()`);
+      } else if (peekType === 'uint16') {
+        lines.push(`${indent}_disc = decoder.peek_uint16("${peekEnd}")`);
+      } else if (peekType === 'uint32') {
+        lines.push(`${indent}_disc = decoder.peek_uint32("${peekEnd}")`);
+      } else {
+        throw new Error(`Unsupported peek discriminator type: ${peekType}`);
+      }
+    } else {
+      throw new Error(`Inline DU instance '${name}' has no discriminator field/peek`);
+    }
+    let first = true;
+    let hasFallback = false;
+    for (const variant of union.variants) {
+      if (!variant.when) {
+        // Fallback
+        lines.push(`${indent}else:`);
+        lines.push(`${indent}    result["${name}"] = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder, _root)}`);
+        hasFallback = true;
+        continue;
+      }
+      const cond = String(variant.when).replace(/\bvalue\b/g, '_disc');
+      lines.push(`${indent}${first ? 'if' : 'elif'} (${cond}):`);
+      lines.push(`${indent}    result["${name}"] = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder, _root)}`);
+      first = false;
+    }
+    if (!hasFallback) {
+      lines.push(`${indent}else:`);
+      lines.push(`${indent}    raise RuntimeError(f"Unknown discriminator value {_disc} for instance '${name}'")`);
+    }
+  } else {
+    throw new Error(`Unsupported instance type for '${name}': ${JSON.stringify(instType)}`);
+  }
+
+  return lines;
+}
+
+/**
+ * Convert a dotted schema path like "data_offset", "header.offset",
+ * "_root.file_header.offset" into a Python expression that resolves against
+ * either `result` (local fields) or `_root` (top-level fields).
+ */
+function pyPositionPath(path: string): string {
+  const parts = path.split('.');
+  let root: string;
+  let rest: string[];
+  if (parts[0] === '_root') {
+    root = '_root';
+    rest = parts.slice(1);
+  } else {
+    root = 'result';
+    rest = parts;
+  }
+  return root + rest.map(p => `[${JSON.stringify(p)}]`).join('');
 }
 
 function generateEnumCode(name: string, typeDef: any, endianness: string): string[] {
@@ -1852,16 +1987,23 @@ function generateDiscriminatedUnionCode(name: string, typeDef: any, schema: Bina
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
+  // Standalone decode function (so instance/nested call sites can use
+  // `decode_<name>(decoder, _root)` uniformly, matching the convention for
+  // struct types). The DU decode helper assigns its `{type, value}` dict
+  // to the LHS we pass — here `result`, which we then return.
+  lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder, _root: dict[str, Any] | None = None) -> dict[str, Any]:`);
+  lines.push(`    result: dict[str, Any] = {}`);
+  lines.push(generateDiscriminatedUnionDecode(typeDef, 'result', '    ', endianness, schema, bitOrder));
+  lines.push(`    return result`);
+  lines.push(``);
+
   // Decoder
   lines.push(`class ${className}Decoder(SeekableBitStreamDecoder):`);
   lines.push(`    def __init__(self, data: bytes | bytearray | list[int]):`);
   lines.push(`        super().__init__(data, "${bitOrder}")`);
   lines.push(``);
   lines.push(`    def decode(self) -> dict[str, Any]:`);
-  lines.push(`        decoder = self`);
-  lines.push(`        result: dict[str, Any] = {}`);
-  lines.push(generateDiscriminatedUnionDecode(typeDef, 'result', '        ', endianness, schema, bitOrder));
-  lines.push(`        return result`);
+  lines.push(`        return decode_${toSnakeCase(name)}(self)`);
 
   return lines;
 }

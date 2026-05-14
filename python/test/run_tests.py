@@ -229,11 +229,19 @@ def run_test_suite(suite: dict) -> list[dict]:
             })
         return results
 
+    # Skip encoding for types with instance fields (position-based lazy fields).
+    # Matches TS test runner behavior (runner.ts: `hasInstanceFields` ->
+    # `skipEncoding`). Instance fields are decode-only — the user provides
+    # them in the value but they're encoded at arbitrary positions, which
+    # requires back-patching that we don't currently support.
+    test_type_def = (schema.get("types") or {}).get(test_type, {})
+    has_instance_fields = bool(test_type_def.get("instances"))
+
     # Run each test case
     for tc in test_cases:
         result = run_single_test(
             tc, encoder_class, decoder_class, decode_func,
-            namespace, schema, test_type
+            namespace, schema, test_type, has_instance_fields
         )
         results.append(result)
 
@@ -248,6 +256,7 @@ def run_single_test(
     namespace: dict,
     schema: dict,
     test_type: str,
+    skip_encoding: bool = False,
 ) -> dict:
     """Run a single test case (encode + decode)."""
     description = tc["description"]
@@ -258,33 +267,34 @@ def run_single_test(
     should_error_encode = tc.get("should_error_on_encode", False)
     should_error_decode = tc.get("should_error_on_decode", False)
 
-    # Test encoding
-    try:
-        encoder = encoder_class()
-        encoded = encoder.encode(value)
-        encoded_list = list(encoded)
+    # Test encoding (skipped for types with instance fields - decode-only)
+    if not skip_encoding or should_error or should_error_encode:
+        try:
+            encoder = encoder_class()
+            encoded = encoder.encode(value)
+            encoded_list = list(encoded)
 
-        if should_error or should_error_encode:
+            if should_error or should_error_encode:
+                return {
+                    "description": description,
+                    "pass": False,
+                    "error": "Expected encoding error but succeeded",
+                }
+
+            if encoded_list != expected_bytes:
+                return {
+                    "description": description,
+                    "pass": False,
+                    "error": f"Encode mismatch: expected {expected_bytes}, got {encoded_list}",
+                }
+        except Exception as e:
+            if should_error or should_error_encode:
+                return {"description": description, "pass": True}
             return {
                 "description": description,
                 "pass": False,
-                "error": "Expected encoding error but succeeded",
+                "error": f"Encode error: {e}",
             }
-
-        if encoded_list != expected_bytes:
-            return {
-                "description": description,
-                "pass": False,
-                "error": f"Encode mismatch: expected {expected_bytes}, got {encoded_list}",
-            }
-    except Exception as e:
-        if should_error or should_error_encode:
-            return {"description": description, "pass": True}
-        return {
-            "description": description,
-            "pass": False,
-            "error": f"Encode error: {e}",
-        }
 
     # Test decoding
     try:
