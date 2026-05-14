@@ -516,10 +516,47 @@ function generateLengthPrefixEncode(prefixType: string, lengthExpr: string, inde
   }
 }
 
+/**
+ * Emit Python lines that record each array item's (byte_offset, item) into
+ * _ctx["array_offsets"][arrname] and bump iteration state in
+ * _ctx["array_iterations"][arrname]. Used by computed-field selectors
+ * (first<T>/last<T>/corresponding<T>) and parent-ref resolution to look up
+ * encoded positions and iteration indices at back-patch time.
+ *
+ * Emits nothing when arrName is empty (anonymous/inline arrays — those can't
+ * be the target of a named selector anyway).
+ */
+function generateArrayIterationTracking(arrName: string | undefined, itemVar: string, indent: string, idxVar: string): string {
+  if (!arrName) return '';
+  let c = '';
+  c += `${indent}_ctx["array_offsets"]["${arrName}"].append((encoder.byte_offset, ${itemVar}))\n`;
+  c += `${indent}_ctx["array_iterations"]["${arrName}"]["index"] = ${idxVar}\n`;
+  c += `${indent}_it_t = ${itemVar}.get("type") if isinstance(${itemVar}, dict) else None\n`;
+  c += `${indent}if _it_t is not None:\n`;
+  c += `${indent}    _ctx["array_iterations"]["${arrName}"]["typeIndices"][_it_t] = _ctx["array_iterations"]["${arrName}"]["typeIndices"].get(_it_t, 0) + 1\n`;
+  return c;
+}
+
+/** Reset the named array's tracking buckets in _ctx (called before the loop). */
+function generateArrayIterationInit(arrName: string | undefined, indent: string): string {
+  if (!arrName) return '';
+  let c = '';
+  c += `${indent}_ctx["array_offsets"]["${arrName}"] = []\n`;
+  c += `${indent}_ctx["array_iterations"]["${arrName}"] = {"index": 0, "typeIndices": {}, "done": False}\n`;
+  return c;
+}
+
+/** Mark the named array as fully encoded (called right after the loop). */
+function generateArrayIterationDone(arrName: string | undefined, indent: string): string {
+  if (!arrName) return '';
+  return `${indent}_ctx["array_iterations"]["${arrName}"]["done"] = True\n`;
+}
+
 function generateArrayEncode(field: any, fieldAccess: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
   let code = '';
   const items = field.items;
   const kind = field.kind;
+  const arrName = field.name;
 
   // Length prefix based on kind
   if (kind === "length_prefixed") {
@@ -572,32 +609,46 @@ function generateArrayEncode(field: any, fieldAccess: string, indent: string, en
   const encUid = _varCounter++;
   const encItemVar = `_item_${encUid}`;
 
+  const idxVar = `_i_${encUid}`;
+
   // Variant-terminated arrays: write all items including terminal variant
   if (kind === "variant_terminated") {
-    code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+    code += generateArrayIterationInit(arrName, indent);
+    code += `${indent}for ${idxVar}, ${encItemVar} in enumerate(${fieldAccess}):\n`;
+    code += generateArrayIterationTracking(arrName, encItemVar, indent + '    ', idxVar);
     code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayIterationDone(arrName, indent);
     return code;
   }
 
   // Signature-terminated arrays: write items until signature
   if (kind === "signature_terminated") {
-    code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+    code += generateArrayIterationInit(arrName, indent);
+    code += `${indent}for ${idxVar}, ${encItemVar} in enumerate(${fieldAccess}):\n`;
+    code += generateArrayIterationTracking(arrName, encItemVar, indent + '    ', idxVar);
     code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayIterationDone(arrName, indent);
     return code;
   }
 
   // Null-terminated arrays write a terminator after all items
   if (kind === "null_terminated") {
-    code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+    code += generateArrayIterationInit(arrName, indent);
+    code += `${indent}for ${idxVar}, ${encItemVar} in enumerate(${fieldAccess}):\n`;
+    code += generateArrayIterationTracking(arrName, encItemVar, indent + '    ', idxVar);
     code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
     const terminator = field.terminator !== undefined ? field.terminator : 0;
     code += `${indent}encoder.write_uint8(${terminator})\n`;
+    code += generateArrayIterationDone(arrName, indent);
     return code;
   }
 
   // Iterate over elements
-  code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+  code += generateArrayIterationInit(arrName, indent);
+  code += `${indent}for ${idxVar}, ${encItemVar} in enumerate(${fieldAccess}):\n`;
+  code += generateArrayIterationTracking(arrName, encItemVar, indent + '    ', idxVar);
   code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
+  code += generateArrayIterationDone(arrName, indent);
 
   return code;
 }
@@ -652,8 +703,12 @@ function generateDiscriminatedUnionEncode(field: any, fieldAccess: string, inden
     if (schema.types[variant.type]) {
       code += `${indent}    _variant_data = ${fieldAccess}["value"]\n`;
       code += `${indent}    _sub_encoder = ${toPascalCase(variant.type)}Encoder()\n`;
-      code += `${indent}    _sub_bytes = _sub_encoder.encode(_variant_data)\n`;
+      code += `${indent}    _sub_pos_before = encoder.byte_offset\n`;
+      code += `${indent}    _sub_dp_before = len(_ctx["deferred_patches"])\n`;
+      code += `${indent}    _sub_bytes = _sub_encoder.encode(_variant_data, value, _ctx)\n`;
       code += `${indent}    encoder.write_bytes(_sub_bytes)\n`;
+      code += `${indent}    for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
+      code += `${indent}        _dp["local_offset"] += _sub_pos_before\n`;
     }
   }
 
@@ -744,10 +799,14 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
         break;
     }
   } else if ('sequence' in typeDef) {
-    // Struct type - use sub-encoder, pass current value as parent context
+    // Struct type - use sub-encoder, pass current value as parent context + ctx
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
-    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath})\n`;
+    code += `${indent}_sub_pos_before = encoder.byte_offset\n`;
+    code += `${indent}_sub_dp_before = len(_ctx["deferred_patches"])\n`;
+    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath}, _ctx)\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
+    code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
+    code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
   } else if ((typeDef as any).type === 'string') {
     // String type alias
     code += generateStringEncode(typeDef as any, fieldAccess, indent, endianness);
@@ -755,15 +814,23 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     // Array type alias
     code += generateArrayEncode(typeDef as any, fieldAccess, indent, endianness, schema, bitOrder);
   } else if ((typeDef as any).type === 'discriminated_union') {
-    // Discriminated union type - use sub-encoder
+    // Discriminated union type - use sub-encoder + ctx + offset rebase
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
-    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess})\n`;
+    code += `${indent}_sub_pos_before = encoder.byte_offset\n`;
+    code += `${indent}_sub_dp_before = len(_ctx["deferred_patches"])\n`;
+    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath}, _ctx)\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
+    code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
+    code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
   } else if ((typeDef as any).type === 'choice') {
-    // Choice type - use sub-encoder
+    // Choice type - use sub-encoder + ctx + offset rebase
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
-    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess})\n`;
+    code += `${indent}_sub_pos_before = encoder.byte_offset\n`;
+    code += `${indent}_sub_dp_before = len(_ctx["deferred_patches"])\n`;
+    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath}, _ctx)\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
+    code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
+    code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
   } else if (typeof (typeDef as any).type === 'string' && schema.types[(typeDef as any).type]) {
     // Alias: typeDef is { type: "OtherType" } - recurse with target type
     code += generateTypeRefEncode({ ...field, type: (typeDef as any).type }, fieldAccess, indent, endianness, schema, bitOrder, valuePath);
@@ -820,6 +887,23 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
     code += `${indent}# Position computed field - write placeholder, back-patch later\n`;
     code += `${indent}_pos_${field.name} = encoder.byte_offset\n`;
     code += generatePlaceholderWrite(field.type, indent, e);
+    // If the target uses a selector (first/last/corresponding), register a
+    // deferred patch right here. The struct-level back-patch loop only fires
+    // for non-inlined struct encodes; choice/DU inliners skip that loop, so
+    // we register inline to cover both paths. The struct-level loop has been
+    // updated to do the same registration — duplicate is harmless because the
+    // resolver only finalizes once it can resolve a target.
+    const target = computed.target;
+    if (target && (target.includes('[first<') || target.includes('[last<') || target.includes('[corresponding<'))) {
+      const alignment = computed.alignment || 1;
+      code += `${indent}_ctx["deferred_patches"].append({` +
+        `"local_offset": _pos_${field.name}, ` +
+        `"patch_type": "${field.type}", ` +
+        `"endianness": "${e}", ` +
+        `"alignment": ${alignment}, ` +
+        `"target_spec": ${JSON.stringify(target)}` +
+        `})\n`;
+    }
   } else if (computed.type === "sum_of_field_sizes") {
     const targets = computed.targets || [];
     code += `${indent}# Computed: sum_of_field_sizes\n`;
@@ -974,6 +1058,28 @@ function generateFromAfterFieldEncode(
  *   "../items[first<DataChunk>]"          → ditto with remainingPath = ""
  *   Returns null if the target doesn't use the selector syntax.
  */
+/**
+ * Parse `[corresponding<T>]` correlation syntax.
+ *   "../entries[corresponding<DataBlock>]" → { arrayPath: "entries",
+ *     parents: 1, filterType: "DataBlock", remainingPath: "" }
+ */
+function parseCorrespondingTarget(target: string): {
+  arrayPath: string;
+  parents: number;
+  filterType: string;
+  remainingPath: string;
+} | null {
+  if (typeof target !== "string") return null;
+  const m = target.match(/^((?:\.\.\/)*)([^[]+)\[corresponding<(\w+)>\](.*)$/);
+  if (!m) return null;
+  return {
+    parents: (m[1].match(/\.\.\//g) || []).length,
+    arrayPath: m[2],
+    filterType: m[3],
+    remainingPath: m[4] || "",
+  };
+}
+
 function parseFirstLastTarget(target: string): {
   arrayPath: string;
   parents: number;
@@ -1865,7 +1971,7 @@ export function generatePython(
   lines.push(`from typing import Any`);
   lines.push(`import math`);
   lines.push(`import struct`);
-  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32`);
+  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32, _resolve_deferred_patches`);
   lines.push(``);
   lines.push(``);
 
@@ -1909,8 +2015,18 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(`    def __init__(self):`);
   lines.push(`        super().__init__("${bitOrder}")`);
   lines.push(``);
-  lines.push(`    def encode(self, value: dict[str, Any], _parent_value: dict[str, Any] | None = None) -> bytes:`);
+  lines.push(`    def encode(self, value: dict[str, Any], _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
+  // Initialize encoding context on first call. The context carries:
+  //   parents          - stack of dict values from outermost to current scope,
+  //                      used to resolve "../" parent references at any depth.
+  //   array_offsets    - {arrname: [(byte_offset, item), ...]} for first<T>/
+  //                      last<T> / corresponding<T> selectors in computed fields.
+  //   array_iterations - {arrname: {"index": int, "typeIndices": {T: int}}}
+  //                      tracks current iteration state for corresponding<T>.
+  lines.push(`        if _ctx is None:`);
+  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": []}`);
+  lines.push(`        _ctx["parents"].append(value)`);
 
   // Validate: error if user provides computed fields
   const computedFields = fields.filter((f: any) => f.computed);
@@ -1976,7 +2092,41 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
     const e = pfAny.endianness || endianness;
     const alignment = pfAny.computed.alignment || 1;
 
-    // Skip parent references (../field) - these can't be back-patched within this encoder
+    // Check for selector-style targets: ../arr[first<T>] / ../arr[last<T>] /
+    // ../arr[corresponding<T>] — these resolve against _ctx["array_offsets"]
+    // which the parent encoder populated as it walked the named array.
+    const flInfo = parseFirstLastTarget(target);
+    const corrInfo = parseCorrespondingTarget(target);
+
+    if (flInfo || corrInfo) {
+      // Selector targets may reference array items not yet encoded (forward
+      // reference). Defer the patch — record the placeholder's local offset
+      // along with the target spec. A wrapper around every sub-encoder call
+      // re-bases the offset to absolute in the outer buffer. At the end of
+      // every struct encode, we try to resolve all deferred patches against
+      // the current _ctx["array_offsets"]; the outermost encoder, with the
+      // fullest data, resolves the rest.
+      lines.push(`        # Defer position_of ${target} (selector resolved later)`);
+      const patchEntry: any = {
+        local_offset: `_pos_${pfAny.name}`,
+        patch_type: pfAny.type,
+        endianness: e,
+        alignment,
+        target_spec: target,
+      };
+      lines.push(`        _ctx["deferred_patches"].append({` +
+        `"local_offset": _pos_${pfAny.name}, ` +
+        `"patch_type": "${pfAny.type}", ` +
+        `"endianness": "${e}", ` +
+        `"alignment": ${alignment}, ` +
+        `"target_spec": ${JSON.stringify(target)}` +
+        `})`);
+      continue;
+    }
+
+    // Plain ../field parent ref (no selector): try ctx.parents for the parent's
+    // own field offsets. We don't track per-field offsets cross-struct yet, so
+    // this falls back to skipping.
     if (target.includes('/')) continue;
 
     lines.push(`        # Back-patch position_of ${target}`);
@@ -2014,6 +2164,12 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
     lines.push(generatePatchCall(cfAny.type, `_crc_pos_${cfAny.name}`, '_crc_val', '        ', e));
   }
 
+  // Try to resolve any deferred selector-target position_of patches. Pending
+  // patches that can't yet be resolved (forward refs whose target array
+  // hasn't been encoded yet) propagate up; the outermost encoder finishes.
+  lines.push(`        _ctx["deferred_patches"] = _resolve_deferred_patches(encoder, _ctx["deferred_patches"], _ctx["array_offsets"], _ctx["array_iterations"])`);
+
+  lines.push(`        _ctx["parents"].pop()`);
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
@@ -2202,7 +2358,7 @@ function generateEnumCode(name: string, typeDef: any, endianness: string): strin
   lines.push(`    def __init__(self):`);
   lines.push(`        super().__init__("${bitOrder}")`);
   lines.push(``);
-  lines.push(`    def encode(self, value: int) -> bytes:`);
+  lines.push(`    def encode(self, value: int, _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
   switch (repr) {
     case "uint8":
@@ -2251,9 +2407,13 @@ function generateDiscriminatedUnionCode(name: string, typeDef: any, schema: Bina
   lines.push(`    def __init__(self):`);
   lines.push(`        super().__init__("${bitOrder}")`);
   lines.push(``);
-  lines.push(`    def encode(self, value: dict[str, Any]) -> bytes:`);
+  lines.push(`    def encode(self, value: dict[str, Any], _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
+  lines.push(`        if _ctx is None:`);
+  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": []}`);
+  lines.push(`        _ctx["parents"].append(value)`);
   lines.push(generateDiscriminatedUnionEncode(typeDef, 'value', '        ', endianness, schema, bitOrder));
+  lines.push(`        _ctx["parents"].pop()`);
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
@@ -2286,7 +2446,7 @@ function generateStringTypeCode(name: string, typeDef: any, endianness: string):
   lines.push(`    def __init__(self):`);
   lines.push(`        super().__init__("msb_first")`);
   lines.push(``);
-  lines.push(`    def encode(self, value: str) -> bytes:`);
+  lines.push(`    def encode(self, value: str, _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("msb_first")`);
   lines.push(generateStringEncode(typeDef, 'value', '        ', endianness));
   lines.push(`        return encoder.finish()`);
@@ -2318,7 +2478,7 @@ function generateArrayTypeCode(name: string, typeDef: any, schema: BinarySchema,
   lines.push(`    def __init__(self):`);
   lines.push(`        super().__init__("${bitOrder}")`);
   lines.push(``);
-  lines.push(`    def encode(self, value: list) -> bytes:`);
+  lines.push(`    def encode(self, value: list, _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
   lines.push(generateArrayEncode(typeDef, 'value', '        ', endianness, schema, bitOrder));
   lines.push(`        return encoder.finish()`);

@@ -19,6 +19,116 @@ Endianness = Literal["big_endian", "little_endian"]
 def compute_crc32(data: bytes | bytearray) -> int:
     """Compute CRC32 checksum, returning unsigned 32-bit value."""
     return zlib.crc32(data) & 0xFFFFFFFF
+
+
+def _resolve_deferred_patches(encoder, patches, array_offsets, array_iterations):
+    """Try to resolve deferred selector-target position_of patches against
+    the current ctx state. Returns the list of still-unresolved patches.
+
+    Each patch is a dict with:
+      local_offset:  byte position in `encoder._bytes` to patch
+      patch_type:    "uint8" | "uint16" | "uint32" | "uint64" | "varlength"
+      endianness:    "big_endian" | "little_endian"
+      alignment:     1 (default) or higher for aligned positions
+      target_spec:   the unparsed target string, e.g. "../items[first<T>]"
+
+    Patches that successfully resolve are written into `encoder._bytes` via
+    the appropriate patch_* method. Unresolved ones (e.g. target array not
+    yet encoded) are returned so the next outer encoder gets another shot.
+    """
+    import re
+    remaining = []
+    for p in patches:
+        target = p.get("target_spec", "")
+        resolved = None
+        m_fl = re.match(r"^(?:\.\./)*([^[]+)\[(first|last)<(\w+)>\](.*)$", target)
+        m_co = re.match(r"^(?:\.\./)*([^[]+)\[corresponding<(\w+)>\](.*)$", target)
+        if m_fl:
+            arr_name = m_fl.group(1)
+            selector = m_fl.group(2)
+            filter_type = m_fl.group(3)
+            entries = array_offsets.get(arr_name)
+            iter_state = array_iterations.get(arr_name, {})
+            # If the array hasn't started encoding OR is still mid-iteration,
+            # defer resolution — the outer encoder will retry once the array
+            # is fully encoded.
+            if entries is None or not iter_state.get("done", False):
+                remaining.append(p)
+                continue
+            iterable = entries if selector == "first" else reversed(entries)
+            for off, item in iterable:
+                t = item.get("type") if isinstance(item, dict) else None
+                if t is None or t == filter_type:
+                    resolved = off
+                    break
+            if resolved is None:
+                # Array exists, fully encoded, but no matching item — sentinel.
+                resolved = 0xFFFFFFFF
+        elif m_co:
+            arr_name = m_co.group(1)
+            filter_type = m_co.group(2)
+            entries = array_offsets.get(arr_name)
+            iter_state = array_iterations.get(arr_name, {})
+            # For corresponding<T>, we can resolve mid-iteration because the
+            # current item's typeIndices counter already reflects its index;
+            # but at minimum the array's first entry must exist.
+            if entries is None:
+                remaining.append(p)
+                continue
+            target_idx = iter_state.get("typeIndices", {}).get(filter_type, 1) - 1
+            count = 0
+            for off, item in entries:
+                t = item.get("type") if isinstance(item, dict) else None
+                if t is None or t == filter_type:
+                    if count == target_idx:
+                        resolved = off
+                        break
+                    count += 1
+            if resolved is None:
+                if not iter_state.get("done", False):
+                    # Target occurrence not yet encoded — try again later.
+                    remaining.append(p)
+                    continue
+                resolved = 0xFFFFFFFF
+        else:
+            # Not a selector target — let the caller handle it (e.g. plain ../field
+            # parent refs which are not deferred-patched).
+            remaining.append(p)
+            continue
+
+        if resolved is None:
+            remaining.append(p)
+            continue
+
+        # Apply alignment.
+        alignment = p.get("alignment", 1)
+        if alignment > 1 and resolved != 0xFFFFFFFF:
+            resolved = resolved + ((alignment - (resolved % alignment)) % alignment)
+
+        # Patch via the appropriate method on the encoder.
+        off = p["local_offset"]
+        ptype = p["patch_type"]
+        e = p["endianness"]
+        if ptype == "uint8":
+            encoder.patch_uint8(off, resolved & 0xFF)
+        elif ptype == "uint16":
+            encoder.patch_uint16(off, resolved & 0xFFFF, e)
+        elif ptype == "uint32":
+            encoder.patch_uint32(off, resolved & 0xFFFFFFFF, e)
+        elif ptype == "uint64":
+            # No patch_uint64 in current runtime — write 8 bytes manually.
+            v = resolved & 0xFFFFFFFFFFFFFFFF
+            if e == "big_endian":
+                for i in range(8):
+                    encoder._bytes[off + i] = (v >> (56 - i * 8)) & 0xFF
+            else:
+                for i in range(8):
+                    encoder._bytes[off + i] = (v >> (i * 8)) & 0xFF
+        elif ptype == "varlength":
+            # Variable-length patching isn't supported in-place — caller
+            # should use a fixed-width slot. Skip.
+            pass
+    return remaining
 BitOrder = Literal["msb_first", "lsb_first"]
 
 
