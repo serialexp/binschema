@@ -680,7 +680,20 @@ function generateArrayEncode(field: any, fieldAccess: string, indent: string, en
     code += generateArrayIterationTracking(arrName, encItemVar, indent + '    ', idxVar);
     code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
     const terminator = field.terminator !== undefined ? field.terminator : 0;
-    code += `${indent}encoder.write_uint8(${terminator})\n`;
+    // `terminal_variants`: when the LAST element of the array has a variant type
+    // that is itself terminal (e.g. DNS LabelPointer ends the chain implicitly),
+    // skip the null terminator. Matches RFC 1035 wire format for DNS compression.
+    const terminalVariants: string[] = field.terminal_variants || [];
+    if (terminalVariants.length > 0) {
+      const variantList = terminalVariants.map(v => `"${v}"`).join(", ") + (terminalVariants.length === 1 ? "," : "");
+      code += `${indent}_term_skip = False\n`;
+      code += `${indent}if ${fieldAccess} and isinstance(${fieldAccess}[-1], dict) and ${fieldAccess}[-1].get("type") in (${variantList}):\n`;
+      code += `${indent}    _term_skip = True\n`;
+      code += `${indent}if not _term_skip:\n`;
+      code += `${indent}    encoder.write_uint8(${terminator})\n`;
+    } else {
+      code += `${indent}encoder.write_uint8(${terminator})\n`;
+    }
     code += generateArrayIterationDone(arrName, indent);
     return code;
   }
@@ -744,10 +757,27 @@ function generateDiscriminatedUnionEncode(field: any, fieldAccess: string, inden
     // Encode the variant value
     if (schema.types[variant.type]) {
       code += `${indent}    _variant_data = ${fieldAccess}["value"]\n`;
+      // Compression-dict tracking: when the variant target is a string-typed
+      // standalone definition (DNS-style Label) reachable by a sibling
+      // back_reference variant, record this value's absolute offset BEFORE
+      // encoding so that a later pointer can resolve to it.
+      const vTypeDef = schema.types[variant.type] as any;
+      const isBackRef = vTypeDef && vTypeDef.type === 'back_reference';
+      const isStringType = vTypeDef && vTypeDef.type === 'string';
+      if (!isBackRef && isStringType) {
+        code += `${indent}    if "compression_dict" not in _ctx:\n`;
+        code += `${indent}        _ctx["compression_dict"] = {}\n`;
+        code += `${indent}    _cd_key = __import__("json").dumps(_variant_data, sort_keys=True, default=str)\n`;
+        code += `${indent}    _cd_abs = _ctx.get("absolute_byte_offset", 0) + encoder.byte_offset\n`;
+        code += `${indent}    _ctx["compression_dict"][_cd_key] = _cd_abs\n`;
+      }
       code += `${indent}    _sub_encoder = ${toPascalCase(variant.type)}Encoder()\n`;
       code += `${indent}    _sub_pos_before = encoder.byte_offset\n`;
       code += `${indent}    _sub_dp_before = len(_ctx["deferred_patches"])\n`;
+      code += `${indent}    _saved_abs_off = _ctx.get("absolute_byte_offset", 0)\n`;
+      code += `${indent}    _ctx["absolute_byte_offset"] = _saved_abs_off + encoder.byte_offset\n`;
       code += `${indent}    _sub_bytes = _sub_encoder.encode(_variant_data, value, _ctx)\n`;
+      code += `${indent}    _ctx["absolute_byte_offset"] = _saved_abs_off\n`;
       code += `${indent}    encoder.write_bytes(_sub_bytes)\n`;
       code += `${indent}    for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
       code += `${indent}        _dp["local_offset"] += _sub_pos_before\n`;
@@ -862,7 +892,10 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
     code += `${indent}_sub_pos_before = encoder.byte_offset\n`;
     code += `${indent}_sub_dp_before = len(_ctx["deferred_patches"])\n`;
+    code += `${indent}_saved_abs_off = _ctx.get("absolute_byte_offset", 0)\n`;
+    code += `${indent}_ctx["absolute_byte_offset"] = _saved_abs_off + encoder.byte_offset\n`;
     code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath}, _ctx)\n`;
+    code += `${indent}_ctx["absolute_byte_offset"] = _saved_abs_off\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
     code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
     code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
@@ -878,7 +911,10 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
     code += `${indent}_sub_pos_before = encoder.byte_offset\n`;
     code += `${indent}_sub_dp_before = len(_ctx["deferred_patches"])\n`;
+    code += `${indent}_saved_abs_off = _ctx.get("absolute_byte_offset", 0)\n`;
+    code += `${indent}_ctx["absolute_byte_offset"] = _saved_abs_off + encoder.byte_offset\n`;
     code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath}, _ctx)\n`;
+    code += `${indent}_ctx["absolute_byte_offset"] = _saved_abs_off\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
     code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
     code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
@@ -888,7 +924,10 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
     code += `${indent}_sub_pos_before = encoder.byte_offset\n`;
     code += `${indent}_sub_dp_before = len(_ctx["deferred_patches"])\n`;
+    code += `${indent}_saved_abs_off = _ctx.get("absolute_byte_offset", 0)\n`;
+    code += `${indent}_ctx["absolute_byte_offset"] = _saved_abs_off + encoder.byte_offset\n`;
     code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath}, _ctx)\n`;
+    code += `${indent}_ctx["absolute_byte_offset"] = _saved_abs_off\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
     code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
     code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
@@ -2026,12 +2065,21 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "null_terminated") {
     const terminator = field.terminator !== undefined ? field.terminator : 0;
+    const terminalVariants: string[] = field.terminal_variants || [];
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while True:\n`;
+    code += `${indent}    if not decoder.has_more():\n`;
+    code += `${indent}        break\n`;
     code += `${indent}    if decoder.peek_uint8() == ${terminator}:\n`;
     code += `${indent}        decoder.read_uint8()  # consume terminator\n`;
     code += `${indent}        break\n`;
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    if (terminalVariants.length > 0) {
+      const variantList = terminalVariants.map(v => `"${v}"`).join(", ") + (terminalVariants.length === 1 ? "," : "");
+      code += `${indent}    # terminal_variants: stop after reading one of ${terminalVariants.join('/')}\n`;
+      code += `${indent}    if isinstance(${fieldAssign}[-1], dict) and ${fieldAssign}[-1].get("type") in (${variantList}):\n`;
+      code += `${indent}        break\n`;
+    }
   } else if (kind === "eof_terminated") {
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while decoder.has_more():\n`;
@@ -2343,6 +2391,8 @@ export function generatePython(
       lines.push(...generateStringTypeCode(name, typeDef as any, defaultEndianness));
     } else if ((typeDef as any).type === 'array') {
       lines.push(...generateArrayTypeCode(name, typeDef as any, schema, defaultEndianness, defaultBitOrder));
+    } else if ((typeDef as any).type === 'back_reference') {
+      lines.push(...generateBackReferenceTypeCode(name, typeDef as any, schema, defaultEndianness, defaultBitOrder));
     }
     lines.push(``);
     lines.push(``);
@@ -2877,7 +2927,12 @@ function generateArrayTypeCode(name: string, typeDef: any, schema: BinarySchema,
   lines.push(``);
   lines.push(`    def encode(self, value: list, _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
+  lines.push(`        if _ctx is None:`);
+  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "compression_dict": {}}`);
+  lines.push(`        if "compression_dict" not in _ctx:`);
+  lines.push(`            _ctx["compression_dict"] = {}`);
   lines.push(generateArrayEncode(typeDef, 'value', '        ', endianness, schema, bitOrder));
+  lines.push(`        _ctx["deferred_patches"] = _resolve_deferred_patches(encoder, _ctx["deferred_patches"], _ctx["array_offsets"], _ctx["array_iterations"])`);
   lines.push(`        return encoder.finish()`);
   lines.push(``);
 
@@ -2894,6 +2949,119 @@ function generateArrayTypeCode(name: string, typeDef: any, schema: BinarySchema,
   lines.push(`        super().__init__(data, "${bitOrder}")`);
   lines.push(``);
   lines.push(`    def decode(self) -> list:`);
+  lines.push(`        return decode_${toSnakeCase(name)}(self)`);
+
+  return lines;
+}
+
+/**
+ * Generate encoder/decoder for a back_reference type (DNS-style label compression).
+ *
+ * Encode semantics:
+ *   - If the value has been seen before (JSON-keyed in _ctx["compression_dict"]),
+ *     emit a pointer: storage | (offset & offset_mask) with the top bits set
+ *     (0xC0 / 0xC000 / 0xC0000000 depending on storage width).
+ *   - Otherwise record the current absolute offset and encode the target_type
+ *     value inline (via the target_type's encoder).
+ *
+ * Decode semantics:
+ *   - Read the storage word, mask to get the offset, push position, seek to
+ *     offset, decode the target_type at that position, then pop position.
+ *   - Detect circular references via a visited-set.
+ */
+function generateBackReferenceTypeCode(
+  name: string,
+  typeDef: any,
+  schema: BinarySchema,
+  endianness: string,
+  bitOrder: string
+): string[] {
+  const lines: string[] = [];
+  const className = toPascalCase(name);
+  const storage: string = typeDef.storage || "uint16";
+  const offsetMask: string = typeDef.offset_mask || "0x3FFF";
+  const targetType: string = typeDef.target_type;
+  const fieldEndianness: string = typeDef.endianness || endianness;
+  const offsetFrom: string = typeDef.offset_from || "message_start";
+
+  // Top-bit pattern matches storage width: 0xC0 / 0xC000 / 0xC0000000.
+  const topBits: string = storage === "uint8"
+    ? "0xC0"
+    : storage === "uint16"
+      ? "0xC000"
+      : "0xC0000000";
+
+  // ---- Encoder ----
+  lines.push(`class ${className}Encoder(BitStreamEncoder):`);
+  lines.push(`    def __init__(self):`);
+  lines.push(`        super().__init__("${bitOrder}")`);
+  lines.push(``);
+  lines.push(`    def encode(self, value: Any, _parent_value: dict[str, Any] | None = None, _ctx: dict | None = None) -> bytes:`);
+  lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
+  lines.push(`        if _ctx is None:`);
+  lines.push(`            _ctx = {"parents": [], "array_offsets": {}, "array_iterations": {}, "deferred_patches": [], "field_offset_stacks": [], "compression_dict": {}}`);
+  lines.push(`        if "compression_dict" not in _ctx:`);
+  lines.push(`            _ctx["compression_dict"] = {}`);
+  lines.push(`        _compression_dict = _ctx["compression_dict"]`);
+  lines.push(`        _key = __import__("json").dumps(value, sort_keys=True, default=str)`);
+  lines.push(`        _existing_off = _compression_dict.get(_key)`);
+  lines.push(`        if _existing_off is not None:`);
+  lines.push(`            _ref_val = ${topBits} | (_existing_off & ${offsetMask})`);
+  if (storage === "uint8") {
+    lines.push(`            encoder.write_uint8(_ref_val)`);
+  } else {
+    lines.push(`            encoder.write_${storage}(_ref_val, "${fieldEndianness}")`);
+  }
+  lines.push(`        else:`);
+  lines.push(`            _base_off = _ctx.get("absolute_byte_offset", 0)`);
+  lines.push(`            _current_off = _base_off + encoder.byte_offset`);
+  lines.push(`            _compression_dict[_key] = _current_off`);
+  lines.push(`            _sub_encoder = ${toPascalCase(targetType)}Encoder()`);
+  lines.push(`            _sub_pos_before = encoder.byte_offset`);
+  lines.push(`            _sub_dp_before = len(_ctx["deferred_patches"])`);
+  lines.push(`            _saved_abs_off = _ctx.get("absolute_byte_offset", 0)`);
+  lines.push(`            _ctx["absolute_byte_offset"] = _saved_abs_off + encoder.byte_offset`);
+  lines.push(`            _sub_bytes = _sub_encoder.encode(value, _parent_value, _ctx)`);
+  lines.push(`            _ctx["absolute_byte_offset"] = _saved_abs_off`);
+  lines.push(`            encoder.write_bytes(_sub_bytes)`);
+  lines.push(`            for _dp in _ctx["deferred_patches"][_sub_dp_before:]:`);
+  lines.push(`                _dp["local_offset"] += _sub_pos_before`);
+  lines.push(`                _dp["owner_encoder"] = encoder`);
+  lines.push(`        return encoder.finish()`);
+  lines.push(``);
+
+  // ---- Decoder ----
+  lines.push(`def decode_${toSnakeCase(name)}(decoder: BitStreamDecoder, _root: dict[str, Any] | None = None) -> Any:`);
+  if (storage === "uint8") {
+    lines.push(`    _ref_val = decoder.read_uint8()`);
+  } else {
+    lines.push(`    _ref_val = decoder.read_${storage}("${fieldEndianness}")`);
+  }
+  lines.push(`    _offset = _ref_val & ${offsetMask}`);
+  lines.push(`    if not hasattr(decoder, "_visited_offsets"):`);
+  lines.push(`        decoder._visited_offsets = set()`);
+  lines.push(`    if _offset in decoder._visited_offsets:`);
+  lines.push(`        raise RuntimeError(f"Circular back_reference detected at offset {_offset}")`);
+  lines.push(`    decoder._visited_offsets.add(_offset)`);
+  if (offsetFrom === "current_position") {
+    lines.push(`    _saved_pos = decoder.position`);
+    lines.push(`    decoder.seek(_saved_pos + _offset)`);
+  } else {
+    lines.push(`    _saved_pos = decoder.position`);
+    lines.push(`    decoder.seek(_offset)`);
+  }
+  lines.push(`    _result = decode_${toSnakeCase(targetType)}(decoder, _root)`);
+  lines.push(`    decoder.seek(_saved_pos)`);
+  lines.push(`    decoder._visited_offsets.discard(_offset)`);
+  lines.push(`    return _result`);
+  lines.push(``);
+
+  // Top-level decoder class for standalone use.
+  lines.push(`class ${className}Decoder(SeekableBitStreamDecoder):`);
+  lines.push(`    def __init__(self, data: bytes | bytearray | list[int]):`);
+  lines.push(`        super().__init__(data, "${bitOrder}")`);
+  lines.push(``);
+  lines.push(`    def decode(self) -> Any:`);
   lines.push(`        return decode_${toSnakeCase(name)}(self)`);
 
   return lines;
