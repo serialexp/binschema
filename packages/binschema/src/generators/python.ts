@@ -716,6 +716,7 @@ function generateDiscriminatedUnionEncode(field: any, fieldAccess: string, inden
       code += `${indent}    encoder.write_bytes(_sub_bytes)\n`;
       code += `${indent}    for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
       code += `${indent}        _dp["local_offset"] += _sub_pos_before\n`;
+      code += `${indent}        _dp["owner_encoder"] = encoder\n`;
     }
   }
 
@@ -747,7 +748,14 @@ function generateChoiceEncode(field: any, fieldAccess: string, indent: string, e
         code += `${indent}    _ctx["parents"].append(${fieldAccess})\n`;
         code += `${indent}    _ctx["field_offset_stacks"].append({})\n`;
         for (const subfield of typeDef.sequence) {
+          const sfAny = subfield as any;
+          if (sfAny.name) {
+            code += `${indent}    _ctx["field_offset_stacks"][-1]["${sfAny.name}"] = {"start": encoder.byte_offset, "end": encoder.byte_offset}\n`;
+          }
           code += generateFieldEncode(subfield, fieldAccess, indent + '    ', endianness, schema, bitOrder, typeDef.sequence);
+          if (sfAny.name) {
+            code += `${indent}    _ctx["field_offset_stacks"][-1]["${sfAny.name}"]["end"] = encoder.byte_offset\n`;
+          }
         }
         code += `${indent}    _ctx["parents"].pop()\n`;
         code += `${indent}    _ctx["field_offset_stacks"].pop()\n`;
@@ -823,6 +831,7 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
     code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
     code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
+    code += `${indent}    _dp["owner_encoder"] = encoder\n`;
   } else if ((typeDef as any).type === 'string') {
     // String type alias
     code += generateStringEncode(typeDef as any, fieldAccess, indent, endianness);
@@ -838,6 +847,7 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
     code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
     code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
+    code += `${indent}    _dp["owner_encoder"] = encoder\n`;
   } else if ((typeDef as any).type === 'choice') {
     // Choice type - use sub-encoder + ctx + offset rebase
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
@@ -847,6 +857,7 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
     code += `${indent}for _dp in _ctx["deferred_patches"][_sub_dp_before:]:\n`;
     code += `${indent}    _dp["local_offset"] += _sub_pos_before\n`;
+    code += `${indent}    _dp["owner_encoder"] = encoder\n`;
   } else if (typeof (typeDef as any).type === 'string' && schema.types[(typeDef as any).type]) {
     // Alias: typeDef is { type: "OtherType" } - recurse with target type
     code += generateTypeRefEncode({ ...field, type: (typeDef as any).type }, fieldAccess, indent, endianness, schema, bitOrder, valuePath);
@@ -930,6 +941,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
           `"endianness": "${e}", ` +
           `"alignment": 1, ` +
           `"operation": "crc32", ` +
+          `"owner_encoder": encoder, ` +
           `"parent_field_dict": _ctx["field_offset_stacks"][${-(levels + 1)}], ` +
           `"parent_field_name": ${JSON.stringify(fieldName)}` +
           `})\n`;
@@ -960,6 +972,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
           `"patch_type": "${field.type}", ` +
           `"endianness": "${e}", ` +
           `"alignment": ${alignment}, ` +
+          `"owner_encoder": encoder, ` +
           `"target_spec": ${JSON.stringify(target)}` +
           `})\n`;
       } else if (target && target.startsWith('../')) {
@@ -977,6 +990,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
           `"patch_type": "${field.type}", ` +
           `"endianness": "${e}", ` +
           `"alignment": ${alignment}, ` +
+          `"owner_encoder": encoder, ` +
           `"parent_field_dict": _ctx["field_offset_stacks"][${-(levels + 1)}], ` +
           `"parent_field_name": ${JSON.stringify(fieldName)}` +
           `})\n`;
@@ -1005,6 +1019,7 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
         `"endianness": "${e}", ` +
         `"alignment": 1, ` +
         `"operation": "sum_of_sizes", ` +
+        `"owner_encoder": encoder, ` +
         `"parent_field_targets": [${tuples.join(', ')}]` +
         `})\n`;
     } else {
@@ -2414,6 +2429,7 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
         `"patch_type": "${pfAny.type}", ` +
         `"endianness": "${e}", ` +
         `"alignment": ${alignment}, ` +
+        `"owner_encoder": encoder, ` +
         `"target_spec": ${JSON.stringify(target)}` +
         `})`);
       continue;

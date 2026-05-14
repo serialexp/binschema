@@ -39,6 +39,14 @@ def _resolve_deferred_patches(encoder, patches, array_offsets, array_iterations)
     import re
     remaining = []
     for p in patches:
+        # Skip patches whose local_offset is into a different encoder buffer.
+        # owner_encoder is tagged at registration time and re-pointed when the
+        # sub-encoder bytes get spliced into the parent. We only resolve here
+        # if we are the owner.
+        owner = p.get("owner_encoder")
+        if owner is not None and owner is not encoder:
+            remaining.append(p)
+            continue
         # Parent-ref patches: look up the field offset in the captured parent
         # dict by reference. Resolves once the parent records the offset.
         if p.get("operation") == "sum_of_sizes":
