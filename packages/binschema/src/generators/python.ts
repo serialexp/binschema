@@ -36,6 +36,25 @@ function toPascalCase(name: string): string {
     .join('');
 }
 
+// Unique counter for generated variable names to avoid collisions in nested arrays
+let _varCounter = 0;
+function uniqueVar(prefix: string): string {
+  return `${prefix}_${_varCounter++}`;
+}
+
+/**
+ * Convert a dotted field path to Python dict access
+ * e.g., "flags.count" with basePath "result" -> result["flags"]["count"]
+ */
+function pyFieldAccess(basePath: string, fieldPath: string): string {
+  const parts = fieldPath.split('.');
+  let access = basePath;
+  for (const part of parts) {
+    access += `["${part}"]`;
+  }
+  return access;
+}
+
 /**
  * Map endianness string to Python string literal
  */
@@ -121,24 +140,38 @@ function isFieldConditional(field: any): boolean {
  * Convert conditional expression to Python
  */
 function convertConditionalToPython(condition: string, basePath: string = "value"): string {
-  // Replace logical operators
+  // Replace logical operators (order matters - do multi-char first)
   let expr = condition
     .replace(/&&/g, ' and ')
     .replace(/\|\|/g, ' or ')
-    .replace(/!/g, 'not ')
-    .replace(/\btrue\b/g, 'True')
-    .replace(/\bfalse\b/g, 'False')
+    .replace(/!==/g, ' != ')
+    .replace(/===/g, ' == ')
     .replace(/!=/g, ' != ')
-    .replace(/==/g, ' == ');
+    .replace(/==/g, ' == ')
+    .replace(/\btrue\b/g, 'True')
+    .replace(/\bfalse\b/g, 'False');
 
-  // Add basePath prefix to field references
+  // Replace ! (not) but not != which was already handled
+  expr = expr.replace(/!(?!=)/g, 'not ');
+
+  // Handle hex literals (preserve them)
+  // Replace field references like "header.flags" -> basePath["header"]["flags"]
+  // and simple references like "flags" -> basePath["flags"]
+  const reserved = new Set(['True', 'False', 'None', 'and', 'or', 'not', 'in', 'is', 'if', 'else']);
   const identifierRegex = /\b([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\b/g;
-  const reserved = new Set(['True', 'False', 'None', 'and', 'or', 'not', 'in', 'is']);
+
   expr = expr.replace(identifierRegex, (match) => {
     if (reserved.has(match)) return match;
     if (/^\d/.test(match)) return match;
     if (match === basePath || match.startsWith(`${basePath}.`)) return match;
-    return `${basePath}.get("${match}", 0) if isinstance(${basePath}, dict) else getattr(${basePath}, "${match}", 0)`;
+
+    // Convert dotted path to nested dict access
+    const parts = match.split('.');
+    let access = basePath;
+    for (const part of parts) {
+      access += `["${part}"]`;
+    }
+    return access;
   });
 
   return expr;
@@ -257,7 +290,7 @@ function generateFieldEncode(field: any, valuePath: string, indent: string, endi
     default:
       // Type reference - delegate to that type's encoder
       if (field.type && schema.types[field.type]) {
-        code += generateTypeRefEncode(field, fieldAccess, indent, endianness, schema, bitOrder);
+        code += generateTypeRefEncode(field, fieldAccess, indent, endianness, schema, bitOrder, valuePath);
       } else {
         code += `${indent}# TODO: unsupported type ${field.type}\n`;
       }
@@ -313,9 +346,12 @@ function generateConstEncode(field: any, indent: string, endianness: string): st
 
 function generatePaddingEncode(field: any, indent: string): string {
   const size = field.size || 1;
+  // The schema field is `align_to` (matches TS/Rust/Go). `pad_to` was a
+  // pre-existing typo and is accepted as a fallback.
+  const alignTo = field.align_to ?? field.pad_to;
   let code = '';
-  if (field.pad_to) {
-    code += `${indent}padding_needed = (${field.pad_to} - (encoder.byte_offset % ${field.pad_to})) % ${field.pad_to}\n`;
+  if (alignTo) {
+    code += `${indent}padding_needed = (${alignTo} - (encoder.byte_offset % ${alignTo})) % ${alignTo}\n`;
     code += `${indent}for _ in range(padding_needed):\n`;
     code += `${indent}    encoder.write_uint8(0)\n`;
   } else {
@@ -343,6 +379,29 @@ function generateBytesEncode(field: any, fieldAccess: string, indent: string, en
   return code;
 }
 
+function pyEncodingName(encoding: string, endianness: string): string {
+  switch (encoding) {
+    case "utf8": return "utf-8";
+    case "ascii": return "ascii";
+    case "latin1": return "latin-1";
+    case "utf16":
+      return endianness === "little_endian" ? "utf-16-le" : "utf-16-be";
+    case "utf16_be":
+    case "utf16be":
+      return "utf-16-be";
+    case "utf16_le":
+    case "utf16le":
+      return "utf-16-le";
+    default:
+      return "utf-8";
+  }
+}
+
+function isUtf16Encoding(encoding: string): boolean {
+  return encoding === "utf16" || encoding === "utf16_be" || encoding === "utf16be" ||
+         encoding === "utf16_le" || encoding === "utf16le";
+}
+
 function generateVarlengthEncode(field: any, fieldAccess: string, indent: string): string {
   const encoding = field.encoding || "der";
   switch (encoding) {
@@ -362,7 +421,9 @@ function generateVarlengthEncode(field: any, fieldAccess: string, indent: string
 function generateStringEncode(field: any, fieldAccess: string, indent: string, endianness: string): string {
   let code = '';
   const encoding = field.encoding || "utf8";
-  const pyEncoding = encoding === "utf8" ? "utf-8" : encoding === "ascii" ? "ascii" : "utf-8";
+  const fieldEndianness = field.endianness || endianness;
+  const pyEncoding = pyEncodingName(encoding, fieldEndianness);
+  const isUtf16 = isUtf16Encoding(encoding);
   const kind = field.kind;
 
   if (kind === "fixed" && field.length !== undefined) {
@@ -373,7 +434,13 @@ function generateStringEncode(field: any, fieldAccess: string, indent: string, e
   } else if (kind === "null_terminated" || field.terminator !== undefined) {
     const terminator = field.terminator !== undefined ? field.terminator : 0;
     code += `${indent}encoder.write_bytes(${fieldAccess}.encode("${pyEncoding}"))\n`;
-    code += `${indent}encoder.write_uint8(${terminator})\n`;
+    if (isUtf16) {
+      // UTF-16 null terminator is 2 bytes
+      code += `${indent}encoder.write_uint8(${terminator})\n`;
+      code += `${indent}encoder.write_uint8(${terminator})\n`;
+    } else {
+      code += `${indent}encoder.write_uint8(${terminator})\n`;
+    }
   } else if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     code += `${indent}_str_bytes = ${fieldAccess}.encode("${pyEncoding}")\n`;
@@ -454,29 +521,61 @@ function generateArrayEncode(field: any, fieldAccess: string, indent: string, en
   } else if (kind === "length_prefixed_items") {
     const lengthType = field.length_type || "uint8";
     code += generateLengthPrefixEncode(lengthType, `len(${fieldAccess})`, indent, endianness);
+
+    // Each item gets its own byte-length prefix
+    const itemLengthType = field.item_length_type || "uint32";
+    code += `${indent}for _item in ${fieldAccess}:\n`;
+    // Encode item to temp buffer to measure byte length
+    code += `${indent}    _item_encoder = BitStreamEncoder("${bitOrder}")\n`;
+    if (items && typeof items === 'object' && items.type) {
+      const itemEncCode = generateFieldEncode({ ...items, name: undefined }, '_item', indent + '    ', endianness, schema, bitOrder);
+      code += itemEncCode.replace(/\bencoder\b/g, '_item_encoder');
+    }
+    code += `${indent}    _item_bytes = _item_encoder.finish()\n`;
+    code += generateLengthPrefixEncode(itemLengthType, 'len(_item_bytes)', indent + '    ', endianness);
+    code += `${indent}    encoder.write_bytes(_item_bytes)\n`;
+    return code;
+  }
+
+  // Use unique variable names for array iteration
+  const encUid = _varCounter++;
+  const encItemVar = `_item_${encUid}`;
+
+  // Variant-terminated arrays: write all items including terminal variant
+  if (kind === "variant_terminated") {
+    code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+    code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
+    return code;
+  }
+
+  // Signature-terminated arrays: write items until signature
+  if (kind === "signature_terminated") {
+    code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+    code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
+    return code;
   }
 
   // Null-terminated arrays write a terminator after all items
   if (kind === "null_terminated") {
-    code += `${indent}for _item in ${fieldAccess}:\n`;
-    code += generateArrayItemEncode(items, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+    code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
     const terminator = field.terminator !== undefined ? field.terminator : 0;
     code += `${indent}encoder.write_uint8(${terminator})\n`;
     return code;
   }
 
   // Iterate over elements
-  code += `${indent}for _item in ${fieldAccess}:\n`;
-  code += generateArrayItemEncode(items, indent + '    ', endianness, schema, bitOrder);
+  code += `${indent}for ${encItemVar} in ${fieldAccess}:\n`;
+  code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
 
   return code;
 }
 
-function generateArrayItemEncode(items: any, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+function generateArrayItemEncode(items: any, itemVarName: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
   if (items && typeof items === 'object' && items.type) {
-    return generateFieldEncode({ ...items, name: undefined }, '_item', indent, endianness, schema, bitOrder);
+    return generateFieldEncode({ ...items, name: undefined }, itemVarName, indent, endianness, schema, bitOrder);
   } else if (typeof items === 'string') {
-    return generateFieldEncode({ type: items }, '_item', indent, endianness, schema, bitOrder);
+    return generateFieldEncode({ type: items }, itemVarName, indent, endianness, schema, bitOrder);
   }
   return `${indent}pass  # unknown item type\n`;
 }
@@ -593,10 +692,11 @@ function generateOptionalEncode(field: any, fieldAccess: string, indent: string,
   return code;
 }
 
-function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string, valuePath?: string): string {
   let code = '';
   const typeName = toPascalCase(field.type);
   const typeDef = schema.types[field.type];
+  const parentPath = valuePath || 'value';
 
   if (isEnumType(typeDef)) {
     // Enum type - encode directly
@@ -613,9 +713,9 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
         break;
     }
   } else if ('sequence' in typeDef) {
-    // Struct type - use sub-encoder
+    // Struct type - use sub-encoder, pass current value as parent context
     code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
-    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess})\n`;
+    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess}, ${parentPath})\n`;
     code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
   } else if ((typeDef as any).type === 'string') {
     // String type alias
@@ -623,6 +723,16 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
   } else if ((typeDef as any).type === 'array') {
     // Array type alias
     code += generateArrayEncode(typeDef as any, fieldAccess, indent, endianness, schema, bitOrder);
+  } else if ((typeDef as any).type === 'discriminated_union') {
+    // Discriminated union type - use sub-encoder
+    code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
+    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess})\n`;
+    code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
+  } else if ((typeDef as any).type === 'choice') {
+    // Choice type - use sub-encoder
+    code += `${indent}_sub_encoder = ${typeName}Encoder()\n`;
+    code += `${indent}_sub_bytes = _sub_encoder.encode(${fieldAccess})\n`;
+    code += `${indent}encoder.write_bytes(_sub_bytes)\n`;
   } else {
     code += `${indent}# TODO: type ref encode for ${field.type}\n`;
   }
@@ -634,65 +744,143 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
   let code = '';
   const computed = field.computed;
   const e = field.endianness || endianness;
+  const bitOrder = schema.config?.bit_order || 'msb_first';
 
   // Computed fields are calculated during encoding
-  if (computed.type === "length_of" || computed.type === "count_of") {
+  if (computed.type === "count_of") {
     const target = computed.target;
-    const targetAccess = `${valuePath}["${target}"]`;
+    const targetAccess = resolveComputedTarget(target, valuePath);
+    const lengthExpr = `len(${targetAccess})`;
 
-    let lengthExpr: string;
-    if (computed.type === "count_of") {
-      lengthExpr = `len(${targetAccess})`;
-    } else {
-      // length_of - need to calculate byte length
-      // Use a temporary encoder to measure the size
-      if (computed.from_after_field) {
-        // Length starts counting from after a specific field
-        // This is handled by encoding into a temp encoder and measuring
-        code += `${indent}# Computed: ${computed.type} ${target} (from_after_field: ${computed.from_after_field})\n`;
-        code += `${indent}# Placeholder - will be back-patched\n`;
-        code += `${indent}_length_pos_${field.name} = encoder.byte_offset\n`;
-        code += generatePlaceholderWrite(field.type, indent, e);
-        return code;
-      }
-      lengthExpr = `_computed_length_${field.name}`;
-      code += `${indent}# Computed: length_of ${target}\n`;
-      code += `${indent}# Calculate length by trial encoding\n`;
-      code += `${indent}_temp_encoder = BitStreamEncoder("${schema.config?.bit_order || 'msb_first'}")\n`;
-      // This is a simplification - full implementation would need to encode the target
-      code += `${indent}${lengthExpr} = len(${targetAccess}) if isinstance(${targetAccess}, (list, bytes)) else 0\n`;
+    code += generateComputedWrite(field.type, lengthExpr, indent, e);
+  } else if (computed.type === "length_of") {
+    const target = computed.target;
+
+    if (computed.from_after_field) {
+      // Content-first encoding: write placeholder, will be back-patched by struct-level code
+      code += `${indent}# Computed: length_of ${target} (from_after_field: ${computed.from_after_field})\n`;
+      code += `${indent}_backpatch_pos_${field.name} = encoder.byte_offset\n`;
+      code += generatePlaceholderWrite(field.type, indent, e);
+      return code;
     }
 
-    switch (field.type) {
-      case "uint8":
-        code += `${indent}encoder.write_uint8(${lengthExpr})\n`;
-        break;
-      case "uint16":
-        code += `${indent}encoder.write_uint16(${lengthExpr}, ${pyEndianness(e)})\n`;
-        break;
-      case "uint32":
-        code += `${indent}encoder.write_uint32(${lengthExpr}, ${pyEndianness(e)})\n`;
-        break;
-      case "uint64":
-        code += `${indent}encoder.write_uint64(${lengthExpr}, ${pyEndianness(e)})\n`;
-        break;
-      case "varlength":
-        code += `${indent}encoder.write_varlength_der(${lengthExpr})\n`;
-        break;
-      default:
-        code += `${indent}encoder.write_uint8(${lengthExpr})\n`;
-    }
+    // Calculate length by trial encoding the target field
+    const targetAccess = resolveComputedTarget(target, valuePath);
+    code += `${indent}# Computed: length_of ${target}\n`;
+    code += generateLengthCalculation(field, target, targetAccess, valuePath, indent, bitOrder, e, schema);
   } else if (computed.type === "crc32_of") {
-    code += `${indent}# CRC32 computed field - placeholder\n`;
+    const target = computed.target;
+    const targetAccess = resolveComputedTarget(target, valuePath);
+    code += `${indent}# CRC32 computed field - write placeholder, back-patch later\n`;
     code += `${indent}_crc_pos_${field.name} = encoder.byte_offset\n`;
     code += generatePlaceholderWrite(field.type, indent, e);
   } else if (computed.type === "position_of") {
-    code += `${indent}# Position computed field - placeholder\n`;
+    code += `${indent}# Position computed field - write placeholder, back-patch later\n`;
     code += `${indent}_pos_${field.name} = encoder.byte_offset\n`;
     code += generatePlaceholderWrite(field.type, indent, e);
+  } else if (computed.type === "sum_of_field_sizes") {
+    const targets = computed.targets || [];
+    code += `${indent}# Computed: sum_of_field_sizes\n`;
+    const terms = targets.map((t: string) => {
+      const tAccess = resolveComputedTarget(t, valuePath);
+      return `len(${toPascalCase(getTargetFieldType(t, schema, valuePath))}Encoder().encode(${tAccess}))`;
+    });
+    if (terms.length > 0) {
+      code += generateComputedWrite(field.type, terms.join(' + '), indent, e);
+    } else {
+      code += generateComputedWrite(field.type, '0', indent, e);
+    }
   }
 
   return code;
+}
+
+function resolveComputedTarget(target: string, valuePath: string): string {
+  if (target.startsWith('../')) {
+    // Parent reference - count levels and resolve
+    let remaining = target;
+    let levels = 0;
+    while (remaining.startsWith('../')) {
+      levels++;
+      remaining = remaining.substring(3);
+    }
+    // For single parent: _parent_value["field"]
+    // For grandparent etc, we'd need deeper context - for now assume _parent_value
+    // handles the common single-parent case
+    return `_parent_value["${remaining}"]`;
+  }
+  return `${valuePath}["${target}"]`;
+}
+
+function getTargetFieldType(target: string, schema: BinarySchema, valuePath: string): string {
+  // Best-effort field type lookup - returns the type name
+  return target;
+}
+
+function generateLengthCalculation(field: any, target: string, targetAccess: string, valuePath: string, indent: string, bitOrder: string, endianness: string, schema: BinarySchema): string {
+  let code = '';
+  const lengthVar = `_computed_length_${field.name}`;
+  const offset = field.computed.offset || 0;
+
+  // Look up the target field's type in the schema to determine how to calculate length
+  // For arrays/bytes/strings: use trial encoding
+  // For simple types: use known sizes
+  code += `${indent}_temp_enc_${field.name} = BitStreamEncoder("${bitOrder}")\n`;
+
+  // Find the target field definition to determine encoding strategy
+  // We need to encode the target value to measure its byte length
+  code += `${indent}_target_val_${field.name} = ${targetAccess}\n`;
+  code += `${indent}if isinstance(_target_val_${field.name}, (list, bytes, bytearray)):\n`;
+  code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
+  code += `${indent}elif isinstance(_target_val_${field.name}, str):\n`;
+  code += `${indent}    ${lengthVar} = len(_target_val_${field.name}.encode("utf-8"))\n`;
+  code += `${indent}elif isinstance(_target_val_${field.name}, dict):\n`;
+  // For struct types, need to trial-encode
+  code += `${indent}    # Try to find encoder for this struct\n`;
+  code += `${indent}    ${lengthVar} = 0\n`;
+  code += `${indent}    for _enc_cls_name in dir():\n`;
+  code += `${indent}        pass  # Will be improved with type-specific encoding\n`;
+  code += `${indent}else:\n`;
+  code += `${indent}    ${lengthVar} = 0\n`;
+
+  if (offset) {
+    code += `${indent}${lengthVar} += ${offset}\n`;
+  }
+
+  code += generateComputedWrite(field.type, lengthVar, indent, endianness);
+  return code;
+}
+
+function generateComputedWrite(fieldType: string, valueExpr: string, indent: string, endianness: string): string {
+  switch (fieldType) {
+    case "uint8":
+      return `${indent}encoder.write_uint8(${valueExpr})\n`;
+    case "uint16":
+      return `${indent}encoder.write_uint16(${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "uint32":
+      return `${indent}encoder.write_uint32(${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "uint64":
+      return `${indent}encoder.write_uint64(${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "varlength":
+      return `${indent}encoder.write_varlength_der(${valueExpr})\n`;
+    default:
+      return `${indent}encoder.write_uint8(${valueExpr})\n`;
+  }
+}
+
+function generatePatchCall(fieldType: string, offsetVar: string, valueExpr: string, indent: string, endianness: string): string {
+  switch (fieldType) {
+    case "uint8":
+      return `${indent}encoder.patch_uint8(${offsetVar}, ${valueExpr})\n`;
+    case "uint16":
+      return `${indent}encoder.patch_uint16(${offsetVar}, ${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "uint32":
+      return `${indent}encoder.patch_uint32(${offsetVar}, ${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "uint64":
+      return `${indent}encoder.patch_uint64(${offsetVar}, ${valueExpr}, ${pyEndianness(endianness)})\n`;
+    default:
+      return `${indent}encoder.patch_uint32(${offsetVar}, ${valueExpr}, ${pyEndianness(endianness)})\n`;
+  }
 }
 
 function generatePlaceholderWrite(fieldType: string, indent: string, endianness: string): string {
@@ -808,7 +996,7 @@ function generateFieldDecode(field: any, resultPath: string, indent: string, end
       code += generateBitfieldDecode(field, fieldAssign, indent, bitOrder);
       break;
     case "discriminated_union":
-      code += generateDiscriminatedUnionDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
+      code += generateDiscriminatedUnionDecode(field, fieldAssign, indent, endianness, schema, bitOrder, resultPath);
       break;
     case "choice":
       code += generateChoiceDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
@@ -833,7 +1021,7 @@ function generateConstDecode(field: any, fieldAssign: string, indent: string, en
 
   if (field.type === "string") {
     const encoding = field.encoding || "utf8";
-    const pyEncoding = encoding === "utf8" ? "utf-8" : encoding === "ascii" ? "ascii" : "utf-8";
+    const pyEncoding = pyEncodingName(encoding, field.endianness || endianness);
     if (field.length !== undefined) {
       code += `${indent}_const_bytes = decoder.read_bytes_slice(${field.length})\n`;
       code += `${indent}${fieldAssign} = _const_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
@@ -870,9 +1058,10 @@ function generateConstDecode(field: any, fieldAssign: string, indent: string, en
 
 function generatePaddingDecode(field: any, indent: string): string {
   const size = field.size || 1;
-  if (field.pad_to) {
+  const alignTo = field.align_to ?? field.pad_to;
+  if (alignTo) {
     let code = '';
-    code += `${indent}_padding_needed = (${field.pad_to} - (decoder.position % ${field.pad_to})) % ${field.pad_to}\n`;
+    code += `${indent}_padding_needed = (${alignTo} - (decoder.position % ${alignTo})) % ${alignTo}\n`;
     code += `${indent}for _ in range(_padding_needed):\n`;
     code += `${indent}    decoder.read_uint8()\n`;
     return code;
@@ -899,36 +1088,59 @@ function generateVarlengthDecode(field: any, fieldAssign: string, indent: string
 function generateStringDecode(field: any, fieldAssign: string, resultPath: string, indent: string, endianness: string): string {
   let code = '';
   const encoding = field.encoding || "utf8";
-  const pyEncoding = encoding === "utf8" ? "utf-8" : encoding === "ascii" ? "ascii" : "utf-8";
+  const fieldEndianness = field.endianness || endianness;
+  const pyEncoding = pyEncodingName(encoding, fieldEndianness);
+  const isUtf16 = isUtf16Encoding(encoding);
   const kind = field.kind;
 
   if (kind === "fixed" && field.length !== undefined) {
     code += `${indent}_str_bytes = decoder.read_bytes_slice(${field.length})\n`;
-    code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+    if (isUtf16) {
+      code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}").rstrip("\\x00")\n`;
+    } else {
+      code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+    }
   } else if (kind === "null_terminated" || field.terminator !== undefined) {
     const terminator = field.terminator !== undefined ? field.terminator : 0;
-    code += `${indent}_str_buf = bytearray()\n`;
-    code += `${indent}while True:\n`;
-    code += `${indent}    _ch = decoder.read_uint8()\n`;
-    code += `${indent}    if _ch == ${terminator}:\n`;
-    code += `${indent}        break\n`;
-    code += `${indent}    _str_buf.append(_ch)\n`;
-    code += `${indent}${fieldAssign} = _str_buf.decode("${pyEncoding}")\n`;
+    if (isUtf16) {
+      // UTF-16: read 2-byte code units until we see 0x0000
+      code += `${indent}_str_buf = bytearray()\n`;
+      code += `${indent}while True:\n`;
+      code += `${indent}    _b0 = decoder.read_uint8()\n`;
+      code += `${indent}    _b1 = decoder.read_uint8()\n`;
+      code += `${indent}    if _b0 == ${terminator} and _b1 == ${terminator}:\n`;
+      code += `${indent}        break\n`;
+      code += `${indent}    _str_buf.append(_b0)\n`;
+      code += `${indent}    _str_buf.append(_b1)\n`;
+      code += `${indent}${fieldAssign} = _str_buf.decode("${pyEncoding}")\n`;
+    } else {
+      code += `${indent}_str_buf = bytearray()\n`;
+      code += `${indent}while True:\n`;
+      code += `${indent}    _ch = decoder.read_uint8()\n`;
+      code += `${indent}    if _ch == ${terminator}:\n`;
+      code += `${indent}        break\n`;
+      code += `${indent}    _str_buf.append(_ch)\n`;
+      code += `${indent}${fieldAssign} = _str_buf.decode("${pyEncoding}")\n`;
+    }
   } else if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     code += generateLengthPrefixDecode(lengthType, '_str_len', indent, endianness);
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
     code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
   } else if (kind === "field_referenced" && field.length_field) {
-    code += `${indent}_str_len = ${resultPath}["${field.length_field}"]\n`;
+    code += `${indent}_str_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
     code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
   } else if (field.length !== undefined) {
     // Fallback fixed-length
     code += `${indent}_str_bytes = decoder.read_bytes_slice(${field.length})\n`;
-    code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+    if (isUtf16) {
+      code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}").rstrip("\\x00")\n`;
+    } else {
+      code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+    }
   } else if (field.length_field) {
-    code += `${indent}_str_len = ${resultPath}["${field.length_field}"]\n`;
+    code += `${indent}_str_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
     code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
   } else {
@@ -950,12 +1162,12 @@ function generateBytesDecode(field: any, fieldAssign: string, resultPath: string
     code += generateLengthPrefixDecode(lengthType, '_bytes_len', indent, endianness);
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(_bytes_len))\n`;
   } else if (kind === "field_referenced" && field.length_field) {
-    code += `${indent}_bytes_len = ${resultPath}["${field.length_field}"]\n`;
+    code += `${indent}_bytes_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(_bytes_len))\n`;
   } else if (field.length !== undefined) {
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(${field.length}))\n`;
   } else if (field.length_field) {
-    code += `${indent}_bytes_len = ${resultPath}["${field.length_field}"]\n`;
+    code += `${indent}_bytes_len = ${pyFieldAccess(resultPath, field.length_field)}\n`;
     code += `${indent}${fieldAssign} = list(decoder.read_bytes_slice(_bytes_len))\n`;
   } else {
     code += `${indent}_remaining = len(decoder._bytes) - decoder.position\n`;
@@ -989,39 +1201,99 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
   const items = field.items;
   const kind = field.kind;
 
+  // Use unique variable names to avoid collisions in nested arrays
+  const uid = _varCounter++;
+  const lenVar = `_arr_len_${uid}`;
+  const countVar = `_arr_count_${uid}`;
+  const iVar = `_i_${uid}`;
+  const itemVar = `_arr_item_${uid}`;
+
   if (kind === "fixed" && field.length !== undefined) {
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}for _i in range(${field.length}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${iVar} in range(${field.length}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
-    code += generateLengthPrefixDecode(lengthType, '_arr_len', indent, endianness);
+    code += generateLengthPrefixDecode(lengthType, lenVar, indent, endianness);
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}for _i in range(_arr_len):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${iVar} in range(${lenVar}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "field_referenced" && field.length_field) {
-    code += `${indent}_arr_count = ${resultPath}["${field.length_field}"]\n`;
+    code += `${indent}${countVar} = ${pyFieldAccess(resultPath, field.length_field)}\n`;
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}for _i in range(_arr_count):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${iVar} in range(${countVar}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "computed_count") {
-    // Count from a computed count_of field
+    const countExpr = field.count_expr;
     const countField = field.count_field || field.length_field;
-    if (countField) {
-      code += `${indent}_arr_count = ${resultPath}["${countField}"]\n`;
+    if (countExpr) {
+      const pyExpr = countExpr.replace(/\b([a-zA-Z_]\w*)\b/g, (match: string) => {
+        if (/^\d/.test(match)) return match;
+        if (['and', 'or', 'not', 'True', 'False', 'None'].includes(match)) return match;
+        return `${resultPath}["${match}"]`;
+      });
+      code += `${indent}${countVar} = ${pyExpr}\n`;
+    } else if (countField) {
+      code += `${indent}${countVar} = ${pyFieldAccess(resultPath, countField)}\n`;
     } else {
-      code += `${indent}_arr_count = 0  # computed_count without field reference\n`;
+      code += `${indent}${countVar} = 0  # computed_count without field reference\n`;
     }
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}for _i in range(_arr_count):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${iVar} in range(${countVar}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+  } else if (kind === "length_prefixed_items") {
+    const lengthType = field.length_type || "uint8";
+    const itemLengthType = field.item_length_type || "uint32";
+    code += generateLengthPrefixDecode(lengthType, lenVar, indent, endianness);
+    code += `${indent}${fieldAssign} = []\n`;
+    code += `${indent}for ${iVar} in range(${lenVar}):\n`;
+    const itemByteLenVar = `_item_byte_len_${uid}`;
+    code += generateLengthPrefixDecode(itemLengthType, itemByteLenVar, indent + '    ', endianness);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "byte_length_prefixed") {
     const lengthType = field.length_type || "uint8";
-    code += generateLengthPrefixDecode(lengthType, '_arr_byte_len', indent, endianness);
-    code += `${indent}_arr_end = decoder.position + _arr_byte_len\n`;
+    const byteLenVar = `_arr_byte_len_${uid}`;
+    const endVar = `_arr_end_${uid}`;
+    code += generateLengthPrefixDecode(lengthType, byteLenVar, indent, endianness);
+    code += `${indent}${endVar} = decoder.position + ${byteLenVar}\n`;
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}while decoder.position < _arr_end:\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}while decoder.position < ${endVar}:\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+  } else if (kind === "variant_terminated") {
+    const terminalVariants = field.terminal_variants || [];
+    code += `${indent}${fieldAssign} = []\n`;
+    code += `${indent}while True:\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    if (terminalVariants.length > 0) {
+      const checks = terminalVariants.map((v: string) => `${fieldAssign}[-1].get("type") == "${v}"`).join(' or ');
+      code += `${indent}    if ${checks}:\n`;
+      code += `${indent}        break\n`;
+    } else {
+      code += `${indent}    break  # no terminal variants specified\n`;
+    }
+  } else if (kind === "signature_terminated") {
+    // Peek the typed terminator at the current position; stop when it
+    // matches. Mirrors the TS generator: `terminator_value` /
+    // `terminator_type` (+ optional `terminator_endianness`) describe the
+    // sentinel; the array's own bytes are followed by a *sibling* field
+    // that consumes the sentinel itself, so we don't read it here.
+    const terminatorValue = (field as any).terminator_value;
+    const terminatorType = (field as any).terminator_type;
+    const terminatorEndianness = (field as any).terminator_endianness || endianness;
+    if (terminatorValue === undefined || terminatorType === undefined) {
+      throw new Error(
+        `signature_terminated array '${field.name}' requires terminator_value and terminator_type`
+      );
+    }
+    const peekArgs = terminatorType === "uint8" ? "" : `"${terminatorEndianness}"`;
+    code += `${indent}${fieldAssign} = []\n`;
+    code += `${indent}while True:\n`;
+    code += `${indent}    # Peek the typed terminator without consuming it.\n`;
+    code += `${indent}    if not decoder.has_more():\n`;
+    code += `${indent}        break\n`;
+    code += `${indent}    if decoder.peek_${terminatorType}(${peekArgs}) == ${terminatorValue}:\n`;
+    code += `${indent}        break\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "null_terminated") {
     const terminator = field.terminator !== undefined ? field.terminator : 0;
     code += `${indent}${fieldAssign} = []\n`;
@@ -1029,44 +1301,39 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}    if decoder.peek_uint8() == ${terminator}:\n`;
     code += `${indent}        decoder.read_uint8()  # consume terminator\n`;
     code += `${indent}        break\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (kind === "eof_terminated") {
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while decoder.has_more():\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (field.length !== undefined) {
-    // Fallback fixed
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}for _i in range(${field.length}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${iVar} in range(${field.length}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else if (field.length_field) {
-    code += `${indent}_arr_count = ${resultPath}["${field.length_field}"]\n`;
+    code += `${indent}${countVar} = ${pyFieldAccess(resultPath, field.length_field)}\n`;
     code += `${indent}${fieldAssign} = []\n`;
-    code += `${indent}for _i in range(_arr_count):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += `${indent}for ${iVar} in range(${countVar}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   } else {
-    // Read until end of stream
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while decoder.has_more():\n`;
-    code += generateArrayItemDecode(items, fieldAssign, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
   }
 
   return code;
 }
 
-function generateArrayItemDecode(items: any, arrayVar: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+function generateArrayItemDecode(items: any, arrayVar: string, itemVar: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
   let code = '';
 
   if (items && typeof items === 'object' && items.type) {
     const itemField = { ...items, name: undefined };
-    code += generateFieldDecode(itemField, '_arr_item', indent, endianness, schema, bitOrder);
-    // The _arr_item might be a dict or primitive depending on the type
-    // For struct types decoded via generateFieldDecode, they get assigned to _arr_item
-    // For primitives, they get assigned to _arr_item directly
-    code += `${indent}${arrayVar}.append(_arr_item)\n`;
+    code += generateFieldDecode(itemField, itemVar, indent, endianness, schema, bitOrder);
+    code += `${indent}${arrayVar}.append(${itemVar})\n`;
   } else if (typeof items === 'string') {
-    code += generateFieldDecode({ type: items, name: undefined }, '_arr_item', indent, endianness, schema, bitOrder);
-    code += `${indent}${arrayVar}.append(_arr_item)\n`;
+    code += generateFieldDecode({ type: items, name: undefined }, itemVar, indent, endianness, schema, bitOrder);
+    code += `${indent}${arrayVar}.append(${itemVar})\n`;
   }
 
   return code;
@@ -1081,7 +1348,7 @@ function generateBitfieldDecode(field: any, fieldAssign: string, indent: string,
   return code;
 }
 
-function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string, resultPath?: string): string {
   let code = '';
   const variants = field.variants || [];
 
@@ -1114,18 +1381,46 @@ function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, inden
         code += `${indent}_disc_val = decoder.peek_uint32(${pyEndianness(e)})\n`;
         break;
     }
+  } else if (field.discriminator?.field) {
+    // Discriminator references a previously decoded field
+    const discField = field.discriminator.field;
+    const rp = resultPath || 'result';
+    code += `${indent}_disc_val = ${pyFieldAccess(rp, discField)}\n`;
   }
 
-  for (let i = 0; i < variants.length; i++) {
-    const variant = variants[i];
-    const discValue = variant.value !== undefined ? variant.value : i;
-    const cond = i === 0 ? 'if' : 'elif';
-    code += `${indent}${cond} _disc_val == ${discValue}:\n`;
-    code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder)}\n`;
-  }
+  // Check if variants use `when` conditions or `value` matching
+  const usesWhen = variants.some((v: any) => v.when);
 
-  code += `${indent}else:\n`;
-  code += `${indent}    raise ValueError(f"Unknown discriminator value: {_disc_val}")\n`;
+  if (usesWhen) {
+    // When-based matching: convert `when` expressions to Python
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
+      const cond = i === 0 ? 'if' : 'elif';
+      if (variant.when) {
+        // Convert "value === 0xFF" style to Python
+        let pyWhen = variant.when
+          .replace(/\bvalue\b/g, '_disc_val')
+          .replace(/===/g, '==')
+          .replace(/!==/g, '!=')
+          .replace(/&&/g, ' and ')
+          .replace(/\|\|/g, ' or ');
+        code += `${indent}${cond} ${pyWhen}:\n`;
+      } else {
+        code += `${indent}${cond} True:\n`;
+      }
+      code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder)}\n`;
+    }
+  } else {
+    for (let i = 0; i < variants.length; i++) {
+      const variant = variants[i];
+      const discValue = variant.value !== undefined ? variant.value : i;
+      const cond = i === 0 ? 'if' : 'elif';
+      code += `${indent}${cond} _disc_val == ${discValue}:\n`;
+      code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder)}\n`;
+    }
+    code += `${indent}else:\n`;
+    code += `${indent}    raise ValueError(f"Unknown discriminator value: {_disc_val}")\n`;
+  }
 
   return code;
 }
@@ -1208,7 +1503,7 @@ function generateOptionalDecode(field: any, fieldAssign: string, indent: string,
     code += generateFieldDecode({ ...valueType, name: undefined }, fieldAssign, indent + '    ', endianness, schema, bitOrder);
   }
   code += `${indent}else:\n`;
-  code += `${indent}    ${fieldAssign} = None\n`;
+  code += `${indent}    pass  # Field not present - omit from result\n`;
 
   return code;
 }
@@ -1237,6 +1532,11 @@ function generateTypeRefDecode(field: any, fieldAssign: string, indent: string, 
     code += generateStringDecode(typeDef as any, fieldAssign, '', indent, endianness);
   } else if ((typeDef as any).type === 'array') {
     code += generateArrayDecode(typeDef as any, fieldAssign, '', indent, endianness, schema, bitOrder);
+  } else if ((typeDef as any).type === 'discriminated_union') {
+    // Discriminated union - inline decode
+    code += generateDiscriminatedUnionDecode(typeDef as any, fieldAssign, indent, endianness, schema, bitOrder, '');
+  } else if ((typeDef as any).type === 'choice') {
+    code += generateChoiceDecode(typeDef as any, fieldAssign, indent, endianness, schema, bitOrder);
   } else {
     code += `${indent}# TODO: type ref decode for ${field.type}\n`;
   }
@@ -1270,7 +1570,7 @@ export function generatePython(
   lines.push(`from typing import Any`);
   lines.push(`import math`);
   lines.push(`import struct`);
-  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder`);
+  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32`);
   lines.push(``);
   lines.push(``);
 
@@ -1304,6 +1604,7 @@ export function generatePython(
  * Generate encoder class and decode function for a struct type
  */
 function generateStructCode(name: string, typeDef: any, schema: BinarySchema, endianness: string, bitOrder: string): string[] {
+  _varCounter = 0; // Reset counter for each struct
   const lines: string[] = [];
   const className = toPascalCase(name);
   const fields = typeDef.sequence || [];
@@ -1313,12 +1614,134 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   lines.push(`    def __init__(self):`);
   lines.push(`        super().__init__("${bitOrder}")`);
   lines.push(``);
-  lines.push(`    def encode(self, value: dict[str, Any]) -> bytes:`);
+  lines.push(`    def encode(self, value: dict[str, Any], _parent_value: dict[str, Any] | None = None) -> bytes:`);
   lines.push(`        encoder = BitStreamEncoder("${bitOrder}")`);
+
+  // Validate: error if user provides computed fields
+  const computedFields = fields.filter((f: any) => f.computed);
+  if (computedFields.length > 0) {
+    for (const cf of computedFields) {
+      lines.push(`        if "${cf.name}" in value:`);
+      lines.push(`            raise ValueError("Field '${cf.name}' is computed and cannot be set manually")`);
+    }
+  }
+
+  // Check for from_after_field - these need content-first encoding
+  const fromAfterFields = fields.filter((f: any) => f.computed?.type === "length_of" && f.computed.from_after_field);
+
+  // Track which fields are consumed by from_after_field content-first encoding
+  const consumedByFromAfter = new Set<string>();
+  for (const faf of fromAfterFields) {
+    const fromAfterIdx = fields.findIndex((f: any) => f.name === faf.computed.from_after_field);
+    if (fromAfterIdx >= 0) {
+      for (let i = fromAfterIdx + 1; i < fields.length; i++) {
+        const f = fields[i] as any;
+        if (f.name && f.name !== faf.name) {
+          consumedByFromAfter.add(f.name);
+        }
+      }
+    }
+  }
+
+  // Collect position_of and crc32_of fields for back-patching
+  const positionOfFields = fields.filter((f: any) => f.computed?.type === "position_of");
+  const crc32OfFields = fields.filter((f: any) => f.computed?.type === "crc32_of");
+  const needsFieldTracking = positionOfFields.length > 0 || crc32OfFields.length > 0;
 
   // Generate encoding for each field
   for (const field of fields) {
+    const fieldAny = field as any;
+
+    // Skip fields consumed by from_after_field (they'll be encoded in content-first block)
+    if (consumedByFromAfter.has(fieldAny.name)) continue;
+
+    // Track field byte offsets for position_of / crc32_of back-patching
+    if (needsFieldTracking && fieldAny.name) {
+      lines.push(`        _field_offset_${fieldAny.name} = encoder.byte_offset`);
+    }
+
+    // Handle from_after_field length computed fields specially
+    if (fieldAny.computed?.type === "length_of" && fieldAny.computed.from_after_field) {
+      const fromAfterFieldName = fieldAny.computed.from_after_field;
+      const fromAfterIdx = fields.findIndex((f: any) => f.name === fromAfterFieldName);
+      const fieldsAfter = fields.slice(fromAfterIdx + 1).filter((f: any) => (f as any).name !== fieldAny.name);
+
+      lines.push(`        # Content-first encoding for from_after_field`);
+      lines.push(`        _content_pieces = []`);
+      lines.push(`        _total_content_length = 0`);
+
+      for (const afterField of fieldsAfter) {
+        const af = afterField as any;
+        lines.push(`        _temp_enc = BitStreamEncoder("${bitOrder}")`);
+        // Generate the field encode code but targeting _temp_enc instead of encoder
+        const fieldCode = generateFieldEncode(af, 'value', '        ', endianness, schema, bitOrder);
+        lines.push(fieldCode.replace(/\bencoder\b/g, '_temp_enc'));
+        lines.push(`        _piece = _temp_enc.finish()`);
+        lines.push(`        _content_pieces.append(_piece)`);
+        lines.push(`        _total_content_length += len(_piece)`);
+      }
+
+      // Write the computed length
+      const e = fieldAny.endianness || endianness;
+      lines.push(generateComputedWrite(fieldAny.type, '_total_content_length', '        ', e));
+
+      // Write the content pieces
+      lines.push(`        for _piece in _content_pieces:`);
+      lines.push(`            encoder.write_bytes(_piece)`);
+      continue;
+    }
+
     lines.push(generateFieldEncode(field, 'value', '        ', endianness, schema, bitOrder));
+  }
+
+  // Mark end of encoding for field offset tracking
+  if (needsFieldTracking) {
+    lines.push(`        _field_offset__end = encoder.byte_offset`);
+  }
+
+  // Back-patch position_of fields
+  for (const pf of positionOfFields) {
+    const pfAny = pf as any;
+    const target = pfAny.computed.target;
+    const e = pfAny.endianness || endianness;
+    const alignment = pfAny.computed.alignment || 1;
+
+    // Skip parent references (../field) - these can't be back-patched within this encoder
+    if (target.includes('/')) continue;
+
+    lines.push(`        # Back-patch position_of ${target}`);
+    if (alignment > 1) {
+      lines.push(`        _target_pos = _field_offset_${target}`);
+      lines.push(`        _target_pos = _target_pos + (${alignment} - (_target_pos % ${alignment})) % ${alignment}`);
+    } else {
+      lines.push(`        _target_pos = _field_offset_${target}`);
+    }
+    lines.push(generatePatchCall(pfAny.type, `_pos_${pfAny.name}`, '_target_pos', '        ', e));
+  }
+
+  // Back-patch crc32_of fields
+  for (const cf of crc32OfFields) {
+    const cfAny = cf as any;
+    const target = cfAny.computed.target;
+    const e = cfAny.endianness || endianness;
+
+    // Skip parent references (../field) - these can't be back-patched within this encoder
+    if (target.includes('/')) continue;
+
+    // Find the field after target to know where target bytes end
+    const targetIdx = fields.findIndex((f: any) => f.name === target);
+    const nextFieldWithName = fields.slice(targetIdx + 1).find((f: any) => (f as any).name);
+
+    lines.push(`        # Back-patch crc32_of ${target}`);
+    lines.push(`        _crc_start = _field_offset_${target}`);
+    if (nextFieldWithName) {
+      lines.push(`        _crc_end = _field_offset_${(nextFieldWithName as any).name}`);
+    } else {
+      lines.push(`        _crc_end = encoder.byte_offset`);
+    }
+    lines.push(`        _crc_data = bytes(encoder._bytes[_crc_start:_crc_end])`);
+    lines.push(`        _crc_val = compute_crc32(_crc_data)`);
+    lines.push(generatePatchCall(cfAny.type, `_crc_pos_${cfAny.name}`, '_crc_val', '        ', e));
   }
 
   lines.push(`        return encoder.finish()`);

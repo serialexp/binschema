@@ -180,16 +180,22 @@ def run_test_suite(suite: dict) -> list[dict]:
     sys.path.insert(0, str(RUNTIME_DIR.parent))
     try:
         # Import runtime into the namespace
-        exec("from runtime.bitstream import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder", namespace)
+        exec("from runtime.bitstream import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32", namespace)
         exec("from typing import Any", namespace)
         exec("from __future__ import annotations", namespace)
         exec("import math", namespace)
         exec("import struct", namespace)
 
+        if os.environ.get("DEBUG_GENERATED"):
+            print(f"=== Generated code for {suite.get('name', 'unknown')} ===")
+            for i, line in enumerate(code.split('\n'), 1):
+                print(f"  {i:4d} | {line}")
+            print("=== End generated code ===")
+
         # Fix import in generated code: replace binschema_runtime with runtime.bitstream
         fixed_code = code.replace(
-            "from binschema_runtime import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder",
-            "from runtime.bitstream import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder"
+            "from binschema_runtime import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32",
+            "from runtime.bitstream import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32"
         )
         # Also remove duplicate future import
         fixed_code = fixed_code.replace('from __future__ import annotations\n', '', 1)

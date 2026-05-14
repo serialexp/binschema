@@ -10,9 +10,15 @@ This is a direct port of the TypeScript runtime (src/runtime/bit-stream.ts).
 from __future__ import annotations
 import struct
 import math
+import zlib
 from typing import Literal
 
 Endianness = Literal["big_endian", "little_endian"]
+
+
+def compute_crc32(data: bytes | bytearray) -> int:
+    """Compute CRC32 checksum, returning unsigned 32-bit value."""
+    return zlib.crc32(data) & 0xFFFFFFFF
 BitOrder = Literal["msb_first", "lsb_first"]
 
 
@@ -195,6 +201,37 @@ class BitStreamEncoder:
 
     def get_byte_position(self) -> int:
         return len(self._bytes)
+
+    def patch_uint8(self, offset: int, value: int) -> None:
+        self._bytes[offset] = value & 0xFF
+
+    def patch_uint16(self, offset: int, value: int, endianness: Endianness) -> None:
+        if endianness == "big_endian":
+            self._bytes[offset] = (value >> 8) & 0xFF
+            self._bytes[offset + 1] = value & 0xFF
+        else:
+            self._bytes[offset] = value & 0xFF
+            self._bytes[offset + 1] = (value >> 8) & 0xFF
+
+    def patch_uint32(self, offset: int, value: int, endianness: Endianness) -> None:
+        if endianness == "big_endian":
+            self._bytes[offset] = (value >> 24) & 0xFF
+            self._bytes[offset + 1] = (value >> 16) & 0xFF
+            self._bytes[offset + 2] = (value >> 8) & 0xFF
+            self._bytes[offset + 3] = value & 0xFF
+        else:
+            self._bytes[offset] = value & 0xFF
+            self._bytes[offset + 1] = (value >> 8) & 0xFF
+            self._bytes[offset + 2] = (value >> 16) & 0xFF
+            self._bytes[offset + 3] = (value >> 24) & 0xFF
+
+    def patch_uint64(self, offset: int, value: int, endianness: Endianness) -> None:
+        if endianness == "big_endian":
+            for i in range(8):
+                self._bytes[offset + i] = (value >> (56 - i * 8)) & 0xFF
+        else:
+            for i in range(8):
+                self._bytes[offset + i] = (value >> (i * 8)) & 0xFF
 
     def finish(self) -> bytes:
         if self._bit_offset > 0:
@@ -476,6 +513,17 @@ class BitStreamDecoder:
             return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
         else:
             return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
+
+    def peek_uint8_at(self, offset: int) -> int:
+        """Peek a byte `offset` bytes ahead of the current position without
+        advancing. Used by signature-terminated arrays (which look for a
+        multi-byte marker that begins the next element's encoded form)."""
+        if self._bit_offset != 0:
+            raise RuntimeError(f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
+        idx = self._byte_offset + offset
+        if idx >= len(self._bytes):
+            raise RuntimeError(f"Peek out of bounds at offset {idx} (buffer size: {len(self._bytes)})")
+        return self._bytes[idx]
 
     def has_more(self) -> bool:
         return self._byte_offset < len(self._bytes) or self._bit_offset > 0
