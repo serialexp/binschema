@@ -23,49 +23,25 @@ export interface GeneratedRustCode {
 
 /**
  * Generate inline encode lines for a `bytes` field at the given accessor.
- * Handles every `kind` the schema supports (fixed / length_prefixed /
- * field_referenced / null_terminated / eof_terminated). Used by the
- * discriminated_union and choice variant inliners, which need to emit
- * field-by-field code instead of delegating to a method.
- *
- * Mirrors the regular path's "transform to array<uint8>" delegation, but
- * inlined here because the variant-arm inliners don't have a recursive entry
- * point into `generateEncodeArray`.
+ * Mirrors the regular `generateEncodeField` path (which transforms `bytes`
+ * into `array<uint8>` and delegates to the array encoder) by synthesizing the
+ * same array shape and forwarding to `generateInlineArrayEncode`. That path
+ * handles every `kind`, picks the correct Rust cast type (`u8`/`u16`/`u32`/
+ * `u64`), and threads the schema's endianness through `emitEncoderWrite` —
+ * the hand-rolled version this replaces hardcoded `Endianness::BigEndian` and
+ * emitted `as uint32` (not a Rust type), corrupting any non-uint8 length
+ * prefix on bytes-in-variant-arm.
  */
-function generateInlineBytesEncode(field: any, accessor: string, indent: string): string[] {
-  const lines: string[] = [];
-  const kind = field.kind;
-
-  if (kind === "fixed") {
-    // Just write each byte; length is implicit.
-    lines.push(`${indent}for item in &${accessor} {`);
-    lines.push(`${indent}    encoder.write_uint8(*item);`);
-    lines.push(`${indent}}`);
-  } else if (kind === "length_prefixed") {
-    const lt = field.length_type || "uint8";
-    const writer = lt === "uint8"
-      ? `encoder.write_uint8(${accessor}.len() as u8);`
-      : `encoder.write_${lt}(${accessor}.len() as ${lt}, Endianness::BigEndian);`;
-    lines.push(`${indent}${writer}`);
-    lines.push(`${indent}for item in &${accessor} {`);
-    lines.push(`${indent}    encoder.write_uint8(*item);`);
-    lines.push(`${indent}}`);
-  } else if (kind === "field_referenced" || kind === "eof_terminated") {
-    // Length is supplied by another field (already encoded) or by stream end —
-    // in both cases we just write the raw bytes.
-    lines.push(`${indent}for item in &${accessor} {`);
-    lines.push(`${indent}    encoder.write_uint8(*item);`);
-    lines.push(`${indent}}`);
-  } else if (kind === "null_terminated") {
-    lines.push(`${indent}for item in &${accessor} {`);
-    lines.push(`${indent}    encoder.write_uint8(*item);`);
-    lines.push(`${indent}}`);
-    lines.push(`${indent}encoder.write_uint8(0);`);
-  } else {
-    lines.push(`${indent}return Err(binschema_runtime::BinSchemaError::NotImplemented("encoding bytes with kind '${kind}' in variant arm".to_string()));`);
-  }
-
-  return lines;
+function generateInlineBytesEncode(
+  field: any,
+  accessor: string,
+  indent: string,
+  endianness: string,
+  rustEndianness: string,
+  schema: BinarySchema | undefined,
+): string[] {
+  const synthetic = { ...field, type: "array", items: { type: "uint8" } };
+  return generateInlineArrayEncode(synthetic, accessor, indent, endianness, rustEndianness, schema);
 }
 
 /**
@@ -1428,7 +1404,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
             break;
           case "bytes":
             // Delegate to the inliner's existing array<uint8> path by faking a synthetic array field.
-            lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                "));
+            lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                ", defaultEndianness, fieldEndianness, schema));
             break;
           case "array": {
             // Delegate to the shared inline-array encoder so every primitive
@@ -2169,7 +2145,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
             lines.push(`                encoder.write_uint8(if v.${fieldName} { 1 } else { 0 });`);
             break;
           case "bytes":
-            lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                "));
+            lines.push(...generateInlineBytesEncode(field as any, `v.${fieldName}`, "                ", defaultEndianness, fieldEndianness, schema));
             break;
           case "array": {
             // Same delegation as the discriminated_union arm — see notes on

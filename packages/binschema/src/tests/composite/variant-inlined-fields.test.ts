@@ -154,6 +154,93 @@ export const variantInlinedBytesDiscriminatedTestSuite = defineTestSuite({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 2b. discriminated_union — bytes with a NON-uint8 length prefix
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The variant inliner has a separate length-prefix path for non-uint8 length
+// types. The Rust generator's hand-rolled version of that path got both the
+// cast type and the endianness wrong: it emitted `as uint32` (not a Rust type
+// — should be `as u32`) and hardcoded `Endianness::BigEndian` regardless of
+// the schema's config. This case exercises both bits with a uint32 length
+// prefix on a little-endian schema, which any rsansible-style "blob payload"
+// shape would hit.
+export const variantInlinedBytesUint32LengthDiscriminatedTestSuite = defineTestSuite({
+  name: "variant_inlined_bytes_uint32_length_discriminated",
+  description:
+    "discriminated_union arm whose variant struct contains a uint32-length-prefixed bytes field on a little-endian schema. " +
+    "Hits the variant-arm length-prefix path that previously emitted `as uint32` and forced BigEndian.",
+
+  schema: {
+    config: { endianness: "little_endian" },
+    types: {
+      "Blob": {
+        sequence: [
+          {
+            name: "data",
+            type: "bytes",
+            kind: "length_prefixed",
+            length_type: "uint32",
+          },
+        ],
+      },
+      "Empty": {
+        sequence: [],
+      },
+      "Tagged": {
+        sequence: [
+          { name: "tag", type: "uint8" },
+          {
+            name: "payload",
+            type: "discriminated_union",
+            discriminator: { field: "tag" },
+            variants: [
+              { when: "value == 1", type: "Blob" },
+              { when: "value == 2", type: "Empty" },
+            ],
+          },
+        ],
+      },
+    },
+  },
+
+  test_type: "Tagged",
+
+  test_cases: [
+    {
+      description: "Blob variant with 4-byte payload (little-endian uint32 length prefix)",
+      value: {
+        tag: 1,
+        payload: { type: "Blob", value: { data: [0xAA, 0xBB, 0xCC, 0xDD] } },
+      },
+      bytes: [
+        0x01,                   // tag
+        0x04, 0x00, 0x00, 0x00, // length = 4 (LE u32)
+        0xAA, 0xBB, 0xCC, 0xDD, // data
+      ],
+    },
+    {
+      description: "Blob variant with empty payload",
+      value: {
+        tag: 1,
+        payload: { type: "Blob", value: { data: [] } },
+      },
+      bytes: [
+        0x01,                   // tag
+        0x00, 0x00, 0x00, 0x00, // length = 0 (LE u32)
+      ],
+    },
+    {
+      description: "Empty variant (no bytes field)",
+      value: {
+        tag: 2,
+        payload: { type: "Empty", value: {} },
+      },
+      bytes: [0x02],
+    },
+  ],
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 3. discriminated_union — Optional<T> (parameterized template) inside variant
 // ─────────────────────────────────────────────────────────────────────────────
 //
