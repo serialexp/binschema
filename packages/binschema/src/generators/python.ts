@@ -798,6 +798,14 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
       return code;
     }
 
+    // Check for first/last selector: ../arr[first<T>].subfield
+    const flInfo = parseFirstLastTarget(target);
+    if (flInfo) {
+      code += `${indent}# Computed: length_of ${target}\n`;
+      code += generateSelectorLength(field, flInfo, target, valuePath, indent, e);
+      return code;
+    }
+
     // Calculate length by trial encoding the target field
     const targetAccess = resolveComputedTarget(target, valuePath);
     code += `${indent}# Computed: length_of ${target}\n`;
@@ -824,6 +832,29 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
     } else {
       code += generateComputedWrite(field.type, '0', indent, e);
     }
+  } else if (computed.type === "sum_of_type_sizes") {
+    // Sum encoded sizes of array items matching element_type
+    const target = computed.target;
+    const elementType = computed.element_type;
+    const arrAccess = resolveComputedTarget(target, valuePath);
+    const sumVar = `_computed_sum_${field.name}`;
+    code += `${indent}# Computed: sum_of_type_sizes ${target} (type=${elementType})\n`;
+    code += `${indent}${sumVar} = 0\n`;
+    code += `${indent}for _sot_item in (${arrAccess} or []):\n`;
+    // Items may have a discriminator type tag (.type) for choice/DU arrays.
+    // If the item has no type tag, treat the array as homogeneous and match all.
+    code += `${indent}    _sot_item_type = _sot_item.get("type") if isinstance(_sot_item, dict) else None\n`;
+    code += `${indent}    if _sot_item_type is None or _sot_item_type == "${elementType}":\n`;
+    if (schema.types[elementType]) {
+      // Items may be wrapped { type, value } for choice arrays — unwrap.
+      code += `${indent}        _sot_payload = _sot_item.get("value", _sot_item) if isinstance(_sot_item, dict) else _sot_item\n`;
+      code += `${indent}        ${sumVar} += len(${toPascalCase(elementType)}Encoder().encode(_sot_payload))\n`;
+    } else {
+      code += `${indent}        ${sumVar} += 0  # unknown element_type ${elementType}\n`;
+    }
+    const offset = computed.offset || 0;
+    if (offset) code += `${indent}${sumVar} += ${offset}\n`;
+    code += generateComputedWrite(field.type, sumVar, indent, e);
   }
 
   return code;
@@ -936,20 +967,119 @@ function generateFromAfterFieldEncode(
   return lines;
 }
 
+/**
+ * Parse `[first<T>]` / `[last<T>]` selector syntax from a target path.
+ *   "../items[first<DataChunk>].payload" → { arrayPath: "items", parents: 1,
+ *     selector: "first", filterType: "DataChunk", remainingPath: ".payload" }
+ *   "../items[first<DataChunk>]"          → ditto with remainingPath = ""
+ *   Returns null if the target doesn't use the selector syntax.
+ */
+function parseFirstLastTarget(target: string): {
+  arrayPath: string;
+  parents: number;
+  selector: "first" | "last";
+  filterType: string;
+  remainingPath: string;
+} | null {
+  if (typeof target !== "string") return null;
+  const m = target.match(/^((?:\.\.\/)*)([^[]+)\[(first|last)<(\w+)>\](.*)$/);
+  if (!m) return null;
+  return {
+    parents: (m[1].match(/\.\.\//g) || []).length,
+    arrayPath: m[2],
+    selector: m[3] as "first" | "last",
+    filterType: m[4],
+    remainingPath: m[5] || "",
+  };
+}
+
+/**
+ * Generate code that looks up the first/last array item matching a type,
+ * then sets `_computed_length_<field>` to the byte length of the addressed
+ * sub-value. The array is fetched from `_parent_value` for `../` references
+ * or `value` for same-scope references. Falls back to a sentinel
+ * (0xFFFFFFFF) if no matching item exists, matching the TS behavior.
+ */
+function generateSelectorLength(
+  field: any,
+  flInfo: ReturnType<typeof parseFirstLastTarget>,
+  target: string,
+  valuePath: string,
+  indent: string,
+  endianness: string
+): string {
+  if (!flInfo) return '';
+  let code = '';
+  const { arrayPath, parents, selector, filterType, remainingPath } = flInfo;
+  const lengthVar = `_computed_length_${field.name}`;
+  // Build access for arrayPath: walk `parents` levels up via _parent_value.
+  let arrAccess: string;
+  if (parents > 0) {
+    // Single level supported via _parent_value; deeper levels fall back to same.
+    arrAccess = `_parent_value["${arrayPath}"]`;
+  } else {
+    arrAccess = `${valuePath}["${arrayPath}"]`;
+  }
+  code += `${indent}_sel_arr_${field.name} = ${arrAccess} or []\n`;
+  code += `${indent}_sel_target_${field.name} = None\n`;
+  const iter = selector === "first"
+    ? `_sel_arr_${field.name}`
+    : `reversed(_sel_arr_${field.name})`;
+  code += `${indent}for _sel_item in ${iter}:\n`;
+  code += `${indent}    _sel_t = _sel_item.get("type") if isinstance(_sel_item, dict) else None\n`;
+  code += `${indent}    if _sel_t is None or _sel_t == "${filterType}":\n`;
+  code += `${indent}        _sel_target_${field.name} = _sel_item\n`;
+  code += `${indent}        break\n`;
+  code += `${indent}if _sel_target_${field.name} is None:\n`;
+  code += `${indent}    ${lengthVar} = 0xFFFFFFFF  # sentinel: no match\n`;
+  code += `${indent}else:\n`;
+  // Resolve remainingPath (e.g. ".payload" → ["payload"])
+  // Unwrap choice/DU `{type, value}` wrapping first if remainingPath traverses
+  // into the variant.
+  if (remainingPath) {
+    const parts = remainingPath.split('.').filter(p => p);
+    code += `${indent}    _sel_v = _sel_target_${field.name}\n`;
+    code += `${indent}    if isinstance(_sel_v, dict) and "value" in _sel_v and "type" in _sel_v:\n`;
+    code += `${indent}        _sel_v = _sel_v["value"]\n`;
+    for (const p of parts) {
+      code += `${indent}    _sel_v = _sel_v["${p}"]\n`;
+    }
+    // For lists/strs/bytes use len; numerics use the value itself.
+    code += `${indent}    if isinstance(_sel_v, (list, bytes, bytearray)):\n`;
+    code += `${indent}        ${lengthVar} = len(_sel_v)\n`;
+    code += `${indent}    elif isinstance(_sel_v, str):\n`;
+    code += `${indent}        ${lengthVar} = len(_sel_v.encode("utf-8"))\n`;
+    code += `${indent}    else:\n`;
+    code += `${indent}        ${lengthVar} = int(_sel_v)\n`;
+  } else {
+    // No sub-path: measure the whole item by trial-encoding via its type encoder.
+    code += `${indent}    _sel_v = _sel_target_${field.name}\n`;
+    code += `${indent}    _sel_payload = _sel_v.get("value", _sel_v) if isinstance(_sel_v, dict) else _sel_v\n`;
+    code += `${indent}    ${lengthVar} = len(${toPascalCase(filterType)}Encoder().encode(_sel_payload))\n`;
+  }
+  code += generateComputedWrite(field.type, lengthVar, indent, endianness);
+  return code;
+}
+
 function generateLengthCalculation(field: any, target: string, targetAccess: string, valuePath: string, indent: string, bitOrder: string, endianness: string, schema: BinarySchema, parentFields?: any[]): string {
   let code = '';
   const lengthVar = `_computed_length_${field.name}`;
   const offset = field.computed.offset || 0;
 
-  // Look up the target field's static type in the parent struct's sequence so
-  // we can dispatch to the right encoder class for trial-encoding. Falls back
-  // to runtime introspection if we can't find it.
+  // Look up the target field's static type AND full field def in the parent
+  // struct's sequence. The field def is what we need for inline DU/choice/array
+  // trial encoding; the type name is what we need to dispatch to a top-level
+  // encoder class.
   let targetType: string | undefined;
+  let targetFieldDef: any = undefined;
   if (parentFields) {
     // Strip "../" prefixes from target — those are parent-relative refs.
     const cleanTarget = target.replace(/^(\.\.\/)+/, '');
-    const targetField = parentFields.find((f: any) => f && f.name === cleanTarget);
-    if (targetField) targetType = (targetField as any).type;
+    const tf = parentFields.find((f: any) => f && f.name === cleanTarget);
+    if (tf) {
+      targetFieldDef = tf;
+      targetType = (tf as any).type;
+    }
   }
 
   code += `${indent}_target_val_${field.name} = ${targetAccess}\n`;
@@ -965,6 +1095,19 @@ function generateLengthCalculation(field: any, target: string, targetAccess: str
     }
   }
 
+  // Decide which trial-encode strategy to use:
+  //   1. Schema-typed target: dispatch to its top-level encoder class
+  //   2. Inline DU/choice/array: trial-encode the field def against a temp encoder
+  //   3. Primitive: use fixed size
+  //   4. Fallback: isinstance-based runtime measurement
+  // Only inline DU/choice need trial-encoding for length_of — arrays use
+  // element count (len(list)), strings use UTF-8 byte length, bytes use len().
+  // Those scalar cases are handled by the isinstance fallback below.
+  const isInlineComposite = targetFieldDef && (
+    targetFieldDef.type === 'discriminated_union' ||
+    targetFieldDef.type === 'choice'
+  );
+
   if (resolvedType && schema.types[resolvedType]) {
     // Schema-typed target — trial-encode via the dedicated encoder.
     const encClass = `${toPascalCase(resolvedType)}Encoder`;
@@ -974,6 +1117,15 @@ function generateLengthCalculation(field: any, target: string, targetAccess: str
     code += `${indent}    ${lengthVar} = len(_target_val_${field.name}.encode("utf-8"))\n`;
     code += `${indent}else:\n`;
     code += `${indent}    ${lengthVar} = len(${encClass}().encode(_target_val_${field.name}))\n`;
+  } else if (isInlineComposite) {
+    // Inline DU/choice/array/string: trial-encode the target field def against
+    // a temp encoder and measure. Pass valuePath as-is so the generated code
+    // can still access "value[target]" the same way the real encode would.
+    const tempEnc = `_trial_enc_${field.name}`;
+    code += `${indent}${tempEnc} = BitStreamEncoder("${bitOrder}")\n`;
+    const targetCode = generateFieldEncode(targetFieldDef, valuePath, indent, endianness, schema, bitOrder, parentFields);
+    code += targetCode.replace(/\bencoder\b/g, tempEnc);
+    code += `${indent}${lengthVar} = len(${tempEnc}.finish())\n`;
   } else {
     code += `${indent}if isinstance(_target_val_${field.name}, (list, bytes, bytearray)):\n`;
     code += `${indent}    ${lengthVar} = len(_target_val_${field.name})\n`;
