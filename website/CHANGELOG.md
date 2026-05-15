@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0 (2026-05-15)
+
+### Documentation
+
+- add Python to landing page, playground, and docs
+
 ## 0.6.0 (2026-05-15)
 
 ### Features
