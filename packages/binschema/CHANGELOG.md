@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0 (2026-05-15)
+
+### Features
+
+- add Python code generator, runtime, and test harness
+- monomorphize templates + inline bool/bytes in variant arms
+- full primitive coverage for arrays in variant arms
+- inline standalone DU dispatch at field-discriminator call site
+- support length_of/crc32_of with first<T>/last<T> selectors
+- support _root.X length_field references for instance types
+- ergonomic impls for string/bytes alias newtypes, silence noisy warnings
+- align_to, signature_terminated, utf16/latin1 encodings
+- instance fields (random-access lazy decode)
+- root-fallback field lookup + standalone decode_X aliases
+- nested from_after_field, length_of struct trial-encode, hyphen names
+- thread parentFields through choice inliner; resolve type aliases
+- inline DU length_of, sum_of_type_sizes, first/last selectors for length_of
+- retrofit ctx threading + deferred patches for forward refs
+- inline corresponding<T> resolution + cross/same array distinction
+- multi-level parent refs + parent-ref position_of via ctx
+- crc32_of with selectors + parent-ref crc32_of via field extents
+- sum_of_sizes deferred parent-ref + inlined choice arm push
+- track patch owner_encoder; resolves multi-file ZIP CRCs
+- raise on corresponding<T> miss + trial_mode opt-out
+- DNS back_reference (label compression) — finishes retrofit
+
+### Bug Fixes
+
+- correct bytes-in-variant-arm with non-uint8 length prefix
+- qualify std::string::String and box self-recursive type cycles
+- inline standalone DU dispatch at field-discriminator call site
+- emit clean generated code (no blanket allow attrs)
+- conditional expressions use .get() to short-circuit on missing parents
+- resolve primitive alias chain for instance fields and type-refs
+- first/last selectors with sub-field path in length_of / crc32_of
+
+### Tests
+
+- add variant-arm inliner regression scenarios + tests-first rule
+
 ## 0.5.0 (2026-03-06)
 
 ### Features
