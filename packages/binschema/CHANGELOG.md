@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 (2026-05-15)
+
+### Features
+
+- error codes + streaming decoder
+
+### Documentation
+
+- add Python to landing page, playground, and docs
+
 ## 0.6.0 (2026-05-15)
 
 ### Features
