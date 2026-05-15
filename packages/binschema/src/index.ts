@@ -93,6 +93,22 @@ export {
 export { SeekableBitStreamDecoder } from './runtime/seekable-bit-stream.js';
 
 export {
+  BinSchemaError,
+  ErrorCode,
+  type ErrorCodeValue,
+} from './runtime/errors.js';
+
+export {
+  readExactly,
+  decodeArrayStream,
+  decodeArrayGreedy,
+  type LengthType,
+  type ArrayStreamOptionsBase,
+  type LengthPrefixedItemsStreamOptions,
+  type GreedyStreamOptions,
+} from './runtime/stream-decoder.js';
+
+export {
   type BinaryReader,
   BufferReader,
   FileHandleReader,

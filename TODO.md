@@ -84,24 +84,58 @@ Phase 1 (`length_prefixed_items` array kind) is shipped — the wire-format
 tests live in `tests/streaming/greedy-buffering.test.ts` and the kind is
 exercised across the corpus. Remaining phases:
 
-### Phase 2: error codes for cross-language parity (~1 day)
+### Phase 2: error codes for cross-language parity — DONE (TS side)
 
-- `BitStreamDecoder.lastErrorCode: string | null`.
-- Set `INCOMPLETE_DATA` on EOF in every read method; clear on success.
-- Define constants: `INCOMPLETE_DATA`, `INVALID_VALUE`, `SCHEMA_MISMATCH`,
-  `CIRCULAR_REFERENCE`.
-- Tests for set-on-EOF and clear-on-success.
+- `BinSchemaError` class with `.code`, `.position`, `.context` lives in
+  `src/runtime/errors.ts` and is re-exported from the package root.
+- TS `BitStreamEncoder` / `BitStreamDecoder` / `SeekableBitStreamDecoder`
+  throw `BinSchemaError` at every former `throw new Error` site (28 sites).
+- Code set: `INCOMPLETE_DATA`, `INVALID_VALUE`, `INVALID_ENCODING`,
+  `INVALID_UTF8`, `INVALID_VARIANT`, `ALIGNMENT_REQUIRED`, `OUT_OF_BOUNDS`,
+  `STACK_OVERFLOW`, `SCHEMA_MISMATCH`, `CIRCULAR_REFERENCE`. Last four are
+  reserved for codegen / streaming use, not yet thrown by the runtime.
+- Coverage in `src/tests/runtime/error-codes.test.ts` (31 assertions
+  across all currently-thrown codes + happy-path sanity).
+- Remaining work to close the cross-language loop:
+  - Align Go `LastErrorCode` values with this exact code set (Go currently
+    only sets `INCOMPLETE_DATA`; add the others where Go throws).
+  - Add a `code: ErrorCodeValue` mapping on Rust `BinSchemaError` variants
+    so the wire-level contract is symmetric.
+  - Mirror the constants in Python runtime.
+  - Generated codegen should raise `BinSchemaError(INVALID_VARIANT, ...)`
+    on unknown discriminators and `BinSchemaError(INVALID_UTF8, ...)` on
+    string decode failures (currently throws plain `Error`).
 
-### Phase 3: streaming layer (~2–3 days)
+### Phase 3: streaming layer — DONE (TS runtime)
 
-- `src/runtime/stream-decoder.ts`: `readExactly(reader, n)`,
-  `decodeArrayStream()` (length-prefixed), `decodeArrayGreedy()`
-  (standard).
-- Re-enable `tests/streaming/chunked-network.test.ts.disabled` and
-  flesh out: items split across chunks, one-byte chunks, large chunks,
-  partial item at boundary, variable-length items, empty arrays, network
-  errors mid-stream, decode errors mid-stream, slow-consumer backpressure,
-  `length_prefixed_items` + chunked.
+- `src/runtime/stream-decoder.ts` exports `readExactly`, `decodeArrayStream`
+  (length_prefixed_items mode), `decodeArrayGreedy` (standard length_prefixed
+  retry-on-INCOMPLETE_DATA mode), plus shared option types. Internal
+  `StreamingBuffer` owns the accumulating byte buffer and exposes
+  `pullChunk`/`consume`/`ensure`.
+- Mechanism: greedy mode catches `BinSchemaError(INCOMPLETE_DATA)`, refills
+  from the reader, and retries from a saved buffer position. Other
+  BinSchemaError codes are fatal and propagate (with per-item context).
+- 19 scenarios covered in `src/tests/streaming/stream-decoder.test.ts`:
+  - Item split across two chunks
+  - One-byte chunks (worst case)
+  - Large chunks (whole array in one)
+  - Partial item at chunk boundary
+  - Variable-length items (strings inside structs)
+  - Empty array
+  - Literal arrayLength (no prefix consumed)
+  - length_prefixed_items chunked + 1-byte chunks + empty
+  - readExactly across chunks / EOF / n=0
+  - Network error propagates with original message
+  - Truncated stream throws INCOMPLETE_DATA with item context
+  - Fatal decode error (INVALID_ENCODING) does NOT trigger retry
+  - Slow-consumer backpressure (reader not over-pulled)
+  - Options validation (rejects both/neither arrayLength source)
+- `run-tests.ts` now awaits async function-test results.
+- The original spec file `chunked-network.test.ts.disabled` was left in
+  place as input for Phase 4 (schema-driven streaming codegen). It expects
+  `chunkSizes` on TestCase and references symbols that the codegen will
+  emit (`decodeArrayStream`/`decodeUint32ArrayStream`/etc.).
 
 ### Phase 4: streaming codegen (~1–2 days)
 

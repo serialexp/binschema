@@ -194,7 +194,7 @@ export function runCommandParserTests(): { passed: number; failed: number; check
   expectError(["docs", "serve", "--schema", "schema.json", "--port", "not-a-number"], "Invalid number for --port");
   expectError(["generate"], "Missing required option: --schema <file>");
   expectError(["generate", "--schema", "schema.json"], "Missing required option: --out <dir>");
-  expectError(["generate", "--schema", "schema.json", "--out", "./gen"], "Missing required option: --language <ts|go|rust>");
+  expectError(["generate", "--schema", "schema.json", "--out", "./gen"], "Missing required option: --language <ts|go|rust|python>");
   expectError(["generate", "--schema", "schema.json", "--out", "./gen", "--language", "cpp"], "Unsupported language");
 
   // validate command tests

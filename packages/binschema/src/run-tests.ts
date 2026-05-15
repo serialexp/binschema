@@ -151,7 +151,11 @@ async function loadTestSuitesFromTypeScript(filePath: string, filter?: string): 
         }
 
         try {
-          const result = value();
+          let result = value();
+          // Support async function tests — await Promises before inspecting.
+          if (result && typeof (result as any).then === "function") {
+            result = await result;
+          }
 
           // If function returns { passed, failed, checks? }, track it
           if (result && typeof result === 'object' && 'passed' in result && 'failed' in result) {
@@ -277,6 +281,11 @@ function setupRuntimeLibrary(): void {
   const crc32Source = join(__dirname, 'runtime/crc32.ts');
   const crc32Dest = join(genDir, 'crc32.ts');
   copyFileSync(crc32Source, crc32Dest);
+
+  // Copy errors.ts (BinSchemaError + ErrorCode — referenced by bit-stream.ts and seekable-bit-stream.ts)
+  const errorsSource = join(__dirname, 'runtime/errors.ts');
+  const errorsDest = join(genDir, 'errors.ts');
+  copyFileSync(errorsSource, errorsDest);
 
   // Copy expression-evaluator.ts
   const exprEvalSource = join(__dirname, 'runtime/expression-evaluator.ts');

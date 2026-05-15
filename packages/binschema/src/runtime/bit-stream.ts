@@ -5,6 +5,8 @@
  * Maintains a buffer and bit offset for streaming operations.
  */
 
+import { BinSchemaError, ErrorCode } from "./errors.js";
+
 export type Endianness = "big_endian" | "little_endian";
 export type BitOrder = "msb_first" | "lsb_first";
 
@@ -32,7 +34,7 @@ export class BitStreamEncoder {
    */
   writeBits(value: number | bigint, size: number): void {
     if (size < 1 || size > 64) {
-      throw new Error(`Invalid bit size: ${size} (must be 1-64)`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `Invalid bit size: ${size} (must be 1-64)`);
     }
 
     // Optimization: Use Number operations for sizes <= 31 (much faster than BigInt)
@@ -250,7 +252,7 @@ export class BitStreamEncoder {
     const val = typeof value === 'bigint' ? Number(value) : value;
 
     if (val < 0) {
-      throw new Error(`DER length encoding requires non-negative value, got ${val}`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `DER length encoding requires non-negative value, got ${val}`);
     }
 
     if (val < 128) {
@@ -284,7 +286,7 @@ export class BitStreamEncoder {
     let val = typeof value === 'bigint' ? value : BigInt(value);
 
     if (val < 0n) {
-      throw new Error(`LEB128 encoding requires non-negative value, got ${val}`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `LEB128 encoding requires non-negative value, got ${val}`);
     }
 
     do {
@@ -308,7 +310,7 @@ export class BitStreamEncoder {
     const val = typeof value === 'bigint' ? Number(value) : value;
 
     if (val < 0) {
-      throw new Error(`EBML VINT encoding requires non-negative value, got ${val}`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `EBML VINT encoding requires non-negative value, got ${val}`);
     }
 
     // Determine width needed (including marker bit)
@@ -326,7 +328,7 @@ export class BitStreamEncoder {
     }
 
     if (val > maxVal) {
-      throw new Error(`EBML VINT value ${val} too large for 8-byte encoding`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `EBML VINT value ${val} too large for 8-byte encoding`);
     }
 
     // Set marker bit: leading zeros followed by 1
@@ -354,11 +356,11 @@ export class BitStreamEncoder {
     const val = typeof value === 'bigint' ? Number(value) : value;
 
     if (val < 0) {
-      throw new Error(`VLQ encoding requires non-negative value, got ${val}`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `VLQ encoding requires non-negative value, got ${val}`);
     }
 
     if (val > 0x0FFFFFFF) {
-      throw new Error(`VLQ value ${val} exceeds maximum (0x0FFFFFFF)`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `VLQ value ${val} exceeds maximum (0x0FFFFFFF)`);
     }
 
     // Collect bytes in reverse order (LSB first)
@@ -505,13 +507,13 @@ export class BitStreamDecoder {
    */
   readBits(size: number): bigint {
     if (size < 1 || size > 64) {
-      throw new Error(`Invalid bit size: ${size} (must be 1-64)`);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, `Invalid bit size: ${size} (must be 1-64)`);
     }
 
     // Fast path: MSB-first reads of <=8 bits
     if (this.bitOrder === "msb_first" && size <= 8) {
       if (this.byteOffset >= this._bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       const bitsAvailable = 8 - this.bitOffset;
       if (size <= bitsAvailable) {
@@ -528,7 +530,7 @@ export class BitStreamDecoder {
       }
       // Cross byte boundary — two bytes
       if (this.byteOffset + 1 >= this._bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       const bitsFromFirst = bitsAvailable;
       const bitsFromSecond = size - bitsFromFirst;
@@ -609,7 +611,7 @@ export class BitStreamDecoder {
    */
   readBit(): number {
     if (this.byteOffset >= this.bytes.length) {
-      throw new Error("Unexpected end of stream");
+      throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
     }
 
     const currentByte = this.bytes[this.byteOffset];
@@ -640,7 +642,7 @@ export class BitStreamDecoder {
     if (this.bitOffset === 0) {
       // Byte-aligned: read directly
       if (this.byteOffset >= this.bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       return this.bytes[this.byteOffset++];
     } else {
@@ -660,10 +662,10 @@ export class BitStreamDecoder {
    */
   readBytesSlice(n: number): Uint8Array {
     if (this.bitOffset !== 0) {
-      throw new Error("readBytesSlice requires byte alignment");
+      throw new BinSchemaError(ErrorCode.ALIGNMENT_REQUIRED, "readBytesSlice requires byte alignment", { position: this.byteOffset });
     }
     if (this.byteOffset + n > this._bytes.length) {
-      throw new Error("Unexpected end of stream");
+      throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
     }
     const slice = this._bytes.subarray(this.byteOffset, this.byteOffset + n);
     this.byteOffset += n;
@@ -676,7 +678,7 @@ export class BitStreamDecoder {
   readUint16(endianness: Endianness): number {
     if (this.bitOffset === 0) {
       if (this.byteOffset + 2 > this._bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       const v = this._dataView.getUint16(this.byteOffset, endianness === "little_endian");
       this.byteOffset += 2;
@@ -700,7 +702,7 @@ export class BitStreamDecoder {
   readUint32(endianness: Endianness): number {
     if (this.bitOffset === 0) {
       if (this.byteOffset + 4 > this._bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       const v = this._dataView.getUint32(this.byteOffset, endianness === "little_endian");
       this.byteOffset += 4;
@@ -780,7 +782,7 @@ export class BitStreamDecoder {
   readFloat32(endianness: Endianness): number {
     if (this.bitOffset === 0) {
       if (this.byteOffset + 4 > this._bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       const v = this._dataView.getFloat32(this.byteOffset, endianness === "little_endian");
       this.byteOffset += 4;
@@ -801,7 +803,7 @@ export class BitStreamDecoder {
   readFloat64(endianness: Endianness): number {
     if (this.bitOffset === 0) {
       if (this.byteOffset + 8 > this._bytes.length) {
-        throw new Error("Unexpected end of stream");
+        throw new BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", { position: this.byteOffset });
       }
       const v = this._dataView.getFloat64(this.byteOffset, endianness === "little_endian");
       this.byteOffset += 8;
@@ -833,11 +835,11 @@ export class BitStreamDecoder {
     const numBytes = firstByte & 0x7F;
 
     if (numBytes === 0) {
-      throw new Error("DER indefinite length (0x80) not supported");
+      throw new BinSchemaError(ErrorCode.INVALID_ENCODING, "DER indefinite length (0x80) not supported", { position: this.byteOffset });
     }
 
     if (numBytes > 4) {
-      throw new Error(`DER length too large: ${numBytes} bytes (max 4 supported)`);
+      throw new BinSchemaError(ErrorCode.INVALID_ENCODING, `DER length too large: ${numBytes} bytes (max 4 supported)`, { position: this.byteOffset });
     }
 
     // Read length bytes in big-endian order
@@ -871,7 +873,7 @@ export class BitStreamDecoder {
       }
 
       if (shift > 64) {
-        throw new Error("LEB128 value too large (exceeds 64 bits)");
+        throw new BinSchemaError(ErrorCode.INVALID_ENCODING, "LEB128 value too large (exceeds 64 bits)", { position: this.byteOffset });
       }
     }
 
@@ -896,7 +898,7 @@ export class BitStreamDecoder {
     }
 
     if (width > 8) {
-      throw new Error("EBML VINT: no marker bit found in first byte");
+      throw new BinSchemaError(ErrorCode.INVALID_ENCODING, "EBML VINT: no marker bit found in first byte", { position: this.byteOffset });
     }
 
     // Start with first byte, removing marker bit
@@ -922,7 +924,7 @@ export class BitStreamDecoder {
 
     while (true) {
       if (bytesRead >= 4) {
-        throw new Error("VLQ value too large (exceeds 4 bytes)");
+        throw new BinSchemaError(ErrorCode.INVALID_ENCODING, "VLQ value too large (exceeds 4 bytes)", { position: this.byteOffset });
       }
 
       const byte = this.readUint8();
@@ -950,13 +952,25 @@ export class BitStreamDecoder {
   }
 
   /**
+   * Get current bit offset within the head byte (0-7).
+   *
+   * Exposed so callers (notably the streaming decoder) can track sub-byte
+   * progress for items whose wire size is not a whole number of bytes.
+   */
+  get currentBitOffset(): number {
+    return this.bitOffset;
+  }
+
+  /**
    * Seek to absolute byte offset
    * Resets bit offset to 0 (byte-aligned)
    */
   seek(offset: number): void {
     if (offset < 0 || offset > this.bytes.length) {
-      throw new Error(
-        `Seek offset ${offset} out of bounds (valid range: 0-${this.bytes.length})`
+      throw new BinSchemaError(
+        ErrorCode.OUT_OF_BOUNDS,
+        `Seek offset ${offset} out of bounds (valid range: 0-${this.bytes.length})`,
+        { position: offset }
       );
     }
     this.byteOffset = offset;
@@ -964,11 +978,41 @@ export class BitStreamDecoder {
   }
 
   /**
+   * Seek to absolute (byte, bit) position. Unlike `seek()`, this preserves a
+   * sub-byte position — used by the streaming decoder to resume mid-byte
+   * after a chunk refill.
+   *
+   * `bitOffset` must be 0-7. A `bitOffset` of 8 should be expressed as
+   * `byteOffset+1, 0`.
+   */
+  seekBits(byteOffset: number, bitOffset: number): void {
+    if (bitOffset < 0 || bitOffset > 7) {
+      throw new BinSchemaError(
+        ErrorCode.INVALID_VALUE,
+        `seekBits bitOffset ${bitOffset} out of range (must be 0-7)`
+      );
+    }
+    // A bitOffset > 0 implies we must be able to read further bits from
+    // byte[byteOffset], so byteOffset must point at a valid byte.
+    const upper = bitOffset === 0 ? this.bytes.length : this.bytes.length - 1;
+    if (byteOffset < 0 || byteOffset > upper) {
+      throw new BinSchemaError(
+        ErrorCode.OUT_OF_BOUNDS,
+        `seekBits byteOffset ${byteOffset} out of bounds for bit offset ${bitOffset} (buffer size: ${this.bytes.length})`,
+        { position: byteOffset }
+      );
+    }
+    this.byteOffset = byteOffset;
+    this.bitOffset = bitOffset;
+  }
+
+  /**
    * Save current position to stack (for pointer following)
    */
   pushPosition(): void {
     if (this.savedPositions.length >= BitStreamDecoder.MAX_POSITION_STACK_DEPTH) {
-      throw new Error(
+      throw new BinSchemaError(
+        ErrorCode.STACK_OVERFLOW,
         `Position stack overflow: maximum depth of ${BitStreamDecoder.MAX_POSITION_STACK_DEPTH} exceeded`
       );
     }
@@ -981,7 +1025,7 @@ export class BitStreamDecoder {
    */
   popPosition(): void {
     if (this.savedPositions.length === 0) {
-      throw new Error("Position stack underflow: attempted to pop from empty stack");
+      throw new BinSchemaError(ErrorCode.STACK_OVERFLOW, "Position stack underflow: attempted to pop from empty stack");
     }
     const saved = this.savedPositions.pop()!;
     this.byteOffset = saved;
@@ -994,14 +1038,18 @@ export class BitStreamDecoder {
    */
   peekUint8(): number {
     if (this.bitOffset !== 0) {
-      throw new Error(
-        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`
+      throw new BinSchemaError(
+        ErrorCode.ALIGNMENT_REQUIRED,
+        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`,
+        { position: this.byteOffset }
       );
     }
 
     if (this.byteOffset >= this.bytes.length) {
-      throw new Error(
-        `Peek out of bounds: attempted to peek 1 byte at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`
+      throw new BinSchemaError(
+        ErrorCode.INCOMPLETE_DATA,
+        `Peek out of bounds: attempted to peek 1 byte at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`,
+        { position: this.byteOffset }
       );
     }
 
@@ -1014,14 +1062,18 @@ export class BitStreamDecoder {
    */
   peekUint16(endianness: Endianness): number {
     if (this.bitOffset !== 0) {
-      throw new Error(
-        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`
+      throw new BinSchemaError(
+        ErrorCode.ALIGNMENT_REQUIRED,
+        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`,
+        { position: this.byteOffset }
       );
     }
 
     if (this.byteOffset + 2 > this.bytes.length) {
-      throw new Error(
-        `Peek out of bounds: attempted to peek 2 bytes at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`
+      throw new BinSchemaError(
+        ErrorCode.INCOMPLETE_DATA,
+        `Peek out of bounds: attempted to peek 2 bytes at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`,
+        { position: this.byteOffset }
       );
     }
 
@@ -1038,14 +1090,18 @@ export class BitStreamDecoder {
    */
   peekUint32(endianness: Endianness): number {
     if (this.bitOffset !== 0) {
-      throw new Error(
-        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`
+      throw new BinSchemaError(
+        ErrorCode.ALIGNMENT_REQUIRED,
+        `Peek not byte-aligned: bit offset is ${this.bitOffset} (must be 0)`,
+        { position: this.byteOffset }
       );
     }
 
     if (this.byteOffset + 4 > this.bytes.length) {
-      throw new Error(
-        `Peek out of bounds: attempted to peek 4 bytes at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`
+      throw new BinSchemaError(
+        ErrorCode.INCOMPLETE_DATA,
+        `Peek out of bounds: attempted to peek 4 bytes at offset ${this.byteOffset} (buffer size: ${this.bytes.length})`,
+        { position: this.byteOffset }
       );
     }
 

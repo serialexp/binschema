@@ -3,6 +3,7 @@
 
 import { BitStreamDecoder, Endianness, BitOrder } from "./bit-stream.js";
 import { BinaryReader, BufferReader, createReader } from "./binary-reader.js";
+import { BinSchemaError, ErrorCode } from "./errors.js";
 
 /**
  * SeekableBitStreamDecoder - Extends BitStreamDecoder with BinaryReader support
@@ -62,7 +63,8 @@ export class SeekableBitStreamDecoder extends BitStreamDecoder {
         );
         this._cachedBytes = this.reader.slice(0);
       } else {
-        throw new Error(
+        throw new BinSchemaError(
+          ErrorCode.INVALID_VALUE,
           'Cannot access bytes property on non-seekable source. ' +
           'Use position-based methods instead.'
         );
@@ -120,7 +122,7 @@ export class SeekableBitStreamDecoder extends BitStreamDecoder {
       
       return new SeekableBitStreamDecoder(reader, bitOrder);
     } catch (e: any) {
-      throw new Error("Failed to open file: " + path + ". " + e.message);
+      throw new BinSchemaError(ErrorCode.INVALID_VALUE, "Failed to open file: " + path + ". " + e.message, { cause: e });
     }
   }
 
