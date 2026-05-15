@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BinSchema - Binary Protocol Schema Generator</title>
-  <meta name="description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Go, and Rust. Bit-level precision with computed fields, CRC32 checksums, and more." />
+  <meta name="description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, and Rust. Bit-level precision with computed fields, CRC32 checksums, and more." />
 
   <!-- OpenGraph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="BinSchema - Binary Protocol Schema Generator" />
-  <meta property="og:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Go, and Rust." />
+  <meta property="og:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, and Rust." />
   <meta property="og:url" content="https://binschema.net/" />
   <meta property="og:image" content="https://binschema.net/og-image.png" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="BinSchema - Binary Protocol Schema Generator" />
-  <meta name="twitter:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Go, and Rust." />
+  <meta name="twitter:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, and Rust." />
   <meta name="twitter:image" content="https://binschema.net/og-image.png" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -31,7 +31,7 @@
       <div class="container hero-content">
         <div>
           <h1>Define Binary Protocols Once, Generate Everywhere</h1>
-          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript, Go, and Rust.</p>
+          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript, Python, Go, and Rust.</p>
           <div class="cta-group">
             <a class="cta primary" href="#installation">Get Started</a>
             <a class="cta secondary" href="/playground.html">See It in Action</a>
@@ -58,7 +58,7 @@
           </div>
           <div class="feature">
             <h3>Multi-Language Output</h3>
-            <p>Generate type-safe encoders and decoders for TypeScript, Go, and Rust from a single schema definition.</p>
+            <p>Generate type-safe encoders and decoders for TypeScript, Python, Go, and Rust from a single schema definition.</p>
           </div>
           <div class="feature">
             <h3>IDE Support</h3>
@@ -84,7 +84,7 @@
               <li>You're building a <strong>real-time protocol</strong> (games, chat, telemetry) over WebSockets or TCP and every byte counts</li>
               <li>You need <strong>both encoding and decoding</strong> &mdash; client and server, possibly in different languages</li>
               <li>Your format uses bit-packed flags, variable-length fields, computed lengths, or CRC checksums</li>
-              <li>You want <strong>one schema, multiple languages</strong> &mdash; TypeScript frontend, Go backend, Rust embedded</li>
+              <li>You want <strong>one schema, multiple languages</strong> &mdash; TypeScript frontend, Python tooling, Go backend, Rust embedded</li>
             </ul>
           </div>
           <div class="comparison-card alt-tool">
@@ -172,6 +172,9 @@ binschema generate --language go --schema protocol.bschema.json --out ./generate
 # Generate Rust code
 binschema generate --language rust --schema protocol.bschema.json --out ./generated
 
+# Generate Python code
+binschema generate --language python --schema protocol.bschema.json --out ./generated
+
 # Generate HTML documentation
 binschema docs build --schema protocol.bschema.json --out docs.html</code></pre>
           </div>
@@ -204,7 +207,7 @@ const goCode = generateGo(schema);</code></pre>
     <section id="usage-examples" class="content-section">
       <div class="container">
         <h2>See It in Action</h2>
-        <p class="section-lead">Define your schema once, generate type-safe encoders and decoders for TypeScript, Go, and Rust.</p>
+        <p class="section-lead">Define your schema once, generate type-safe encoders and decoders for TypeScript, Python, Go, and Rust.</p>
 
         <div class="example-step">
           <h3>1. Define Your Schema</h3>
@@ -230,6 +233,7 @@ const goCode = generateGo(schema);</code></pre>
           <div class="code-tabs">
             <div class="tab-bar">
               <button class="tab-btn active" data-tab="typescript">TypeScript</button>
+              <button class="tab-btn" data-tab="python">Python</button>
               <button class="tab-btn" data-tab="go">Go</button>
               <button class="tab-btn" data-tab="rust">Rust</button>
             </div>
@@ -322,6 +326,58 @@ export class SensorReadingDecoder extends SeekableBitStreamDecoder {
     };
   }
 }</code></pre>
+              </details>
+            </div>
+
+            <div class="tab-panel" data-tab="python" hidden>
+              <pre><code class="language-python"># Generated encoder/decoder classes (dict-based, no schema annotations)
+
+class SensorReadingEncoder(BitStreamEncoder):
+    def encode(self, value: dict[str, Any]) -&gt; bytes: ...
+
+class SensorReadingDecoder(SeekableBitStreamDecoder):
+    def decode(self) -&gt; dict[str, Any]: ...
+
+def decode_sensor_reading(decoder: BitStreamDecoder) -&gt; dict[str, Any]: ...</code></pre>
+              <details>
+                <summary>View full generated code</summary>
+                <pre><code class="language-python">from __future__ import annotations
+from typing import Any
+from binschema_runtime import (
+    BitStreamEncoder,
+    BitStreamDecoder,
+    SeekableBitStreamDecoder,
+)
+
+
+class SensorReadingEncoder(BitStreamEncoder):
+    def __init__(self):
+        super().__init__("msb_first")
+
+    def encode(self, value: dict[str, Any]) -&gt; bytes:
+        encoder = BitStreamEncoder("msb_first")
+        encoder.write_uint16(value["device_id"], "big_endian")
+        encoder.write_float32(value["temperature"], "big_endian")
+        encoder.write_uint8(value["humidity"])
+        encoder.write_uint32(value["timestamp"], "big_endian")
+        return encoder.finish()
+
+
+def decode_sensor_reading(decoder: BitStreamDecoder) -&gt; dict[str, Any]:
+    return {
+        "device_id":   decoder.read_uint16("big_endian"),
+        "temperature": decoder.read_float32("big_endian"),
+        "humidity":    decoder.read_uint8(),
+        "timestamp":   decoder.read_uint32("big_endian"),
+    }
+
+
+class SensorReadingDecoder(SeekableBitStreamDecoder):
+    def __init__(self, data: bytes | bytearray | list[int]):
+        super().__init__(data, "msb_first")
+
+    def decode(self) -&gt; dict[str, Any]:
+        return decode_sensor_reading(self)</code></pre>
               </details>
             </div>
 
@@ -485,6 +541,7 @@ impl SensorReadingOutput {
           <div class="code-tabs">
             <div class="tab-bar">
               <button class="tab-btn active" data-tab="typescript">TypeScript</button>
+              <button class="tab-btn" data-tab="python">Python</button>
               <button class="tab-btn" data-tab="go">Go</button>
               <button class="tab-btn" data-tab="rust">Rust</button>
             </div>
@@ -507,6 +564,26 @@ const decoder = new SensorReadingDecoder(bytes);
 const reading = decoder.decode();
 console.log(reading.temperature); // 23.5
 console.log(reading.device_id);   // 42</code></pre>
+            </div>
+
+            <div class="tab-panel" data-tab="python" hidden>
+              <pre><code class="language-python">from generated import SensorReadingEncoder, SensorReadingDecoder
+
+# Encode a sensor reading to binary
+encoder = SensorReadingEncoder()
+data = encoder.encode({
+    "device_id": 42,
+    "temperature": 23.5,
+    "humidity": 65,
+    "timestamp": 1_700_000_000,
+})
+# data: bytes — ready to send over the wire
+
+# Decode binary back to a typed dict
+decoder = SensorReadingDecoder(data)
+reading = decoder.decode()
+print(reading["temperature"])  # 23.5
+print(reading["device_id"])    # 42</code></pre>
             </div>
 
             <div class="tab-panel" data-tab="go" hidden>

@@ -1,13 +1,13 @@
 # BinSchema
 
-Binary protocol schema definition and code generation tool. Define binary formats in JSON5, generate type-safe parsers and serializers for TypeScript, Go, and Rust.
+Binary protocol schema definition and code generation tool. Define binary formats in JSON5, generate type-safe parsers and serializers for TypeScript, Python, Go, and Rust.
 
 ## Features
 
 - **Bit-level precision** - 1-64 bit fields with configurable bit ordering (MSB/LSB)
 - **Rich type system** - Primitives, booleans, strings (UTF-8/ASCII/Latin-1/UTF-16), byte arrays, discriminated unions, back-references
 - **Computed fields** - Auto-calculate lengths, positions, checksums, and counts
-- **Multi-language** - Generate TypeScript, Go, and Rust from a single schema
+- **Multi-language** - Generate TypeScript, Python, Go, and Rust from a single schema
 - **Cross-language testing** - JSON test format validates all implementations produce identical output
 
 ## Installation
@@ -36,6 +36,12 @@ binschema generate --language ts --schema examples/dns.schema.json --out ./gener
 
 # Generate Go code
 binschema generate --language go --schema examples/dns.schema.json --out ./generated
+
+# Generate Rust code
+binschema generate --language rust --schema examples/dns.schema.json --out ./generated
+
+# Generate Python code
+binschema generate --language python --schema examples/dns.schema.json --out ./generated
 
 # Generate HTML documentation
 binschema docs build --schema examples/zip.schema.json --out docs.html
@@ -164,7 +170,7 @@ npm run watch
 binschema/
   src/
     schema/        # Zod schemas and validation
-    generators/    # Code generators (TypeScript, Go, Rust, HTML)
+    generators/    # Code generators (TypeScript, Python, Go, Rust, HTML)
     runtime/       # Reference encoder/decoder implementation
     tests/         # Test suites
     cli/           # Command-line interface

@@ -82,16 +82,18 @@ regen-website-examples:
     SCHEMA="$ROOT/website/src/examples/demo-sensor.schema.json"
     OUT_DIR="$ROOT/website/src/examples"
     CLI="$ROOT/packages/binschema/dist/cli/index.js"
-    mkdir -p "$ROOT/tmp/gen-ts" "$ROOT/tmp/gen-go" "$ROOT/tmp/gen-rust"
+    mkdir -p "$ROOT/tmp/gen-ts" "$ROOT/tmp/gen-go" "$ROOT/tmp/gen-rust" "$ROOT/tmp/gen-python"
     # TypeScript generator needs to run from packages/binschema to find runtime files
     cd "$ROOT/packages/binschema"
-    node "$CLI" generate --language ts --schema "$SCHEMA" --out "$ROOT/tmp/gen-ts" --type SensorReading
+    node "$CLI" generate --language ts --schema "$SCHEMA" --out "$ROOT/tmp/gen-ts"
     cd "$ROOT"
-    node "$CLI" generate --language go --schema "$SCHEMA" --out "$ROOT/tmp/gen-go" --type SensorReading
-    node "$CLI" generate --language rust --schema "$SCHEMA" --out "$ROOT/tmp/gen-rust" --type SensorReading
+    node "$CLI" generate --language go --schema "$SCHEMA" --out "$ROOT/tmp/gen-go"
+    node "$CLI" generate --language rust --schema "$SCHEMA" --out "$ROOT/tmp/gen-rust"
+    node "$CLI" generate --language python --schema "$SCHEMA" --out "$ROOT/tmp/gen-python"
     cp "$ROOT/tmp/gen-ts/generated.ts" "$OUT_DIR/demo-sensor.generated.ts"
     cp "$ROOT/tmp/gen-go/generated.go" "$OUT_DIR/demo-sensor.generated.go"
     cp "$ROOT/tmp/gen-rust/generated.rs" "$OUT_DIR/demo-sensor.generated.rs"
+    cp "$ROOT/tmp/gen-python/generated.py" "$OUT_DIR/demo-sensor.generated.py"
     echo "Regenerated website example code in $OUT_DIR"
 
 # Build website

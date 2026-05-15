@@ -16,6 +16,7 @@ import {
   generateTypeScript,
   generateGo,
   generateRust,
+  generatePython,
   BinarySchemaSchema,
   validateSchema,
 } from 'binschema';
@@ -178,6 +179,17 @@ function generate() {
     setOutput('rust', rustOutputs.join('\n\n'));
   } catch (err) {
     setOutput('rust', `// Generation error: ${err.message}`);
+  }
+
+  // Python
+  try {
+    const pythonOutputs = typeNames.map(name => {
+      const result = generatePython(schema, name);
+      return result.code;
+    });
+    setOutput('python', pythonOutputs.join('\n\n'));
+  } catch (err) {
+    setOutput('python', `# Generation error: ${err.message}`);
   }
 }
 

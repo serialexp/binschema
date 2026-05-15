@@ -1,6 +1,6 @@
 # BinSchema
 
-> Binary protocol schema definition and code generation tool. Define binary formats in JSON5, generate type-safe parsers and serializers for TypeScript, Go, and Rust.
+> Binary protocol schema definition and code generation tool. Define binary formats in JSON5, generate type-safe parsers and serializers for TypeScript, Python, Go, and Rust.
 
 BinSchema lets you describe binary wire formats declaratively in JSON5. From a single schema, it generates encoders and decoders for multiple languages. It supports bit-level precision (1-64 bit fields), configurable byte/bit ordering, computed fields (auto-calculated lengths, checksums, positions), discriminated unions, conditional fields, back-references, random-access parsing, and variable-length integer encodings.
 
@@ -672,11 +672,12 @@ The optional `protocol` section adds message-level metadata on top of binary typ
 
 ## Code Generation
 
-BinSchema generates code for three languages from a single schema:
+BinSchema generates code for four languages from a single schema:
 
 | Language | Generator | Runtime | Status |
 |----------|-----------|---------|--------|
 | TypeScript | `src/generators/typescript.ts` | `src/runtime/bit-stream.ts` | Reference implementation, full feature support |
+| Python | `src/generators/python.ts` | `python/runtime/` | Full feature parity with TypeScript (100% test pass rate); dict-based encode/decode |
 | Go | `src/generators/go.ts` + `go/codegen/` | `go/runtime/bitstream.go` | Production ready, follows TypeScript patterns |
 | Rust | `src/generators/rust.ts` | `rust/` | Experimental, limited support |
 

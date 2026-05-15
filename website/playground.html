@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BinSchema Playground - Interactive Binary Schema Editor</title>
-  <meta name="description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Go, and Rust code." />
+  <meta name="description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, and Rust code." />
 
   <!-- OpenGraph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="BinSchema Playground" />
-  <meta property="og:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Go, and Rust code." />
+  <meta property="og:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, and Rust code." />
   <meta property="og:url" content="https://binschema.net/playground.html" />
   <meta property="og:image" content="https://binschema.net/og-image.png" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="BinSchema Playground" />
-  <meta name="twitter:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Go, and Rust code." />
+  <meta name="twitter:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, and Rust code." />
   <meta name="twitter:image" content="https://binschema.net/og-image.png" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -51,12 +51,16 @@
       <div class="playground-output">
         <div class="tab-bar">
           <button class="tab-btn active" data-tab="typescript">TypeScript</button>
+          <button class="tab-btn" data-tab="python">Python</button>
           <button class="tab-btn" data-tab="go">Go</button>
           <button class="tab-btn" data-tab="rust">Rust</button>
         </div>
         <div class="output-panels">
           <div class="tab-panel" data-tab="typescript">
             <pre><code id="output-typescript" class="language-typescript"></code></pre>
+          </div>
+          <div class="tab-panel" data-tab="python" hidden>
+            <pre><code id="output-python" class="language-python"></code></pre>
           </div>
           <div class="tab-panel" data-tab="go" hidden>
             <pre><code id="output-go" class="language-go"></code></pre>

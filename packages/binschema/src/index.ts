@@ -44,6 +44,9 @@ export type { HTMLGeneratorOptions } from './generators/html.js';
 export { generateRust } from './generators/rust.js';
 export type { RustGeneratorOptions, GeneratedRustCode } from './generators/rust.js';
 
+export { generatePython } from './generators/python.js';
+export type { PythonGeneratorOptions, GeneratedPythonCode } from './generators/python.js';
+
 // =============================================================================
 // Schema Types & Validation
 // =============================================================================

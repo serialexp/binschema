@@ -5,6 +5,7 @@ import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-go';
 import 'prismjs/components/prism-rust';
+import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-bash';
 
 const EXAMPLES = [
