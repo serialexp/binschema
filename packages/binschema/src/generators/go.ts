@@ -81,6 +81,16 @@ function hasParentReferenceComputedFields(schema: BinarySchema): boolean {
       if (computed.type === "length_of" || computed.type === "count_of") {
         return true;
       }
+
+      // length_of / crc32_of with first<T> / last<T> selectors use reflect to
+      // walk the parent array and pick the chosen item — see the early-return
+      // branch in generateComputedFieldEncoding.
+      if (
+        (computed.type === "length_of" || computed.type === "crc32_of") &&
+        parseFirstLastTarget(computed.target) !== null
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -157,9 +167,13 @@ function parseParentPath(target: string): { levelsUp: number; fieldName: string 
  * Parse a first/last selector pattern like "../sections[first<FileData>]"
  * Returns the array path, filter type, and selector type
  */
-function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: string; filterType: string; selector: "first" | "last" } | null {
-  // Match patterns like ../sections[first<FileData>] or ../../items[last<Header>]
-  const match = target.match(/^((?:\.\.\/)+)([^\[]+)\[(first|last)<(\w+)>\]$/);
+function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: string; filterType: string; selector: "first" | "last"; remainingPath: string } | null {
+  // Match patterns like ../sections[first<FileData>], ../../items[last<Header>],
+  // or ../items[first<DataChunk>].payload (with a sub-field path after the
+  // selector). The `]$` anchor was previously too strict and caused targets
+  // with a remaining path to silently fall through to the generic parent-ref
+  // branch — same bug e51386d fixed in TS+Rust.
+  const match = target.match(/^((?:\.\.\/)+)([^\[]+)\[(first|last)<(\w+)>\](\..*)?$/);
   if (!match) return null;
 
   const parentPart = match[1];
@@ -172,7 +186,8 @@ function parseFirstLastTarget(target: string): { levelsUp: number; arrayPath: st
     levelsUp,
     arrayPath: match[2],
     filterType: match[4],
-    selector: match[3] as "first" | "last"
+    selector: match[3] as "first" | "last",
+    remainingPath: match[5] || "",
   };
 }
 
@@ -770,6 +785,92 @@ function generateComputedFieldEncoding(
       lines.push(`${indent}${computedVarName} := ${goType}(${computedVarName}Pos)`);
 
       // Generate the write code
+      return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
+    }
+  }
+
+  // length_of / crc32_of with first<T> / last<T> selector targeting a sub-field
+  // of the chosen array item. position_of is handled above (it just reads a
+  // pre-tracked position from ctx); length_of / crc32_of need the actual value
+  // of the sub-field, so we walk the parent array via reflection and pick the
+  // first or last item whose concrete Go type matches `filterType`.
+  if (computedType === "length_of" || computedType === "crc32_of") {
+    const firstLastInfo = parseFirstLastTarget(target);
+    if (firstLastInfo) {
+      const { levelsUp, arrayPath, filterType, selector, remainingPath } = firstLastInfo;
+      const goFilterType = toGoTypeName(filterType);
+      const remainingPathStripped = remainingPath.startsWith(".") ? remainingPath.slice(1) : remainingPath;
+      const remainingSegments = remainingPathStripped
+        ? remainingPathStripped.split(".").map(toGoFieldName)
+        : [];
+
+      lines.push(`${indent}// ${computedType} with ${selector}<${filterType}> selector → ${arrayPath}${remainingPath}`);
+      lines.push(`${indent}${computedVarName}ArrRaw, ${computedVarName}ArrOk := ctx.GetParentField(${levelsUp}, "${arrayPath}")`);
+      lines.push(`${indent}if !${computedVarName}ArrOk {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("parent field '${arrayPath}' not found in context (${levelsUp} level(s) up)")`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}${computedVarName}ArrV := reflect.ValueOf(${computedVarName}ArrRaw)`);
+      lines.push(`${indent}if ${computedVarName}ArrV.Kind() != reflect.Slice {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("expected slice for ${selector}<${filterType}> selector on '${arrayPath}', got %T", ${computedVarName}ArrRaw)`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}var ${computedVarName}Target interface{}`);
+
+      if (selector === "first") {
+        lines.push(`${indent}for ${computedVarName}I := 0; ${computedVarName}I < ${computedVarName}ArrV.Len(); ${computedVarName}I++ {`);
+      } else {
+        lines.push(`${indent}for ${computedVarName}I := ${computedVarName}ArrV.Len() - 1; ${computedVarName}I >= 0; ${computedVarName}I-- {`);
+      }
+      lines.push(`${indent}\t${computedVarName}It := ${computedVarName}ArrV.Index(${computedVarName}I).Interface()`);
+      lines.push(`${indent}\tif _, ${computedVarName}Ok := ${computedVarName}It.(*${goFilterType}); ${computedVarName}Ok {`);
+      lines.push(`${indent}\t\t${computedVarName}Target = ${computedVarName}It`);
+      lines.push(`${indent}\t\tbreak`);
+      lines.push(`${indent}\t}`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}if ${computedVarName}Target == nil {`);
+      lines.push(`${indent}\treturn nil, fmt.Errorf("${selector} ${filterType} not found in '${arrayPath}'")`);
+      lines.push(`${indent}}`);
+
+      // Walk remaining path via reflection (e.g. ".payload" → .FieldByName("Payload"))
+      lines.push(`${indent}${computedVarName}FieldV := reflect.ValueOf(${computedVarName}Target).Elem()`);
+      for (const segment of remainingSegments) {
+        lines.push(`${indent}${computedVarName}FieldV = ${computedVarName}FieldV.FieldByName("${segment}")`);
+        lines.push(`${indent}if !${computedVarName}FieldV.IsValid() {`);
+        lines.push(`${indent}\treturn nil, fmt.Errorf("field '${segment}' not found on ${filterType}")`);
+        lines.push(`${indent}}`);
+      }
+
+      if (computedType === "length_of") {
+        // Use if/else (not switch case Slice/Array/String) because the Go batch
+        // test prefixer rewrites uppercase identifiers in case expressions,
+        // mangling "reflect.Slice" into "reflect.prefix_Slice".
+        lines.push(`${indent}var ${computedVarName} ${goType}`);
+        lines.push(`${indent}${computedVarName}Kind := ${computedVarName}FieldV.Kind()`);
+        lines.push(`${indent}if ${computedVarName}Kind == reflect.Slice || ${computedVarName}Kind == reflect.Array || ${computedVarName}Kind == reflect.String {`);
+        lines.push(`${indent}\t${computedVarName} = ${goType}(${computedVarName}FieldV.Len())`);
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}\treturn nil, fmt.Errorf("length_of: field has unsupported kind %v for ${selector}<${filterType}>${remainingPath}", ${computedVarName}Kind)`);
+        lines.push(`${indent}}`);
+      } else {
+        // crc32_of
+        lines.push(`${indent}var ${computedVarName}Bytes []byte`);
+        lines.push(`${indent}${computedVarName}Kind := ${computedVarName}FieldV.Kind()`);
+        lines.push(`${indent}if ${computedVarName}Kind == reflect.Slice || ${computedVarName}Kind == reflect.Array {`);
+        lines.push(`${indent}\tif ${computedVarName}AsBytes, ${computedVarName}IsBytes := ${computedVarName}FieldV.Interface().([]byte); ${computedVarName}IsBytes {`);
+        lines.push(`${indent}\t\t${computedVarName}Bytes = ${computedVarName}AsBytes`);
+        lines.push(`${indent}\t} else {`);
+        lines.push(`${indent}\t\t${computedVarName}Bytes = make([]byte, ${computedVarName}FieldV.Len())`);
+        lines.push(`${indent}\t\tfor ${computedVarName}I := 0; ${computedVarName}I < ${computedVarName}FieldV.Len(); ${computedVarName}I++ {`);
+        lines.push(`${indent}\t\t\t${computedVarName}Bytes[${computedVarName}I] = byte(${computedVarName}FieldV.Index(${computedVarName}I).Uint())`);
+        lines.push(`${indent}\t\t}`);
+        lines.push(`${indent}\t}`);
+        lines.push(`${indent}} else if ${computedVarName}Kind == reflect.String {`);
+        lines.push(`${indent}\t${computedVarName}Bytes = []byte(${computedVarName}FieldV.String())`);
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}\treturn nil, fmt.Errorf("crc32_of: field has unsupported kind %v for ${selector}<${filterType}>${remainingPath}", ${computedVarName}Kind)`);
+        lines.push(`${indent}}`);
+        lines.push(`${indent}${computedVarName} := uint32(runtime.CRC32(${computedVarName}Bytes))`);
+      }
+
       return [...lines, ...generateComputedFieldWrite(field, computedVarName, runtimeEndianness, indent)];
     }
   }
