@@ -103,10 +103,16 @@ export async function runTestSuite(suite: TestSuite, summaryMode = false): Promi
     return result;
   }
 
-  // Generate TypeScript code
+  // Generate TypeScript code. If any test case in the suite uses chunked
+  // streaming (`chunkSizes`), enable the streaming codegen so the runner's
+  // streaming test path has a `decode{TypeName}Stream` to call.
+  const needsStreaming = (suite.test_cases ?? []).some(tc => Array.isArray((tc as any).chunkSizes));
   let generatedCode: string;
   try {
-    generatedCode = generateTypeScript(suite.schema, { addEncoderLogs: !!process.env.DEBUG_ENCODE });
+    generatedCode = generateTypeScript(suite.schema, {
+      addEncoderLogs: !!process.env.DEBUG_ENCODE,
+      generate_streaming: needsStreaming,
+    });
   } catch (error) {
     // Don't log immediately - will be shown in Final Results
     result.phase = "generation";
@@ -253,11 +259,23 @@ async function runStreamingTestCase(
       items.push(item);
     }
 
-    // Compare decoded items with expected value
-    // For arrays, the value should be an array of items
-    const expectedItems = Array.isArray(testCase.value)
-      ? testCase.value
-      : [testCase.value];
+    // Compare decoded items with expected value. For wrapper-struct test
+    // cases (the streaming codegen pattern), the test value is `{ <arrayField>:
+    // [...] }` — extract the inner array. Otherwise fall back to the raw
+    // value (test cases that already pass items directly).
+    let expectedItems: any[];
+    if (Array.isArray(testCase.value)) {
+      expectedItems = testCase.value;
+    } else if (testCase.value && typeof testCase.value === "object") {
+      const keys = Object.keys(testCase.value);
+      if (keys.length === 1 && Array.isArray((testCase.value as any)[keys[0]])) {
+        expectedItems = (testCase.value as any)[keys[0]];
+      } else {
+        expectedItems = [testCase.value];
+      }
+    } else {
+      expectedItems = [testCase.value];
+    }
 
     if (!deepEqual(items, expectedItems)) {
       failures.push({

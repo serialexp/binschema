@@ -129,7 +129,7 @@ export function generateFieldSizeCalculation(
               code += `${indent}  } else if (typeof ${valuePrefix}${target} === 'string') {\n`;
               code += `${indent}    ${fieldName}_targetSize = new TextEncoder().encode(${valuePrefix}${target}).length;\n`;
               code += `${indent}  } else {\n`;
-              code += `${indent}    throw new Error("Unknown target type for length_of computation");\n`;
+              code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, "Unknown target type for length_of computation");\n`;
               code += `${indent}  }\n`;
               if (offset !== 0) {
                 code += `${indent}  ${fieldName}_targetSize += ${offset}; // Apply offset\n`;
@@ -300,7 +300,7 @@ export function generateFieldSizeCalculation(
             }
             if (choices.length > 0) {
               code += `${indent}  } else {\n`;
-              code += `${indent}    throw new Error(\`Unknown choice type: \${(item as any).type}\`);\n`;
+              code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
               code += `${indent}  }\n`;
             }
             code += `${indent}}\n`;
@@ -356,7 +356,7 @@ export function generateFieldSizeCalculation(
             }
             if (choices.length > 0) {
               code += `${indent}  } else {\n`;
-              code += `${indent}    throw new Error(\`Unknown choice type: \${(item as any).type}\`);\n`;
+              code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
               code += `${indent}  }\n`;
             }
             code += `${indent}}\n`;
@@ -402,7 +402,7 @@ export function generateFieldSizeCalculation(
       const hasFallback = variants.some((v: any) => !v.when);
       if (!hasFallback) {
         code += `${indent}else {\n`;
-        code += `${indent}  throw new Error(\`Unknown variant type for ${fieldName}: \${${duPath}.type}\`);\n`;
+        code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type for ${fieldName}: \${${duPath}.type}\`);\n`;
         code += `${indent}}\n`;
       }
       break;

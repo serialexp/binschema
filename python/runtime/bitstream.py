@@ -12,6 +12,7 @@ import struct
 import math
 import zlib
 from typing import Literal
+from .errors import BinSchemaError, ErrorCode
 
 Endianness = Literal["big_endian", "little_endian"]
 
@@ -19,6 +20,21 @@ Endianness = Literal["big_endian", "little_endian"]
 def compute_crc32(data: bytes | bytearray) -> int:
     """Compute CRC32 checksum, returning unsigned 32-bit value."""
     return zlib.crc32(data) & 0xFFFFFFFF
+
+
+def _decode_text(data: bytes | bytearray, encoding: str) -> str:
+    """Decode bytes to a string, converting Python's UnicodeDecodeError into
+    a BinSchemaError tagged with ErrorCode.INVALID_UTF8. Codegen calls this
+    instead of `bytes.decode(...)` so that consumers across languages can
+    pattern-match on a stable error code rather than catching language-
+    specific exception types."""
+    try:
+        return data.decode(encoding)
+    except UnicodeDecodeError as e:
+        raise BinSchemaError(
+            ErrorCode.INVALID_UTF8,
+            f"Invalid {encoding} bytes: {e.reason} at position {e.start}",
+        ) from e
 
 
 def _resolve_deferred_patches(encoder, patches, array_offsets, array_iterations):
@@ -235,7 +251,7 @@ class BitStreamEncoder:
 
     def write_bits(self, value: int, size: int) -> None:
         if size < 1 or size > 64:
-            raise ValueError(f"Invalid bit size: {size} (must be 1-64)")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"Invalid bit size: {size} (must be 1-64)")
 
         value = value & ((1 << size) - 1)
 
@@ -311,7 +327,7 @@ class BitStreamEncoder:
 
     def write_varlength_der(self, value: int) -> None:
         if value < 0:
-            raise ValueError(f"DER length encoding requires non-negative value, got {value}")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"DER length encoding requires non-negative value, got {value}")
 
         if value < 128:
             self.write_uint8(value)
@@ -328,7 +344,7 @@ class BitStreamEncoder:
 
     def write_varlength_leb128(self, value: int) -> None:
         if value < 0:
-            raise ValueError(f"LEB128 encoding requires non-negative value, got {value}")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"LEB128 encoding requires non-negative value, got {value}")
 
         while True:
             byte = value & 0x7F
@@ -341,7 +357,7 @@ class BitStreamEncoder:
 
     def write_varlength_ebml(self, value: int) -> None:
         if value < 0:
-            raise ValueError(f"EBML VINT encoding requires non-negative value, got {value}")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"EBML VINT encoding requires non-negative value, got {value}")
 
         width = 1
         max_val = (1 << 7) - 2
@@ -351,7 +367,7 @@ class BitStreamEncoder:
             max_val = (1 << (width * 7)) - 2
 
         if value > max_val:
-            raise ValueError(f"EBML VINT value {value} too large for 8-byte encoding")
+            raise BinSchemaError(ErrorCode.INVALID_ENCODING, f"EBML VINT value {value} too large for 8-byte encoding")
 
         marker_bit = 1 << (width * 7)
         encoded = marker_bit | value
@@ -361,9 +377,9 @@ class BitStreamEncoder:
 
     def write_varlength_vlq(self, value: int) -> None:
         if value < 0:
-            raise ValueError(f"VLQ encoding requires non-negative value, got {value}")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"VLQ encoding requires non-negative value, got {value}")
         if value > 0x0FFFFFFF:
-            raise ValueError(f"VLQ value {value} exceeds maximum (0x0FFFFFFF)")
+            raise BinSchemaError(ErrorCode.INVALID_ENCODING, f"VLQ value {value} exceeds maximum (0x0FFFFFFF)")
 
         byte_list: list[int] = []
         remaining = value
@@ -459,7 +475,7 @@ class BitStreamDecoder:
 
     def read_bit(self) -> int:
         if self._byte_offset >= len(self._bytes):
-            raise RuntimeError("Unexpected end of stream")
+            raise BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", position=self._byte_offset)
 
         current_byte = self._bytes[self._byte_offset]
 
@@ -477,7 +493,7 @@ class BitStreamDecoder:
 
     def read_bits(self, size: int) -> int:
         if size < 1 or size > 64:
-            raise ValueError(f"Invalid bit size: {size} (must be 1-64)")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"Invalid bit size: {size} (must be 1-64)")
 
         result = 0
         if self._bit_order == "lsb_first":
@@ -494,7 +510,7 @@ class BitStreamDecoder:
     def read_uint8(self) -> int:
         if self._bit_offset == 0:
             if self._byte_offset >= len(self._bytes):
-                raise RuntimeError("Unexpected end of stream")
+                raise BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", position=self._byte_offset)
             val = self._bytes[self._byte_offset]
             self._byte_offset += 1
             return val
@@ -507,9 +523,9 @@ class BitStreamDecoder:
 
     def read_bytes_slice(self, n: int) -> bytes:
         if self._bit_offset != 0:
-            raise RuntimeError("read_bytes_slice requires byte alignment")
+            raise BinSchemaError(ErrorCode.ALIGNMENT_REQUIRED, "read_bytes_slice requires byte alignment")
         if self._byte_offset + n > len(self._bytes):
-            raise RuntimeError("Unexpected end of stream")
+            raise BinSchemaError(ErrorCode.INCOMPLETE_DATA, "Unexpected end of stream", position=self._byte_offset)
         result = self._bytes[self._byte_offset:self._byte_offset + n]
         self._byte_offset += n
         return result
@@ -599,9 +615,9 @@ class BitStreamDecoder:
 
         num_bytes = first_byte & 0x7F
         if num_bytes == 0:
-            raise RuntimeError("DER indefinite length (0x80) not supported")
+            raise BinSchemaError(ErrorCode.INVALID_ENCODING, "DER indefinite length (0x80) not supported")
         if num_bytes > 4:
-            raise RuntimeError(f"DER length too large: {num_bytes} bytes (max 4 supported)")
+            raise BinSchemaError(ErrorCode.INVALID_ENCODING, f"DER length too large: {num_bytes} bytes (max 4 supported)")
 
         value = 0
         for _ in range(num_bytes):
@@ -618,7 +634,7 @@ class BitStreamDecoder:
             if (byte & 0x80) == 0:
                 break
             if shift > 64:
-                raise RuntimeError("LEB128 value too large (exceeds 64 bits)")
+                raise BinSchemaError(ErrorCode.INVALID_ENCODING, "LEB128 value too large (exceeds 64 bits)")
         return result
 
     def read_varlength_ebml(self) -> int:
@@ -629,7 +645,7 @@ class BitStreamDecoder:
             width += 1
             mask >>= 1
         if width > 8:
-            raise RuntimeError("EBML VINT: no marker bit found in first byte")
+            raise BinSchemaError(ErrorCode.INVALID_ENCODING, "EBML VINT: no marker bit found in first byte")
 
         value = first_byte & (mask - 1)
         for _ in range(1, width):
@@ -641,7 +657,7 @@ class BitStreamDecoder:
         bytes_read = 0
         while True:
             if bytes_read >= 4:
-                raise RuntimeError("VLQ value too large (exceeds 4 bytes)")
+                raise BinSchemaError(ErrorCode.INVALID_ENCODING, "VLQ value too large (exceeds 4 bytes)")
             byte = self.read_uint8()
             bytes_read += 1
             result = (result << 7) | (byte & 0x7F)
@@ -655,34 +671,34 @@ class BitStreamDecoder:
 
     def seek(self, offset: int) -> None:
         if offset < 0 or offset > len(self._bytes):
-            raise RuntimeError(f"Seek offset {offset} out of bounds (valid range: 0-{len(self._bytes)})")
+            raise BinSchemaError(ErrorCode.OUT_OF_BOUNDS, f"Seek offset {offset} out of bounds (valid range: 0-{len(self._bytes)})")
         self._byte_offset = offset
         self._bit_offset = 0
 
     def push_position(self) -> None:
         if len(self._saved_positions) >= self.MAX_POSITION_STACK_DEPTH:
-            raise RuntimeError(f"Position stack overflow: maximum depth of {self.MAX_POSITION_STACK_DEPTH} exceeded")
+            raise BinSchemaError(ErrorCode.STACK_OVERFLOW, f"Position stack overflow: maximum depth of {self.MAX_POSITION_STACK_DEPTH} exceeded")
         self._saved_positions.append(self._byte_offset)
 
     def pop_position(self) -> None:
         if not self._saved_positions:
-            raise RuntimeError("Position stack underflow: attempted to pop from empty stack")
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, "Position stack underflow: attempted to pop from empty stack")
         saved = self._saved_positions.pop()
         self._byte_offset = saved
         self._bit_offset = 0
 
     def peek_uint8(self) -> int:
         if self._bit_offset != 0:
-            raise RuntimeError(f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
+            raise BinSchemaError(ErrorCode.ALIGNMENT_REQUIRED, f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
         if self._byte_offset >= len(self._bytes):
-            raise RuntimeError(f"Peek out of bounds at offset {self._byte_offset} (buffer size: {len(self._bytes)})")
+            raise BinSchemaError(ErrorCode.OUT_OF_BOUNDS, f"Peek out of bounds at offset {self._byte_offset} (buffer size: {len(self._bytes)})", position=self._byte_offset)
         return self._bytes[self._byte_offset]
 
     def peek_uint16(self, endianness: Endianness) -> int:
         if self._bit_offset != 0:
-            raise RuntimeError(f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
+            raise BinSchemaError(ErrorCode.ALIGNMENT_REQUIRED, f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
         if self._byte_offset + 2 > len(self._bytes):
-            raise RuntimeError(f"Peek out of bounds at offset {self._byte_offset} (buffer size: {len(self._bytes)})")
+            raise BinSchemaError(ErrorCode.OUT_OF_BOUNDS, f"Peek out of bounds at offset {self._byte_offset} (buffer size: {len(self._bytes)})", position=self._byte_offset)
         b0 = self._bytes[self._byte_offset]
         b1 = self._bytes[self._byte_offset + 1]
         if endianness == "big_endian":
@@ -692,9 +708,9 @@ class BitStreamDecoder:
 
     def peek_uint32(self, endianness: Endianness) -> int:
         if self._bit_offset != 0:
-            raise RuntimeError(f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
+            raise BinSchemaError(ErrorCode.ALIGNMENT_REQUIRED, f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
         if self._byte_offset + 4 > len(self._bytes):
-            raise RuntimeError(f"Peek out of bounds at offset {self._byte_offset} (buffer size: {len(self._bytes)})")
+            raise BinSchemaError(ErrorCode.OUT_OF_BOUNDS, f"Peek out of bounds at offset {self._byte_offset} (buffer size: {len(self._bytes)})", position=self._byte_offset)
         b = self._bytes[self._byte_offset:self._byte_offset + 4]
         if endianness == "big_endian":
             return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
@@ -706,10 +722,10 @@ class BitStreamDecoder:
         advancing. Used by signature-terminated arrays (which look for a
         multi-byte marker that begins the next element's encoded form)."""
         if self._bit_offset != 0:
-            raise RuntimeError(f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
+            raise BinSchemaError(ErrorCode.ALIGNMENT_REQUIRED, f"Peek not byte-aligned: bit offset is {self._bit_offset} (must be 0)")
         idx = self._byte_offset + offset
         if idx >= len(self._bytes):
-            raise RuntimeError(f"Peek out of bounds at offset {idx} (buffer size: {len(self._bytes)})")
+            raise BinSchemaError(ErrorCode.OUT_OF_BOUNDS, f"Peek out of bounds at offset {idx} (buffer size: {len(self._bytes)})", position=idx)
         return self._bytes[idx]
 
     def has_more(self) -> bool:

@@ -378,3 +378,104 @@ export const optionalBuiltinInlineUint16TestSuite = defineTestSuite({
     },
   ]
 });
+
+/**
+ * Test 8: Optional with inline fixed-length bytes value_type.
+ *
+ * Regression test for codegen bug where optional<bytes> would emit
+ * `Bytes::decode_with_decoder` (non-existent type) on decode and
+ * `v.encode_into(encoder)?;` (method missing on Vec<u8>) on encode.
+ * See bugs/2026-05-26-rust-codegen-three-bugs.md (Bug 2).
+ */
+export const optionalBuiltinFixedBytesTestSuite = defineTestSuite({
+  name: "optional_builtin_fixed_bytes",
+  description: "Built-in optional with inline fixed-length bytes value_type",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "SpanRef": {
+        sequence: [
+          {
+            name: "parent_span_id",
+            type: "optional",
+            value_type: { type: "bytes", kind: "fixed", length: 8 },
+          },
+        ]
+      }
+    }
+  },
+
+  test_type: "SpanRef",
+
+  test_cases: [
+    {
+      description: "Not present",
+      value: {},
+      bytes: [0x00],
+    },
+    {
+      description: "Present with 8-byte id",
+      value: { parent_span_id: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08] },
+      bytes: [
+        0x01, // presence = 1
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+      ],
+    },
+  ]
+});
+
+/**
+ * Test 9: Optional with inline length-prefixed bytes value_type.
+ *
+ * Regression test for Bug 2: optional<bytes kind=length_prefixed> should
+ * inline the length prefix + byte loop rather than dispatching to a
+ * non-existent Bytes type.
+ */
+export const optionalBuiltinLengthPrefixedBytesTestSuite = defineTestSuite({
+  name: "optional_builtin_length_prefixed_bytes",
+  description: "Built-in optional with inline length-prefixed bytes value_type",
+
+  schema: {
+    config: {
+      endianness: "big_endian",
+    },
+    types: {
+      "OptionalPayload": {
+        sequence: [
+          {
+            name: "payload",
+            type: "optional",
+            value_type: { type: "bytes", kind: "length_prefixed", length_type: "uint16" },
+          },
+        ]
+      }
+    }
+  },
+
+  test_type: "OptionalPayload",
+
+  test_cases: [
+    {
+      description: "Not present",
+      value: {},
+      bytes: [0x00],
+    },
+    {
+      description: "Present with empty payload",
+      value: { payload: [] },
+      bytes: [0x01, 0x00, 0x00],
+    },
+    {
+      description: "Present with 3-byte payload",
+      value: { payload: [0xAA, 0xBB, 0xCC] },
+      bytes: [
+        0x01,         // presence = 1
+        0x00, 0x03,   // length = 3
+        0xAA, 0xBB, 0xCC,
+      ],
+    },
+  ]
+});

@@ -36,6 +36,7 @@ import {
 import { generateContextInterface, schemaRequiresContext } from "./typescript/context-analysis.js";
 import { generateNestedTypeContextExtension } from "./typescript/context-extension.js";
 import { generateInterfaces, getFieldTypeScriptType as getFieldTypeScriptTypeFromInterface } from "./typescript/interface-generation.js";
+import { generateStreamingWrappers } from "./typescript/streaming-codegen.js";
 
 /**
  * TypeScript Code Generator
@@ -55,6 +56,13 @@ export interface GenerateTypeScriptOptions {
   addEncoderLogs?: boolean;
   /** Shorthand: enable all debug logging (both encoder and decoder) */
   debug?: boolean;
+  /**
+   * Emit async-generator streaming decoders (`decode{TypeName}Stream`) for
+   * top-level types that consist of a single length-prefixed array. The
+   * synchronous decoder classes are still emitted alongside; the streaming
+   * wrapper is purely additive. Off by default.
+   */
+  generate_streaming?: boolean;
 }
 
 export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeScriptOptions): string {
@@ -68,7 +76,21 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   code += `import { SeekableBitStreamDecoder } from "./seekable-bit-stream.js";\n`;
   code += `import { createReader } from "./binary-reader.js";\n`;
   code += `import { crc32 } from "./crc32.js";\n`;
-  code += `import { evaluateExpression } from "./expression-evaluator.js";\n\n`;
+  code += `import { evaluateExpression } from "./expression-evaluator.js";\n`;
+  code += `import { BinSchemaError, ErrorCode } from "./errors.js";\n`;
+
+  // Pre-compute streaming wrappers so we can emit their import alongside the
+  // other runtime imports (saves us a post-hoc injection step).
+  let streamingCode = "";
+  if (options?.generate_streaming) {
+    const { code: streamingBody, usedPrimitives } = generateStreamingWrappers(schema, globalEndianness);
+    if (streamingBody.length > 0) {
+      const importNames = Array.from(usedPrimitives).sort().join(", ");
+      code += `import { ${importNames} } from "./stream-decoder.js";\n`;
+      streamingCode = streamingBody;
+    }
+  }
+  code += "\n";
 
   // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
   code += generateRuntimeHelpers();
@@ -88,6 +110,11 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
     const sanitizedName = sanitizeTypeName(typeName);
     code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder, addTraceLogs, addEncoderLogs);
     code += "\n\n";
+  }
+
+  // Emit streaming wrapper functions (already imported above).
+  if (streamingCode.length > 0) {
+    code += streamingCode + "\n";
   }
 
   return code;
@@ -421,7 +448,7 @@ function generateInstanceClass(
 
         if (!isFallback && isLast) {
           code += ` else {\n`;
-          code += `              throw new Error(\`Unknown discriminator value for instance '${instance.name}': \${discriminatorValue}\`);\n`;
+          code += `              throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown discriminator value for instance '${instance.name}': \${discriminatorValue}\`);\n`;
           code += `            }`;
         }
         code += `\n`;
@@ -1454,7 +1481,7 @@ function generateEncodeChoice(
 
   // Add fallthrough error
   code += ` else {\n`;
-  code += `${indent}  throw new Error(\`Unknown variant type: \${(${valuePath} as any).type}\`);\n`;
+  code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type: \${(${valuePath} as any).type}\`);\n`;
   code += `${indent}}\n`;
 
   return code;
@@ -1545,7 +1572,7 @@ function generateDecodeChoice(
   }
 
   code += ` else {\n`;
-  code += `${inner}  throw new Error(\`Unknown choice discriminator: 0x\${discriminator.toString(16)}\`);\n`;
+  code += `${inner}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice discriminator: 0x\${discriminator.toString(16)}\`);\n`;
   code += `${inner}}\n`;
   code += `${indent}}\n`;
 
@@ -1600,7 +1627,7 @@ function generateEncodeDiscriminatedUnion(
 
   // Add fallthrough error
   code += ` else {\n`;
-  code += `${indent}  throw new Error(\`Unknown variant type: \${(${valuePath} as any).type}\`);\n`;
+  code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type: \${(${valuePath} as any).type}\`);\n`;
   code += `${indent}}\n`;
 
   return code;
@@ -2143,7 +2170,7 @@ function generateDecodeDiscriminatedUnion(
 
     // No fallback - throw error for unknown discriminator
     code += ` else {\n`;
-    code += `${indent}  throw new Error(\`Unknown discriminator: 0x\${discriminator.toString(16)}\`);\n`;
+    code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown discriminator: 0x\${discriminator.toString(16)}\`);\n`;
     code += `${indent}}\n`;
 
   } else if (discriminator.field) {
@@ -2181,7 +2208,7 @@ function generateDecodeDiscriminatedUnion(
 
     // No fallback - throw error for unknown discriminator
     code += ` else {\n`;
-    code += `${indent}  throw new Error(\`Unknown discriminator value: \${${discriminatorRef}}\`);\n`;
+    code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown discriminator value: \${${discriminatorRef}}\`);\n`;
     code += `${indent}}\n`;
   }
 

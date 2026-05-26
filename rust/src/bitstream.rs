@@ -354,7 +354,7 @@ impl BitStreamEncoder {
         }
 
         if value > max_val {
-            return Err(BinSchemaError::InvalidValue(format!("EBML value {} too large for 8-byte encoding", value)));
+            return Err(BinSchemaError::InvalidEncoding(format!("EBML value {} too large for 8-byte encoding", value)));
         }
 
         // Set marker bit at position (width * 7)
@@ -372,7 +372,7 @@ impl BitStreamEncoder {
     #[inline]
     fn write_varlength_vlq(&mut self, value: u64) -> Result<()> {
         if value > 0x0FFFFFFF {
-            return Err(BinSchemaError::InvalidValue(format!("VLQ value {} exceeds maximum (0x0FFFFFFF)", value)));
+            return Err(BinSchemaError::InvalidEncoding(format!("VLQ value {} exceeds maximum (0x0FFFFFFF)", value)));
         }
 
         // Collect bytes in reverse order (LSB first)
@@ -517,7 +517,7 @@ impl<'a> BitStreamDecoder<'a> {
     #[inline]
     pub fn read_bytes_vec(&mut self, n: usize) -> Result<Vec<u8>> {
         if self.bit_offset != 0 {
-            return Err(BinSchemaError::InvalidValue("read_bytes_vec requires byte alignment".to_string()));
+            return Err(BinSchemaError::AlignmentRequired("read_bytes_vec requires byte alignment".to_string()));
         }
         if self.byte_offset + n > self.bytes.len() {
             return Err(BinSchemaError::UnexpectedEof);
@@ -794,7 +794,7 @@ impl<'a> BitStreamDecoder<'a> {
         } else {
             let num_bytes = (first & 0x7F) as usize;
             if num_bytes > 8 {
-                return Err(BinSchemaError::InvalidValue("DER variable length too large".to_string()));
+                return Err(BinSchemaError::InvalidEncoding("DER variable length too large".to_string()));
             }
             let mut value = 0u64;
             for _ in 0..num_bytes {
@@ -816,7 +816,7 @@ impl<'a> BitStreamDecoder<'a> {
             shift += 7;
 
             if shift > 64 {
-                return Err(BinSchemaError::InvalidValue("LEB128 value too large".to_string()));
+                return Err(BinSchemaError::InvalidEncoding("LEB128 value too large".to_string()));
             }
 
             if (byte & 0x80) == 0 {
@@ -841,7 +841,7 @@ impl<'a> BitStreamDecoder<'a> {
         }
 
         if width > 8 {
-            return Err(BinSchemaError::InvalidValue("EBML VINT: no marker bit found".to_string()));
+            return Err(BinSchemaError::InvalidEncoding("EBML VINT: no marker bit found".to_string()));
         }
 
         // Start with first byte, removing marker bit
@@ -863,7 +863,7 @@ impl<'a> BitStreamDecoder<'a> {
 
         loop {
             if bytes_read >= 4 {
-                return Err(BinSchemaError::InvalidValue("VLQ value too large (exceeds 4 bytes)".to_string()));
+                return Err(BinSchemaError::InvalidEncoding("VLQ value too large (exceeds 4 bytes)".to_string()));
             }
 
             let byte = self.read_uint8()?;
@@ -898,7 +898,7 @@ impl<'a> BitStreamDecoder<'a> {
     #[inline]
     pub fn seek(&mut self, pos: usize) -> Result<()> {
         if pos > self.bytes.len() {
-            return Err(BinSchemaError::InvalidValue(format!("Seek position {} is past end of data", pos)));
+            return Err(BinSchemaError::OutOfBounds(format!("Seek position {} is past end of data", pos)));
         }
         self.byte_offset = pos;
         self.bit_offset = 0;
@@ -913,7 +913,7 @@ impl<'a> BitStreamDecoder<'a> {
         }
         // If we're in the middle of a byte, we can't peek properly
         if self.bit_offset != 0 {
-            return Err(BinSchemaError::InvalidValue("Cannot peek when not byte-aligned".to_string()));
+            return Err(BinSchemaError::AlignmentRequired("Cannot peek when not byte-aligned".to_string()));
         }
         Ok(self.bytes[self.byte_offset])
     }
@@ -925,7 +925,7 @@ impl<'a> BitStreamDecoder<'a> {
             return Err(BinSchemaError::UnexpectedEof);
         }
         if self.bit_offset != 0 {
-            return Err(BinSchemaError::InvalidValue("Cannot peek when not byte-aligned".to_string()));
+            return Err(BinSchemaError::AlignmentRequired("Cannot peek when not byte-aligned".to_string()));
         }
         match endianness {
             Endianness::BigEndian => {
@@ -948,7 +948,7 @@ impl<'a> BitStreamDecoder<'a> {
             return Err(BinSchemaError::UnexpectedEof);
         }
         if self.bit_offset != 0 {
-            return Err(BinSchemaError::InvalidValue("Cannot peek when not byte-aligned".to_string()));
+            return Err(BinSchemaError::AlignmentRequired("Cannot peek when not byte-aligned".to_string()));
         }
         match endianness {
             Endianness::BigEndian => {

@@ -783,6 +783,21 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 			return fmt.Sprintf("ptrString(%s)", formattedVal)
 		case "bool":
 			return fmt.Sprintf("ptrBool(%s)", formattedVal)
+		case "bytes":
+			// Optional<bytes>: format as &[]byte{...}
+			if valSlice, ok := val.([]interface{}); ok {
+				if len(valSlice) == 0 {
+					return "&[]byte{}"
+				}
+				var elements []string
+				for _, elem := range valSlice {
+					if f, ok := elem.(float64); ok {
+						elements = append(elements, fmt.Sprintf("%d", int(f)))
+					}
+				}
+				return fmt.Sprintf("&[]byte{%s}", strings.Join(elements, ", "))
+			}
+			return formattedVal
 		default:
 			// For type references (structs), format and take address
 			if typeDef, hasTypeDef := types[valueType].(map[string]interface{}); hasTypeDef {

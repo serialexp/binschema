@@ -8,25 +8,95 @@ pub mod context;
 pub use bitstream::{BitStreamEncoder, BitStreamDecoder, Endianness, BitOrder};
 pub use context::{EncodeContext, FieldValue};
 
+/// Canonical error codes shared with the TypeScript, Go, and Python runtimes.
+///
+/// The exact string values are part of the cross-language wire contract — code
+/// in any of the four target languages can compare an error's `.code()` (or
+/// `.code` / `LastErrorCode`) against these constants and get a deterministic
+/// answer for retry / propagate / log decisions.
+pub mod error_code {
+    pub const INCOMPLETE_DATA: &str = "INCOMPLETE_DATA";
+    pub const INVALID_VALUE: &str = "INVALID_VALUE";
+    pub const INVALID_ENCODING: &str = "INVALID_ENCODING";
+    pub const INVALID_UTF8: &str = "INVALID_UTF8";
+    pub const INVALID_VARIANT: &str = "INVALID_VARIANT";
+    pub const ALIGNMENT_REQUIRED: &str = "ALIGNMENT_REQUIRED";
+    pub const OUT_OF_BOUNDS: &str = "OUT_OF_BOUNDS";
+    pub const STACK_OVERFLOW: &str = "STACK_OVERFLOW";
+    pub const SCHEMA_MISMATCH: &str = "SCHEMA_MISMATCH";
+    pub const CIRCULAR_REFERENCE: &str = "CIRCULAR_REFERENCE";
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinSchemaError {
+    /// Buffer exhausted before all required bytes were available. Maps to
+    /// the cross-language `INCOMPLETE_DATA` code; streaming consumers treat
+    /// this as the "pull another chunk" signal.
     UnexpectedEof,
+    /// A length-prefixed string was not valid UTF-8.
     InvalidUtf8,
+    /// A value was out of range for its declared type (length negative,
+    /// bit width > 64, etc.). Carries a free-form message.
     InvalidValue(String),
-    InvalidVariant(u64),
+    /// A discriminated-union discriminator didn't match any declared arm.
+    /// The string carries the offending discriminator value as a debug
+    /// representation (e.g. `"42"`, `"0xABCD"`, or `"Some(2)"`).
+    InvalidVariant(String),
+    /// Feature requested by the schema isn't implemented in this generator
+    /// or runtime yet. (Rust-specific; falls under SCHEMA_MISMATCH at the
+    /// cross-language level.)
     NotImplemented(String),
+    /// Context-threaded decode is missing a required parent field. Surfaces
+    /// at the SCHEMA_MISMATCH code at the cross-language level.
     ContextMissing(String),
+    /// Wire-format invariant violated (DER indefinite length, LEB128
+    /// overflow, EBML missing marker bit, ...).
+    InvalidEncoding(String),
+    /// Byte-aligned operation attempted at a non-zero bit offset.
+    AlignmentRequired(String),
+    /// Seek / peek referenced a byte position outside the buffer.
+    OutOfBounds(String),
+    /// Pointer / position-stack recursion exceeded the configured limit.
+    StackOverflow,
+    /// Pointer graph contained an infinite loop.
+    CircularReference,
+}
+
+impl BinSchemaError {
+    /// Canonical cross-language error code for this error. Stable string
+    /// values shared with the TypeScript / Go / Python runtimes — useful for
+    /// retry-vs-propagate decisions in streaming consumers.
+    pub fn code(&self) -> &'static str {
+        match self {
+            BinSchemaError::UnexpectedEof => error_code::INCOMPLETE_DATA,
+            BinSchemaError::InvalidUtf8 => error_code::INVALID_UTF8,
+            BinSchemaError::InvalidValue(_) => error_code::INVALID_VALUE,
+            BinSchemaError::InvalidVariant(_) => error_code::INVALID_VARIANT,
+            BinSchemaError::NotImplemented(_) => error_code::SCHEMA_MISMATCH,
+            BinSchemaError::ContextMissing(_) => error_code::SCHEMA_MISMATCH,
+            BinSchemaError::InvalidEncoding(_) => error_code::INVALID_ENCODING,
+            BinSchemaError::AlignmentRequired(_) => error_code::ALIGNMENT_REQUIRED,
+            BinSchemaError::OutOfBounds(_) => error_code::OUT_OF_BOUNDS,
+            BinSchemaError::StackOverflow => error_code::STACK_OVERFLOW,
+            BinSchemaError::CircularReference => error_code::CIRCULAR_REFERENCE,
+        }
+    }
 }
 
 impl std::fmt::Display for BinSchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BinSchemaError::UnexpectedEof => write!(f, "Unexpected end of input"),
-            BinSchemaError::InvalidUtf8 => write!(f, "Invalid UTF-8 data"),
-            BinSchemaError::InvalidValue(msg) => write!(f, "Invalid value: {}", msg),
-            BinSchemaError::InvalidVariant(v) => write!(f, "Invalid variant discriminator: {}", v),
-            BinSchemaError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
-            BinSchemaError::ContextMissing(field) => write!(f, "Context missing required field: {}", field),
+            BinSchemaError::UnexpectedEof => write!(f, "[INCOMPLETE_DATA] Unexpected end of input"),
+            BinSchemaError::InvalidUtf8 => write!(f, "[INVALID_UTF8] Invalid UTF-8 data"),
+            BinSchemaError::InvalidValue(msg) => write!(f, "[INVALID_VALUE] {}", msg),
+            BinSchemaError::InvalidVariant(msg) => write!(f, "[INVALID_VARIANT] {}", msg),
+            BinSchemaError::NotImplemented(msg) => write!(f, "[SCHEMA_MISMATCH] Not implemented: {}", msg),
+            BinSchemaError::ContextMissing(field) => write!(f, "[SCHEMA_MISMATCH] Context missing required field: {}", field),
+            BinSchemaError::InvalidEncoding(msg) => write!(f, "[INVALID_ENCODING] {}", msg),
+            BinSchemaError::AlignmentRequired(msg) => write!(f, "[ALIGNMENT_REQUIRED] {}", msg),
+            BinSchemaError::OutOfBounds(msg) => write!(f, "[OUT_OF_BOUNDS] {}", msg),
+            BinSchemaError::StackOverflow => write!(f, "[STACK_OVERFLOW] Position stack depth exceeded"),
+            BinSchemaError::CircularReference => write!(f, "[CIRCULAR_REFERENCE] Pointer graph contains an infinite loop"),
         }
     }
 }

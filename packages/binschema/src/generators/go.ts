@@ -1512,7 +1512,7 @@ function generateChoiceDecodeFunction(
     lines.push(`\t\treturn result, nil`);
   }
   lines.push(`\tdefault:`);
-  lines.push(`\t\treturn nil, fmt.Errorf("unknown discriminator value: %d", discriminator)`);
+  lines.push(`\t\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown discriminator value: %d", discriminator)`);
   lines.push(`\t}`);
   lines.push(`}`);
   lines.push(``);
@@ -1841,7 +1841,7 @@ function generateDiscriminatedUnion(name: string, typeDef: any, defaultEndiannes
 
     if (!isFirst) {
       lines.push(`\t} else {`);
-      lines.push(`\t\treturn nil, fmt.Errorf("unknown discriminator: %v", discriminator)`);
+      lines.push(`\t\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown discriminator: %v", discriminator)`);
       lines.push(`\t}`);
     }
   } else if (discriminator.field) {
@@ -3058,7 +3058,7 @@ function generateInlineDiscriminatedUnionDecode(
     lines.push(`${indent}\t${targetVar} = map[string]interface{}{"type": "${variantType}", "value": variantValue}`);
   }
   lines.push(`${indent}default:`);
-  lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value: %v", discriminatorValue)`);
+  lines.push(`${indent}\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown discriminator value: %v", discriminatorValue)`);
   lines.push(`${indent}}`);
 
   return lines;
@@ -3568,7 +3568,7 @@ function generateEncodeArrayWithBackReference(
   }
 
   lines.push(`${indent}\tdefault:`);
-  lines.push(`${indent}\t\treturn nil, fmt.Errorf("unknown variant type in ${arrName}: %T", ${itemVar})`);
+  lines.push(`${indent}\t\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown variant type in ${arrName}: %T", ${itemVar})`);
   lines.push(`${indent}\t}`);
   lines.push(`${indent}}`);
 
@@ -3749,8 +3749,40 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
   // Use field-level endianness from inline object if available
   const valueEndianness = (valueField as any).endianness || endianness;
   const valueRuntimeEndianness = mapEndianness(valueEndianness);
-  const innerLines = generateEncodeFieldImpl(valueField, `*${fieldName}`, valueEndianness, valueRuntimeEndianness, indent + "\t", schema);
-  lines.push(...innerLines);
+  // Special-case bytes: the array-encoder path used by `bytes` writes
+  // `result.{fieldName}`/`for _, *x := range` patterns that break when
+  // fieldName is empty (optional). Inline the byte encoding instead.
+  if ((valueField as any).type === "bytes") {
+    const kind = (valueField as any).kind || "fixed";
+    const lengthType = (valueField as any).length_type || "uint8";
+    const inner = indent + "\t";
+    const ref = `(*${fieldName})`;
+    if (kind === "length_prefixed") {
+      switch (lengthType) {
+        case "uint8":
+          lines.push(`${inner}encoder.WriteUint8(uint8(len(${ref})))`);
+          break;
+        case "uint16":
+          lines.push(`${inner}encoder.WriteUint16(uint16(len(${ref})), runtime.${valueRuntimeEndianness})`);
+          break;
+        case "uint32":
+          lines.push(`${inner}encoder.WriteUint32(uint32(len(${ref})), runtime.${valueRuntimeEndianness})`);
+          break;
+        case "uint64":
+          lines.push(`${inner}encoder.WriteUint64(uint64(len(${ref})), runtime.${valueRuntimeEndianness})`);
+          break;
+      }
+    }
+    lines.push(`${inner}for _, b := range ${ref} {`);
+    lines.push(`${inner}\tencoder.WriteUint8(b)`);
+    lines.push(`${inner}}`);
+    if (kind === "null_terminated") {
+      lines.push(`${inner}encoder.WriteUint8(0)`);
+    }
+  } else {
+    const innerLines = generateEncodeFieldImpl(valueField, `*${fieldName}`, valueEndianness, valueRuntimeEndianness, indent + "\t", schema);
+    lines.push(...innerLines);
+  }
 
   lines.push(`${indent}} else {`);
 
@@ -4526,22 +4558,76 @@ function generateDecodeOptional(field: any, fieldName: string, varName: string, 
   // Use field-level endianness from inline object if available
   const valueEndianness = (valueField as any).endianness || endianness;
   const valueRuntimeEndianness = mapEndianness(valueEndianness);
-  const innerLines = generateDecodeFieldImpl(valueField, "", valueVar, valueEndianness, valueRuntimeEndianness, indent + "\t", schema);
-  lines.push(...innerLines);
-
-  // Assign to result - type references return pointers, primitives need address-of
-  // Inline objects and string aliases are never type refs — they decode to primitives
-  const primitiveTypes = ["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "string", "array", "bit", "int", "varlength", "bool", "bytes"];
-  const resolvedType = typeof valueType === "object" ? valueType.type : valueType;
-  const isTypeRef = typeof valueType === "string"
-    && !primitiveTypes.includes(valueType)
-    && !(schema && isStringTypeAlias(valueType, schema));
-  if (isTypeRef) {
-    // Type reference decode returns pointer, assign directly
-    lines.push(`${indent}\tresult.${fieldName} = ${valueVar}`);
-  } else {
-    // Primitive value, take address
+  // Special-case bytes: the array-decoder path used by `bytes` writes
+  // `result.{fieldName}` directly, which breaks when fieldName is empty
+  // (optional). Inline the byte decoding into a local var.
+  const valueIsBytes = (valueField as any).type === "bytes";
+  if (valueIsBytes) {
+    const kind = (valueField as any).kind || "fixed";
+    const lengthType = (valueField as any).length_type || "uint8";
+    const inner = indent + "\t";
+    if (kind === "fixed") {
+      const length = (valueField as any).length || 0;
+      lines.push(`${inner}${valueVar} := make([]byte, ${length})`);
+      lines.push(`${inner}for i := 0; i < ${length}; i++ {`);
+      lines.push(`${inner}\tb, err := decoder.ReadUint8()`);
+      lines.push(`${inner}\tif err != nil { return nil, fmt.Errorf("failed to decode ${field.name}: %w", err) }`);
+      lines.push(`${inner}\t${valueVar}[i] = b`);
+      lines.push(`${inner}}`);
+    } else if (kind === "length_prefixed") {
+      let readLen: string;
+      switch (lengthType) {
+        case "uint8":
+          readLen = "decoder.ReadUint8()";
+          break;
+        case "uint16":
+          readLen = `decoder.ReadUint16(runtime.${valueRuntimeEndianness})`;
+          break;
+        case "uint32":
+          readLen = `decoder.ReadUint32(runtime.${valueRuntimeEndianness})`;
+          break;
+        case "uint64":
+          readLen = `decoder.ReadUint64(runtime.${valueRuntimeEndianness})`;
+          break;
+        default:
+          readLen = "decoder.ReadUint8()";
+      }
+      lines.push(`${inner}${valueVar}Len, err := ${readLen}`);
+      lines.push(`${inner}if err != nil { return nil, fmt.Errorf("failed to decode ${field.name} length: %w", err) }`);
+      lines.push(`${inner}${valueVar} := make([]byte, ${valueVar}Len)`);
+      lines.push(`${inner}for i := 0; i < int(${valueVar}Len); i++ {`);
+      lines.push(`${inner}\tb, err := decoder.ReadUint8()`);
+      lines.push(`${inner}\tif err != nil { return nil, fmt.Errorf("failed to decode ${field.name}: %w", err) }`);
+      lines.push(`${inner}\t${valueVar}[i] = b`);
+      lines.push(`${inner}}`);
+    } else if (kind === "null_terminated") {
+      lines.push(`${inner}${valueVar} := []byte{}`);
+      lines.push(`${inner}for {`);
+      lines.push(`${inner}\tb, err := decoder.ReadUint8()`);
+      lines.push(`${inner}\tif err != nil { return nil, fmt.Errorf("failed to decode ${field.name}: %w", err) }`);
+      lines.push(`${inner}\tif b == 0 { break }`);
+      lines.push(`${inner}\t${valueVar} = append(${valueVar}, b)`);
+      lines.push(`${inner}}`);
+    }
     lines.push(`${indent}\tresult.${fieldName} = &${valueVar}`);
+  } else {
+    const innerLines = generateDecodeFieldImpl(valueField, "", valueVar, valueEndianness, valueRuntimeEndianness, indent + "\t", schema);
+    lines.push(...innerLines);
+
+    // Assign to result - type references return pointers, primitives need address-of
+    // Inline objects and string aliases are never type refs — they decode to primitives
+    const primitiveTypes = ["uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64", "float32", "float64", "string", "array", "bit", "int", "varlength", "bool", "bytes"];
+    const resolvedType = typeof valueType === "object" ? valueType.type : valueType;
+    const isTypeRef = typeof valueType === "string"
+      && !primitiveTypes.includes(valueType)
+      && !(schema && isStringTypeAlias(valueType, schema));
+    if (isTypeRef) {
+      // Type reference decode returns pointer, assign directly
+      lines.push(`${indent}\tresult.${fieldName} = ${valueVar}`);
+    } else {
+      // Primitive value, take address
+      lines.push(`${indent}\tresult.${fieldName} = &${valueVar}`);
+    }
   }
 
   lines.push(`${indent}}`);
@@ -5818,7 +5904,7 @@ function generateDecodeInlineDiscriminatedUnion(
       if (peekFallbackVariant) {
         lines.push(...generateVariantDecodeCall(peekFallbackVariant, indent + "\t"));
       } else {
-        lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value: %v", discriminator)`);
+        lines.push(`${indent}\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown discriminator value: %v", discriminator)`);
       }
       lines.push(`${indent}}`);
     }
@@ -5888,13 +5974,13 @@ function generateDecodeInlineDiscriminatedUnion(
       if (fieldFallbackVariant) {
         lines.push(...generateVariantDecodeCall(fieldFallbackVariant, indent + "\t"));
       } else {
-        lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
+        lines.push(`${indent}\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
       }
       lines.push(`${indent}}`);
     }
   } else {
     lines.push(`${indent}// TODO: Unknown discriminator type for inline discriminated_union`);
-    lines.push(`${indent}return nil, fmt.Errorf("unsupported discriminator type for ${field.name || 'union'}")`);
+    lines.push(`${indent}return nil, runtime.NewError(runtime.ErrorSchemaMismatch, "unsupported discriminator type for ${field.name || 'union'}")`);
   }
 
   lines.push(``);
@@ -5996,7 +6082,7 @@ function generateDecodeStandaloneDUFieldDiscriminator(
     if (fallbackVariant) {
       lines.push(...emitVariantCall(fallbackVariant, indent + "\t"));
     } else {
-      lines.push(`${indent}\treturn nil, fmt.Errorf("unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
+      lines.push(`${indent}\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidVariant, "unknown discriminator value for ${field.name || 'union'}: %v", ${discriminatorVar})`);
     }
     lines.push(`${indent}}`);
   }

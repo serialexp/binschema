@@ -84,7 +84,7 @@ Phase 1 (`length_prefixed_items` array kind) is shipped — the wire-format
 tests live in `tests/streaming/greedy-buffering.test.ts` and the kind is
 exercised across the corpus. Remaining phases:
 
-### Phase 2: error codes for cross-language parity — DONE (TS side)
+### Phase 2: error codes for cross-language parity — DONE (all languages)
 
 - `BinSchemaError` class with `.code`, `.position`, `.context` lives in
   `src/runtime/errors.ts` and is re-exported from the package root.
@@ -92,19 +92,50 @@ exercised across the corpus. Remaining phases:
   throw `BinSchemaError` at every former `throw new Error` site (28 sites).
 - Code set: `INCOMPLETE_DATA`, `INVALID_VALUE`, `INVALID_ENCODING`,
   `INVALID_UTF8`, `INVALID_VARIANT`, `ALIGNMENT_REQUIRED`, `OUT_OF_BOUNDS`,
-  `STACK_OVERFLOW`, `SCHEMA_MISMATCH`, `CIRCULAR_REFERENCE`. Last four are
-  reserved for codegen / streaming use, not yet thrown by the runtime.
+  `STACK_OVERFLOW`, `SCHEMA_MISMATCH`, `CIRCULAR_REFERENCE`.
 - Coverage in `src/tests/runtime/error-codes.test.ts` (31 assertions
   across all currently-thrown codes + happy-path sanity).
-- Remaining work to close the cross-language loop:
-  - Align Go `LastErrorCode` values with this exact code set (Go currently
-    only sets `INCOMPLETE_DATA`; add the others where Go throws).
-  - Add a `code: ErrorCodeValue` mapping on Rust `BinSchemaError` variants
-    so the wire-level contract is symmetric.
-  - Mirror the constants in Python runtime.
-  - Generated codegen should raise `BinSchemaError(INVALID_VARIANT, ...)`
-    on unknown discriminators and `BinSchemaError(INVALID_UTF8, ...)` on
-    string decode failures (currently throws plain `Error`).
+- Cross-language parity — DONE:
+  - **Go**: `go/runtime/errors.go` defines all 10 `Error*` constants and a
+    struct-based `BinSchemaError` with `Code`/`Message`/`Position`/`Context`.
+    `bitstream.go` raises `NewError(...)` / `NewErrorAt(...)` /
+    `NewErrorf(...)` with the appropriate code at every former
+    `fmt.Errorf` / `errors.New` site (14 sites migrated). The legacy
+    `LastErrorCode *string` sentinel is removed.
+  - **Rust**: `rust/src/lib.rs` exposes the 10 codes via `error_code::*`
+    constants and a `BinSchemaError::code()` accessor mapping each variant
+    to its canonical string. New variants `InvalidEncoding`,
+    `AlignmentRequired`, `OutOfBounds`, `StackOverflow`,
+    `CircularReference` added; `InvalidVariant` widened from `u64` to
+    `String` so codegen can format arbitrary discriminator debug values.
+  - **Python**: `python/runtime/errors.py` defines `ErrorCode` constants
+    and `BinSchemaError(Exception)` with `code`/`position`/`context` slots.
+    `bitstream.py` raises `BinSchemaError(ErrorCode.X, ...)` at every
+    former `raise ValueError/RuntimeError` site (28 sites migrated).
+- Codegen-emitted errors — DONE:
+  - **TS** (`src/generators/typescript.ts`, `string-support.ts`,
+    `computed-fields.ts`, `size-calculation.ts`): unknown discriminator
+    sites now throw `new BinSchemaError(ErrorCode.INVALID_VARIANT, ...)`;
+    UTF-8 decode wraps `TextDecoder({fatal:true})` in a try/catch that
+    re-throws as `BinSchemaError(ErrorCode.INVALID_UTF8, ...)`.
+  - **Go** (`src/generators/go.ts`): all 7 `fmt.Errorf("unknown
+    discriminator..." )` codegen sites now emit
+    `runtime.NewErrorf(runtime.ErrorInvalidVariant, ...)`.
+  - **Rust** (`src/generators/rust.ts`): unknown-discriminator sites that
+    were emitting `BinSchemaError::NotImplemented(...)` or
+    `InvalidVariant(u64)` now uniformly emit
+    `BinSchemaError::InvalidVariant(format!(...))`.
+  - **Python** (`src/generators/python.ts`): unknown-discriminator /
+    unknown-variant sites raise `BinSchemaError(ErrorCode.INVALID_VARIANT,
+    ...)`; a `_decode_text(...)` runtime helper wraps `bytes.decode(...)`
+    and re-raises `UnicodeDecodeError` as
+    `BinSchemaError(ErrorCode.INVALID_UTF8, ...)`. All 12 string-decode
+    sites in codegen route through it.
+- Validation: TS 1135/1135, Go 771/771, Python 794/794, Rust 756/756 all
+  passing after the migration. New TS suite
+  `src/tests/generators/codegen-error-codes.test.ts` confirms generated
+  TS decoders throw `BinSchemaError` with `INVALID_VARIANT` /
+  `INVALID_UTF8` codes end-to-end.
 
 ### Phase 3: streaming layer — DONE (TS runtime)
 
@@ -137,23 +168,48 @@ exercised across the corpus. Remaining phases:
   `chunkSizes` on TestCase and references symbols that the codegen will
   emit (`decodeArrayStream`/`decodeUint32ArrayStream`/etc.).
 
-### Phase 4: streaming codegen (~1–2 days)
+### Phase 4: streaming codegen — DONE (TS)
 
-- `generate_streaming: true` option on the code generator.
-- Detect root-level arrays; for `length_prefixed_items` emit
-  `decode{TypeName}Stream()` async generator, for standard kinds emit
-  `decode{TypeName}StreamGreedy()`. Generate both sync and streaming
-  decoders side-by-side.
-- TypeDoc on the generated streaming functions; document when to pick
-  streaming over batch.
+- `generate_streaming: true` option on `GenerateTypeScriptOptions`.
+- Stream-eligible types are detected automatically: a top-level struct
+  whose `sequence` is exactly one `length_prefixed` or `length_prefixed_items`
+  array. For each, the generator emits `decode{TypeName}Stream(reader)`
+  alongside the existing synchronous `{TypeName}Decoder` class. The same
+  function name is used for both array kinds — the underlying primitive
+  (`decodeArrayGreedy` vs `decodeArrayStream`) differs but the caller-facing
+  async generator shape is identical.
+- Detection + emission live in
+  `packages/binschema/src/generators/typescript/streaming-codegen.ts`.
+  Item decode strategies: primitives inline a `d.read*()` call; named
+  user-defined structs slice the outer buffer at `d.bytes.subarray(d.position)`
+  and instantiate the existing per-item Decoder class, then advance the
+  outer decoder by `inner.position`.
+- The test runner (`packages/binschema/src/test-runner/runner.ts`) now
+  auto-enables `generate_streaming` for any suite whose test cases set
+  `chunkSizes`, and extracts items from the single-array-field wrapper
+  struct before comparing against the streaming yield. Coverage:
+  `tests/streaming/streaming-codegen.test.ts` (3 suites, 18 assertions
+  spanning primitive greedy, named-struct greedy, and per-item framing).
+- Worked example: `packages/binschema/src/examples/streaming-decode.ts` —
+  builds a schema in-memory, generates streaming code, exercises four
+  patterns (single chunk, 1-byte chunks, length_prefixed_items, network and
+  decode errors).
 
-### Phase 5: docs & examples (~1 day)
+### Phase 5: docs & examples — DONE (TS)
 
-- Streaming section in `CLAUDE.md` and main README.
-- `examples/`: simple streaming (fetch → incremental decode), web client
-  (WebSocket/fetch), greedy buffering against an existing protocol, error
-  handling (network failure, invalid data).
-- Document error codes and their meanings; troubleshooting guide.
+- README streaming section: when-to-use, mechanism, error-code table,
+  greedy vs per-item-frame trade-off.
+- CLAUDE.md streaming section: codegen knob, runtime entry points, test
+  runner integration via `chunkSizes`.
+- `packages/binschema/src/examples/streaming-decode.ts` covers the four
+  spec'd example shapes (chunked playback, greedy streaming, per-item
+  framing, error handling).
+
+### Phase 6 (future): cross-language streaming codegen
+
+- Go: streaming codegen + runtime support for `io.Reader`-style inputs.
+- Rust: streaming codegen + runtime support for `AsyncRead` / `Stream`.
+- Python: streaming codegen + runtime support for async iterators.
 
 ### Streaming integration / cross-language
 

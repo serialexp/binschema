@@ -139,6 +139,81 @@ Supports all array kinds: `fixed`, `length_prefixed`, `field_referenced`, `null_
 }
 ```
 
+## Streaming
+
+For protocols that frame their data as a length-prefixed array of records — chat
+messages, telemetry samples, log lines arriving over a WebSocket or `fetch`
+ReadableStream — BinSchema can generate an **async-generator decoder** that
+yields one item at a time as bytes arrive, without buffering the whole array
+in memory.
+
+Enable streaming codegen with the `generate_streaming` option:
+
+```ts
+import { generateTypeScript } from "binschema";
+
+const code = generateTypeScript(schema, { generate_streaming: true });
+```
+
+For every top-level type that consists of **exactly one length-prefixed
+array** (`length_prefixed` or `length_prefixed_items` kind), the generator
+emits an extra function alongside the synchronous decoder class:
+
+```ts
+// Synchronous (existing):
+const decoder = new MessageArrayDecoder(allBytes);
+const result = decoder.decode();  // requires the entire array up front
+
+// Streaming (new):
+for await (const message of decodeMessageArrayStream(reader)) {
+  handle(message);  // first item arrives as soon as enough bytes have buffered
+}
+```
+
+`reader` is a `ReadableStreamDefaultReader<Uint8Array>` — obtain one from
+`fetch().body.getReader()`, a WebSocket adapter, or any source that produces
+`Uint8Array` chunks.
+
+### When to use streaming vs sync
+
+- **Sync (`new XDecoder(bytes).decode()`)** — the data is already in memory or
+  small enough that latency to first byte doesn't matter. Fastest per-item.
+- **Streaming (`decodeXStream(reader)`)** — the array is large, the source is
+  chunked (network, file pipe), or you want to start processing items before
+  the tail arrives. Yields with `for await` so a slow consumer naturally
+  applies backpressure to the underlying reader.
+
+### Mechanism
+
+- `length_prefixed_items` arrays (per-item byte-length prefix on the wire):
+  the streaming layer reads the prefix, accumulates exactly that many bytes
+  from the reader, then decodes the item over the slice. No speculation.
+- `length_prefixed` arrays (no per-item prefix): the streaming layer
+  speculatively decodes each item against the current buffer. On
+  `BinSchemaError(INCOMPLETE_DATA)` it pulls another chunk and retries from
+  the same buffer position. Any other error code is fatal and propagates with
+  per-item context.
+
+### Error codes
+
+The streaming layer throws `BinSchemaError` instances with a `.code` field
+drawn from `ErrorCode`:
+
+| Code                  | Meaning                                                  |
+|-----------------------|----------------------------------------------------------|
+| `INCOMPLETE_DATA`     | Stream ended before all items / item bytes were read     |
+| `INVALID_VALUE`       | A read returned an out-of-range value                    |
+| `INVALID_ENCODING`    | Wire-format invariant violated (e.g. bad bitfield width) |
+| `INVALID_UTF8`        | A length-prefixed string was not valid UTF-8             |
+| `INVALID_VARIANT`     | Discriminated-union discriminator didn't match any arm   |
+| `ALIGNMENT_REQUIRED`  | Byte-aligned read attempted at a non-zero bit offset     |
+| `OUT_OF_BOUNDS`       | Seek/peek past buffer end                                |
+
+Network errors from the underlying `reader.read()` propagate unchanged so
+callers can distinguish "decoder gave up" from "socket died". Errors carry an
+`.context` string with the item index (`"item 3/100"`) and a `.position`
+byte offset where applicable.
+
 ## Examples
 
 See the `examples/` directory for complete schemas:

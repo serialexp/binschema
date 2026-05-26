@@ -204,7 +204,11 @@ export function generateDecodeString(
 
       // Convert bytes to string
       if (encoding === "utf8") {
-        code += `${indent}${target} = new TextDecoder().decode(new Uint8Array(${bytesVarName}));\n`;
+        code += `${indent}try {\n`;
+        code += `${indent}  ${target} = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(${bytesVarName}));\n`;
+        code += `${indent}} catch (e) {\n`;
+        code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_UTF8, "Invalid UTF-8 in decoded string", { cause: e as Error });\n`;
+        code += `${indent}}\n`;
       } else if (encoding === "ascii" || encoding === "latin1") {
         code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
       }
@@ -237,7 +241,11 @@ export function generateDecodeString(
 
       // Convert bytes to string (only up to first null)
       if (encoding === "utf8") {
-        code += `${indent}${target} = new TextDecoder().decode(${bytesVarName}.subarray(0, actualLength));\n`;
+        code += `${indent}try {\n`;
+        code += `${indent}  ${target} = new TextDecoder("utf-8", { fatal: true }).decode(${bytesVarName}.subarray(0, actualLength));\n`;
+        code += `${indent}} catch (e) {\n`;
+        code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_UTF8, "Invalid UTF-8 in decoded string", { cause: e as Error });\n`;
+        code += `${indent}}\n`;
       } else if (encoding === "ascii" || encoding === "latin1") {
         code += `${indent}${target} = String.fromCharCode(...${bytesVarName}.subarray(0, actualLength));\n`;
       }
@@ -310,7 +318,11 @@ function generateBytesToString(
     code += `${indent}}\n`;
     code += `${indent}${target} = String.fromCharCode(...${unitsVarName});\n`;
   } else if (encoding === "utf8") {
-    code += `${indent}${target} = new TextDecoder().decode(${bytesVarName});\n`;
+    code += `${indent}try {\n`;
+    code += `${indent}  ${target} = new TextDecoder("utf-8", { fatal: true }).decode(${bytesVarName});\n`;
+    code += `${indent}} catch (e) {\n`;
+    code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_UTF8, "Invalid UTF-8 in decoded string", { cause: e as Error });\n`;
+    code += `${indent}}\n`;
   } else if (encoding === "ascii" || encoding === "latin1") {
     code += `${indent}${target} = String.fromCharCode(...${bytesVarName});\n`;
   }

@@ -672,3 +672,29 @@ If you encounter issues with recursive schemas (especially array `items` fields 
 - Fields with `if` conditions are only encoded/decoded when condition is true
 - Condition can reference previous fields in the sequence
 - Used for protocol variants and optional features
+
+### Streaming
+
+For chunked inputs (network sockets, `fetch()` ReadableStreams, WebSocket
+adapters) the TypeScript generator can emit async-generator wrappers that
+decode one item at a time without buffering the full array. Pass
+`generate_streaming: true` to `generateTypeScript()`. Stream-eligible types
+are top-level structs whose entire body is a single length-prefixed array
+(`length_prefixed` or `length_prefixed_items`). The generated function is
+named `decode{TypeName}Stream(reader)` and yields items via `for await`.
+
+The streaming runtime primitives (`decodeArrayStream`, `decodeArrayGreedy`,
+`readExactly`) live in `src/runtime/stream-decoder.ts` and can also be used
+directly without codegen — useful for protocols that don't fit the
+single-array-wrapper shape.
+
+Errors from the streaming layer are always `BinSchemaError` instances with a
+`.code` from the `ErrorCode` union. `INCOMPLETE_DATA` triggers chunk pulls
+(non-fatal); other codes propagate to the caller with per-item context
+(`"item 3/100"`). Errors from the underlying `reader.read()` pass through
+unchanged so consumers can distinguish wire failures from decode failures.
+
+When writing tests, set `chunkSizes` on a TestCase to drive the test runner's
+streaming path. The runner auto-enables `generate_streaming` for any suite
+that contains a chunked test case, generates the `decode{TypeName}Stream`
+function, and exercises it alongside the standard sync decode.

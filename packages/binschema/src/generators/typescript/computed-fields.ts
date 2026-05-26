@@ -43,7 +43,7 @@ function generateDiscriminatedUnionSizeDispatch(
   const hasFallback = variants.some((v: any) => !v.when);
   if (!hasFallback) {
     code += ` else {\n`;
-    code += `${indent}  throw new Error(\`Unknown variant type: \${${targetPath}.type}\`);\n`;
+    code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type: \${${targetPath}.type}\`);\n`;
     code += `${indent}}`;
   }
   code += "\n";
@@ -231,7 +231,7 @@ function generateFieldEncodingToBytesCore(
         }
         if (choices.length > 0) {
           code += `${indent}    } else {\n`;
-          code += `${indent}      throw new Error(\`Unknown choice type: \${(item as any).type}\`);\n`;
+          code += `${indent}      throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
           code += `${indent}    }\n`;
         }
       } else {

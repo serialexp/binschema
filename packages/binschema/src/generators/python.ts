@@ -786,7 +786,7 @@ function generateDiscriminatedUnionEncode(field: any, fieldAccess: string, inden
   }
 
   code += `${indent}else:\n`;
-  code += `${indent}    raise ValueError(f"Unknown variant type: {_disc_type}")\n`;
+  code += `${indent}    raise BinSchemaError(ErrorCode.INVALID_VARIANT, f"Unknown variant type: {_disc_type}")\n`;
 
   return code;
 }
@@ -829,7 +829,7 @@ function generateChoiceEncode(field: any, fieldAccess: string, indent: string, e
   }
 
   code += `${indent}else:\n`;
-  code += `${indent}    raise ValueError(f"Unknown choice type: {_choice_type}")\n`;
+  code += `${indent}    raise BinSchemaError(ErrorCode.INVALID_VARIANT, f"Unknown choice type: {_choice_type}")\n`;
 
   return code;
 }
@@ -1793,11 +1793,11 @@ function generateConstDecode(field: any, fieldAssign: string, indent: string, en
     const pyEncoding = pyEncodingName(encoding, field.endianness || endianness);
     if (field.length !== undefined) {
       code += `${indent}_const_bytes = decoder.read_bytes_slice(${field.length})\n`;
-      code += `${indent}${fieldAssign} = _const_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(_const_bytes.rstrip(b'\\x00'), "${pyEncoding}")\n`;
     } else {
       const constLen = Buffer.byteLength(field.const, 'utf8');
       code += `${indent}_const_bytes = decoder.read_bytes_slice(${constLen})\n`;
-      code += `${indent}${fieldAssign} = _const_bytes.decode("${pyEncoding}")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(_const_bytes, "${pyEncoding}")\n`;
     }
     return code;
   }
@@ -1865,9 +1865,9 @@ function generateStringDecode(field: any, fieldAssign: string, resultPath: strin
   if (kind === "fixed" && field.length !== undefined) {
     code += `${indent}_str_bytes = decoder.read_bytes_slice(${field.length})\n`;
     if (isUtf16) {
-      code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}").rstrip("\\x00")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(_str_bytes, "${pyEncoding}").rstrip("\\x00")\n`;
     } else {
-      code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(_str_bytes.rstrip(b'\\x00'), "${pyEncoding}")\n`;
     }
   } else if (kind === "null_terminated" || field.terminator !== undefined) {
     const terminator = field.terminator !== undefined ? field.terminator : 0;
@@ -1881,7 +1881,7 @@ function generateStringDecode(field: any, fieldAssign: string, resultPath: strin
       code += `${indent}        break\n`;
       code += `${indent}    _str_buf.append(_b0)\n`;
       code += `${indent}    _str_buf.append(_b1)\n`;
-      code += `${indent}${fieldAssign} = _str_buf.decode("${pyEncoding}")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(bytes(_str_buf), "${pyEncoding}")\n`;
     } else {
       code += `${indent}_str_buf = bytearray()\n`;
       code += `${indent}while True:\n`;
@@ -1889,33 +1889,33 @@ function generateStringDecode(field: any, fieldAssign: string, resultPath: strin
       code += `${indent}    if _ch == ${terminator}:\n`;
       code += `${indent}        break\n`;
       code += `${indent}    _str_buf.append(_ch)\n`;
-      code += `${indent}${fieldAssign} = _str_buf.decode("${pyEncoding}")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(bytes(_str_buf), "${pyEncoding}")\n`;
     }
   } else if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     code += generateLengthPrefixDecode(lengthType, '_str_len', indent, endianness);
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
-    code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
+    code += `${indent}${fieldAssign} = _decode_text(_str_bytes, "${pyEncoding}")\n`;
   } else if (kind === "field_referenced" && field.length_field) {
     code += `${indent}_str_len = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
-    code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
+    code += `${indent}${fieldAssign} = _decode_text(_str_bytes, "${pyEncoding}")\n`;
   } else if (field.length !== undefined) {
     // Fallback fixed-length
     code += `${indent}_str_bytes = decoder.read_bytes_slice(${field.length})\n`;
     if (isUtf16) {
-      code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}").rstrip("\\x00")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(_str_bytes, "${pyEncoding}").rstrip("\\x00")\n`;
     } else {
-      code += `${indent}${fieldAssign} = _str_bytes.rstrip(b'\\x00').decode("${pyEncoding}")\n`;
+      code += `${indent}${fieldAssign} = _decode_text(_str_bytes.rstrip(b'\\x00'), "${pyEncoding}")\n`;
     }
   } else if (field.length_field) {
     code += `${indent}_str_len = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_str_len)\n`;
-    code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
+    code += `${indent}${fieldAssign} = _decode_text(_str_bytes, "${pyEncoding}")\n`;
   } else {
     code += `${indent}_remaining = len(decoder._bytes) - decoder.position\n`;
     code += `${indent}_str_bytes = decoder.read_bytes_slice(_remaining)\n`;
-    code += `${indent}${fieldAssign} = _str_bytes.decode("${pyEncoding}")\n`;
+    code += `${indent}${fieldAssign} = _decode_text(_str_bytes, "${pyEncoding}")\n`;
   }
   return code;
 }
@@ -2197,7 +2197,7 @@ function generateDiscriminatedUnionDecode(field: any, fieldAssign: string, inden
       code += `${indent}    ${fieldAssign} = {"type": "${variant.type}", "value": decode_${toSnakeCase(variant.type)}(decoder, _root)}\n`;
     }
     code += `${indent}else:\n`;
-    code += `${indent}    raise ValueError(f"Unknown discriminator value: {_disc_val}")\n`;
+    code += `${indent}    raise BinSchemaError(ErrorCode.INVALID_VARIANT, f"Unknown discriminator value: {_disc_val}")\n`;
   }
 
   return code;
@@ -2255,7 +2255,7 @@ function generateChoiceDecode(field: any, fieldAssign: string, indent: string, e
   }
 
   code += `${indent}else:\n`;
-  code += `${indent}    raise ValueError(f"Unknown choice discriminator: {_choice_disc}")\n`;
+  code += `${indent}    raise BinSchemaError(ErrorCode.INVALID_VARIANT, f"Unknown choice discriminator: {_choice_disc}")\n`;
 
   return code;
 }
@@ -2372,7 +2372,7 @@ export function generatePython(
   lines.push(`from typing import Any`);
   lines.push(`import math`);
   lines.push(`import struct`);
-  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32, _resolve_deferred_patches`);
+  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32, _resolve_deferred_patches, BinSchemaError, ErrorCode, _decode_text`);
   lines.push(``);
   lines.push(``);
 
@@ -2746,7 +2746,7 @@ function generateInstanceDecode(inst: any, schema: BinarySchema, indent: string)
     }
     if (!hasFallback) {
       lines.push(`${indent}else:`);
-      lines.push(`${indent}    raise RuntimeError(f"Unknown discriminator value {_disc} for instance '${name}'")`);
+      lines.push(`${indent}    raise BinSchemaError(ErrorCode.INVALID_VARIANT, f"Unknown discriminator value {_disc} for instance '${name}'")`);
     }
   } else {
     throw new Error(`Unsupported instance type for '${name}': ${JSON.stringify(instType)}`);

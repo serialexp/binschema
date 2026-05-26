@@ -7,8 +7,6 @@ package runtime
 
 import (
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"hash/crc32"
 	"math"
 	"sync"
@@ -72,7 +70,6 @@ type BitStreamDecoder struct {
 	byteOffset    int
 	bitOffset     int // Bits read from current byte (0-7)
 	bitOrder      BitOrder
-	LastErrorCode *string // Cross-language error handling
 }
 
 // NewBitStreamDecoder creates a new decoder with the specified bit order
@@ -89,7 +86,6 @@ func (d *BitStreamDecoder) Reset(bytes []byte, bitOrder BitOrder) {
 	d.byteOffset = 0
 	d.bitOffset = 0
 	d.bitOrder = bitOrder
-	d.LastErrorCode = nil
 }
 
 // Decoder pools for different bit orders
@@ -162,16 +158,13 @@ func (d *BitStreamDecoder) Bytes() []byte {
 // input data and is only valid as long as that data is alive.
 func (d *BitStreamDecoder) ReadBytesSlice(n int) ([]byte, error) {
 	if d.bitOffset != 0 {
-		return nil, errors.New("ReadBytesSlice requires byte alignment")
+		return nil, NewError(ErrorAlignmentRequired, "ReadBytesSlice requires byte alignment")
 	}
 	if d.byteOffset+n > len(d.bytes) {
-		errCode := "INCOMPLETE_DATA"
-		d.LastErrorCode = &errCode
-		return nil, errors.New("unexpected end of stream")
+		return nil, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 	}
 	slice := d.bytes[d.byteOffset : d.byteOffset+n]
 	d.byteOffset += n
-	d.LastErrorCode = nil
 	return slice, nil
 }
 
@@ -180,11 +173,8 @@ func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 	if d.bitOffset == 0 {
 		// Byte-aligned: read directly
 		if d.byteOffset >= len(d.bytes) {
-			errCode := "INCOMPLETE_DATA"
-			d.LastErrorCode = &errCode
-			return 0, errors.New("unexpected end of stream")
+			return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 		}
-		d.LastErrorCode = nil
 		val := d.bytes[d.byteOffset]
 		d.byteOffset++
 		return val, nil
@@ -199,16 +189,13 @@ func (d *BitStreamDecoder) ReadUint8() (uint8, error) {
 		}
 		result |= bit << i
 	}
-	d.LastErrorCode = nil
 	return result, nil
 }
 
 // ReadBit reads a single bit
 func (d *BitStreamDecoder) ReadBit() (uint8, error) {
 	if d.byteOffset >= len(d.bytes) {
-		errCode := "INCOMPLETE_DATA"
-		d.LastErrorCode = &errCode
-		return 0, errors.New("unexpected end of stream")
+		return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 	}
 
 	currentByte := d.bytes[d.byteOffset]
@@ -239,9 +226,7 @@ func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
 	// Fast path: MSB-first reads of <=8 bits
 	if d.bitOrder == MSBFirst && numBits <= 8 && numBits > 0 {
 		if d.byteOffset >= len(d.bytes) {
-			errCode := "INCOMPLETE_DATA"
-			d.LastErrorCode = &errCode
-			return 0, errors.New("unexpected end of stream")
+			return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 		}
 		bitsAvailable := 8 - d.bitOffset
 		if numBits <= bitsAvailable {
@@ -254,14 +239,11 @@ func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
 				d.bitOffset = 0
 				d.byteOffset++
 			}
-			d.LastErrorCode = nil
 			return result, nil
 		}
 		// Cross byte boundary — read from two bytes
 		if d.byteOffset+1 >= len(d.bytes) {
-			errCode := "INCOMPLETE_DATA"
-			d.LastErrorCode = &errCode
-			return 0, errors.New("unexpected end of stream")
+			return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 		}
 		// Bits from current byte (high bits of result)
 		bitsFromFirst := bitsAvailable
@@ -278,7 +260,6 @@ func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
 			d.bitOffset = 0
 			d.byteOffset++
 		}
-		d.LastErrorCode = nil
 		return highPart | lowPart, nil
 	}
 
@@ -302,7 +283,6 @@ func (d *BitStreamDecoder) ReadBits(numBits int) (uint64, error) {
 			result |= uint64(bit) << i
 		}
 	}
-	d.LastErrorCode = nil
 	return result, nil
 }
 
@@ -393,9 +373,7 @@ func (e *BitStreamEncoder) WriteBits(value uint64, numBits int) {
 func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 	if d.bitOffset == 0 {
 		if d.byteOffset+2 > len(d.bytes) {
-			errCode := "INCOMPLETE_DATA"
-			d.LastErrorCode = &errCode
-			return 0, errors.New("unexpected end of stream")
+			return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 		}
 		var v uint16
 		if endianness == BigEndian {
@@ -404,7 +382,6 @@ func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 			v = binary.LittleEndian.Uint16(d.bytes[d.byteOffset:])
 		}
 		d.byteOffset += 2
-		d.LastErrorCode = nil
 		return v, nil
 	}
 
@@ -418,7 +395,6 @@ func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 		if err != nil {
 			return 0, err
 		}
-		d.LastErrorCode = nil
 		return (uint16(high) << 8) | uint16(low), nil
 	}
 
@@ -430,7 +406,6 @@ func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.LastErrorCode = nil
 	return (uint16(high) << 8) | uint16(low), nil
 }
 
@@ -438,9 +413,7 @@ func (d *BitStreamDecoder) ReadUint16(endianness Endianness) (uint16, error) {
 func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 	if d.bitOffset == 0 {
 		if d.byteOffset+4 > len(d.bytes) {
-			errCode := "INCOMPLETE_DATA"
-			d.LastErrorCode = &errCode
-			return 0, errors.New("unexpected end of stream")
+			return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 		}
 		var v uint32
 		if endianness == BigEndian {
@@ -449,7 +422,6 @@ func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 			v = binary.LittleEndian.Uint32(d.bytes[d.byteOffset:])
 		}
 		d.byteOffset += 4
-		d.LastErrorCode = nil
 		return v, nil
 	}
 
@@ -471,7 +443,6 @@ func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		d.LastErrorCode = nil
 		return (uint32(b0) << 24) | (uint32(b1) << 16) | (uint32(b2) << 8) | uint32(b3), nil
 	}
 
@@ -491,7 +462,6 @@ func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.LastErrorCode = nil
 	return (uint32(b3) << 24) | (uint32(b2) << 16) | (uint32(b1) << 8) | uint32(b0), nil
 }
 
@@ -499,9 +469,7 @@ func (d *BitStreamDecoder) ReadUint32(endianness Endianness) (uint32, error) {
 func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
 	if d.bitOffset == 0 {
 		if d.byteOffset+8 > len(d.bytes) {
-			errCode := "INCOMPLETE_DATA"
-			d.LastErrorCode = &errCode
-			return 0, errors.New("unexpected end of stream")
+			return 0, NewErrorAt(ErrorIncompleteData, "unexpected end of stream", d.byteOffset)
 		}
 		var v uint64
 		if endianness == BigEndian {
@@ -510,7 +478,6 @@ func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
 			v = binary.LittleEndian.Uint64(d.bytes[d.byteOffset:])
 		}
 		d.byteOffset += 8
-		d.LastErrorCode = nil
 		return v, nil
 	}
 
@@ -524,7 +491,6 @@ func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
 			}
 			result = (result << 8) | uint64(b)
 		}
-		d.LastErrorCode = nil
 		return result, nil
 	}
 
@@ -536,7 +502,6 @@ func (d *BitStreamDecoder) ReadUint64(endianness Endianness) (uint64, error) {
 		}
 		result = result | (uint64(b) << (i * 8))
 	}
-	d.LastErrorCode = nil
 	return result, nil
 }
 
@@ -610,7 +575,6 @@ func (d *BitStreamDecoder) ReadInt8() (int8, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.LastErrorCode = nil
 	// Two's complement conversion using casting
 	return int8(unsigned), nil
 }
@@ -621,7 +585,6 @@ func (d *BitStreamDecoder) ReadInt16(endianness Endianness) (int16, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.LastErrorCode = nil
 	// Two's complement conversion using casting
 	return int16(unsigned), nil
 }
@@ -632,7 +595,6 @@ func (d *BitStreamDecoder) ReadInt32(endianness Endianness) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.LastErrorCode = nil
 	// Two's complement conversion using casting
 	return int32(unsigned), nil
 }
@@ -643,7 +605,6 @@ func (d *BitStreamDecoder) ReadInt64(endianness Endianness) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.LastErrorCode = nil
 	// Two's complement conversion using casting
 	return int64(unsigned), nil
 }
@@ -919,11 +880,11 @@ func (d *BitStreamDecoder) ReadVarlengthDER() (uint64, error) {
 	numBytes := int(firstByte & 0x7F)
 
 	if numBytes == 0 {
-		return 0, fmt.Errorf("DER indefinite length (0x80) not supported")
+		return 0, NewError(ErrorInvalidEncoding, "DER indefinite length (0x80) not supported")
 	}
 
 	if numBytes > 8 {
-		return 0, fmt.Errorf("DER length too large: %d bytes (max 8 supported)", numBytes)
+		return 0, NewErrorf(ErrorInvalidEncoding, "DER length too large: %d bytes (max 8 supported)", numBytes)
 	}
 
 	// Read length bytes in big-endian order
@@ -962,7 +923,7 @@ func (d *BitStreamDecoder) ReadVarlengthLEB128() (uint64, error) {
 		}
 
 		if shift > 64 {
-			return 0, fmt.Errorf("LEB128 value too large (exceeds 64 bits)")
+			return 0, NewError(ErrorInvalidEncoding, "LEB128 value too large (exceeds 64 bits)")
 		}
 	}
 
@@ -988,7 +949,7 @@ func (d *BitStreamDecoder) ReadVarlengthEBML() (uint64, error) {
 	}
 
 	if width > 8 {
-		return 0, fmt.Errorf("EBML VINT: no marker bit found in first byte")
+		return 0, NewError(ErrorInvalidEncoding, "EBML VINT: no marker bit found in first byte")
 	}
 
 	// Start with first byte, removing marker bit
@@ -1016,7 +977,7 @@ func (d *BitStreamDecoder) ReadVarlengthVLQ() (uint64, error) {
 
 	for {
 		if bytesRead >= 4 {
-			return 0, fmt.Errorf("VLQ value too large (exceeds 4 bytes)")
+			return 0, NewError(ErrorInvalidEncoding, "VLQ value too large (exceeds 4 bytes)")
 		}
 
 		b, err := d.ReadUint8()

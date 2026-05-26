@@ -1985,10 +1985,10 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
     } else {
       if (conditionalVariants.length > 0) {
         lines.push(`        } else {`);
-        lines.push(`            Err(binschema_runtime::BinSchemaError::InvalidVariant(value as u64))`);
+        lines.push(`            Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {}", value)))`);
         lines.push(`        }`);
       } else {
-        lines.push(`        Err(binschema_runtime::BinSchemaError::InvalidVariant(value as u64))`);
+        lines.push(`        Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {}", value)))`);
       }
     }
   } else if (discriminator.field) {
@@ -2695,7 +2695,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
       lines.push(`        decoder.seek(start_pos)?;`);
     }
   }
-  lines.push(`        Err(binschema_runtime::BinSchemaError::InvalidVariant(0))`);
+  lines.push(`        Err(binschema_runtime::BinSchemaError::InvalidVariant("no variant matched the input bytes".to_string()))`);
   lines.push(`    }`);
   lines.push(`}`);
   lines.push(``);
@@ -3051,6 +3051,11 @@ function generateImpl(name: string, schemaTypeName: string, fields: Field[], def
     // Generate From<Output> for Input conversion (drops computed/const fields)
     // This enables encoding from Output structs (e.g., in choice variant encoding)
     lines.push(...generateFromOutputToInput(name, fields, schema));
+
+    // Generate From<Input> for Output conversion (fills in const, placeholder
+    // for computed). Lets callers construct discriminated_union / choice
+    // variants directly from Input structs via `MyVariant(input.into())`.
+    lines.push(...generateFromInputToOutput(name, fields, schema, defaultEndianness));
   } else {
     // Unified mode: single impl with both encode and decode
     lines.push(`impl ${name} {`);
@@ -3289,6 +3294,109 @@ function generateFromOutputToInput(name: string, fields: Field[], schema: Binary
   // — e.g. all fields are const/computed and live only in Output), rust
   // warns `unused variable: o`. Rewrite the parameter to `_o`.
   rewriteBindingIfUnused(lines, fromSigIdx, "o");
+
+  return lines;
+}
+
+/**
+ * Generates a Rust expression for a const field's compile-time value.
+ * Const fields live on Output but not Input; the From<Input> for Output
+ * impl needs to materialize them.
+ */
+function generateConstFieldExpression(field: Field, defaultEndianness: string): string {
+  const fieldAny = field as any;
+  const constValue = fieldAny.const;
+  const value = constValue === null || constValue === undefined ? 0 : constValue;
+  switch (field.type) {
+    case "uint8": return `${value}u8`;
+    case "uint16": return `${value}u16`;
+    case "uint32": return `${value}u32`;
+    case "uint64": return `${value}u64`;
+    case "int8": return `${value}i8`;
+    case "int16": return `${value}i16`;
+    case "int32": return `${value}i32`;
+    case "int64": return `${value}i64`;
+    case "float32": return `${value}f32`;
+    case "float64": return `${value}f64`;
+    case "bool": return value ? "true" : "false";
+    case "string":
+      // Const string materializes as an owned String for the Output struct.
+      return `std::string::String::from(${JSON.stringify(value)})`;
+    default:
+      // Fall back to Default::default() — encoder will write the schema-defined
+      // bytes anyway; this value is only used to populate the Output struct.
+      return "Default::default()";
+  }
+}
+
+/**
+ * Generates a Rust expression for a computed/missing field's placeholder
+ * value when constructing Output from Input. Computed fields are recomputed
+ * by encode(), so any sentinel value works — we prefer Default::default()
+ * for clarity, with explicit zeros for numeric primitives to avoid relying
+ * on inference for non-Default-impl'd types.
+ */
+function generateComputedFieldPlaceholder(field: Field, schema: BinarySchema): string {
+  switch (field.type) {
+    case "uint8": case "uint16": case "uint32": case "uint64":
+    case "int8": case "int16": case "int32": case "int64":
+      return "0";
+    case "float32": case "float64":
+      return "0.0";
+    case "bool":
+      return "false";
+    case "string":
+      return "std::string::String::new()";
+    case "bytes":
+    case "array":
+      return "Vec::new()";
+    case "optional":
+      return "None";
+    default:
+      return "Default::default()";
+  }
+}
+
+/**
+ * Generates a From<XInput> for XOutput impl. Input fields are copied across
+ * (with the same composite-type `.into()` rules used by the reverse direction);
+ * const fields are filled in from the schema; computed fields get a
+ * placeholder that will be overwritten on the next .encode() call.
+ *
+ * The point is to make `Some(my_input.into())` work when assembling
+ * discriminated_union / choice variants that hold Output structs.
+ */
+function generateFromInputToOutput(name: string, fields: Field[], schema: BinarySchema, defaultEndianness: string): string[] {
+  const lines: string[] = [];
+  const outputFields = fields.filter(f => f.name && f.type && f.type !== "padding");
+
+  lines.push(`impl From<${name}Input> for ${name}Output {`);
+  const fromSigIdx = lines.length;
+  lines.push(`    fn from(i: ${name}Input) -> Self {`);
+  lines.push(`        Self {`);
+  for (const field of outputFields) {
+    const fieldName = toRustFieldName(field.name!);
+    const fieldAny = field as any;
+    let expr: string;
+    if (fieldAny.const != null) {
+      expr = generateConstFieldExpression(field, defaultEndianness);
+    } else if (fieldAny.computed != null) {
+      expr = generateComputedFieldPlaceholder(field, schema);
+    } else {
+      // Regular Input field — same conversion logic as Output→Input direction,
+      // but with `i.` accessor. Both From directions exist for any split type,
+      // so `.into()` resolves correctly in both directions.
+      expr = generateFromFieldConversion(fieldName, field, schema).replace(/\bo\./g, "i.");
+    }
+    lines.push(`            ${fieldName}: ${expr},`);
+  }
+  lines.push(`        }`);
+  lines.push(`    }`);
+  lines.push(`}`);
+  lines.push(``);
+
+  // If the Input has no fields the body never references `i`; rewrite to `_i`.
+  rewriteBindingIfUnused(lines, fromSigIdx, "i");
 
   return lines;
 }
@@ -5080,7 +5188,7 @@ function generateInstanceInlineUnionDecode(
   }
 
   lines.push(`${indent}    } else {`);
-  lines.push(`${indent}        return Err(binschema_runtime::BinSchemaError::InvalidValue(format!("Unknown discriminator value: {}", discriminator_value)));`);
+  lines.push(`${indent}        return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("Unknown discriminator value: {}", discriminator_value)));`);
   lines.push(`${indent}    }`);
   lines.push(`${indent}};`);
 
@@ -5944,6 +6052,36 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
       lines.push(`${indent}    }`);
       lines.push(`${indent}    encoder.write_uint8(0);`);
       break;
+    case "bytes": {
+      // For bytes in optional, inline the byte encoding based on kind.
+      // `v` is &Vec<u8>.
+      const kind = (typeof rawValueType === "object" ? rawValueType.kind : undefined) || "fixed";
+      const innerInd = `${indent}    `;
+      if (kind === "length_prefixed") {
+        const lengthType = (typeof rawValueType === "object" ? rawValueType.length_type : undefined) || "uint8";
+        switch (lengthType) {
+          case "uint8":
+            lines.push(`${innerInd}encoder.write_uint8(v.len() as u8);`);
+            break;
+          case "uint16":
+            lines.push(`${innerInd}encoder.write_uint16(v.len() as u16, Endianness::${rustEndianness});`);
+            break;
+          case "uint32":
+            lines.push(`${innerInd}encoder.write_uint32(v.len() as u32, Endianness::${rustEndianness});`);
+            break;
+          case "uint64":
+            lines.push(`${innerInd}encoder.write_uint64(v.len() as u64, Endianness::${rustEndianness});`);
+            break;
+        }
+      }
+      lines.push(`${innerInd}for b in v.iter() {`);
+      lines.push(`${innerInd}    encoder.write_byte(*b);`);
+      lines.push(`${innerInd}}`);
+      if (kind === "null_terminated") {
+        lines.push(`${innerInd}encoder.write_byte(0);`);
+      }
+      break;
+    }
     default:
       // Type reference - nested struct
       lines.push(`${indent}    v.encode_into(encoder)?;`);
@@ -6217,7 +6355,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
         } else {
           if (conditionalVariants.length > 0) {
             lines.push(`${indent}} else {`);
-            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("unknown discriminator value: {:?}", ${discriminatorFieldName})));`);
+            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {:?}", ${discriminatorFieldName})));`);
             lines.push(`${indent}};`);
           }
         }
@@ -6284,7 +6422,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
           if (fallback) {
             lines.push(`${indent}    ${wrapVariantDecode(fallback)}`);
           } else {
-            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
+            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
           }
           lines.push(`${indent}};`);
         }
@@ -6308,7 +6446,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
       // String const validation - compare decoded string to expected value
       const rustStrLiteral = JSON.stringify(constVal);
       lines.push(`${indent}if ${varName} != ${rustStrLiteral} {`);
-      lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("const string mismatch: expected ${constVal}, got {}", ${varName})));`);
+      lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidValue(format!("const string mismatch: expected ${constVal}, got {}", ${varName})));`);
       lines.push(`${indent}}`);
     } else {
       // Generate appropriate literal suffix for the comparison
@@ -6325,7 +6463,7 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
         default: rustConstExpr = `${constVal}`; break;
       }
       lines.push(`${indent}if ${varName} != ${rustConstExpr} {`);
-      lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(${varName} as u64));`);
+      lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("expected ${constVal}, got {}", ${varName})));`);
       lines.push(`${indent}}`);
     }
   }
@@ -6483,7 +6621,7 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
             lines.push(`${indent}};`);
           } else {
             lines.push(`${indent}} else {`);
-            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::NotImplemented(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
+            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
             lines.push(`${indent}};`);
           }
         }
@@ -6635,6 +6773,58 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
       lines.push(`${indent}    }`);
       lines.push(`${indent}    Some(std::string::String::from_utf8(bytes).map_err(|_| binschema_runtime::BinSchemaError::InvalidUtf8)?)`);
       break;
+    case "bytes": {
+      // For bytes in optional, inline the byte decoding based on kind.
+      const kind = (typeof rawValueType === "object" ? rawValueType.kind : undefined) || "fixed";
+      const innerInd = `${indent}    `;
+      lines.push(`${innerInd}{`);
+      if (kind === "fixed") {
+        const length = (typeof rawValueType === "object" ? rawValueType.length : 0) || 0;
+        lines.push(`${innerInd}    let mut buf: Vec<u8> = Vec::with_capacity(${length});`);
+        lines.push(`${innerInd}    for _ in 0..${length} {`);
+        lines.push(`${innerInd}        buf.push(decoder.read_byte()?);`);
+        lines.push(`${innerInd}    }`);
+        lines.push(`${innerInd}    Some(buf)`);
+      } else if (kind === "length_prefixed") {
+        const lengthType = (typeof rawValueType === "object" ? rawValueType.length_type : undefined) || "uint8";
+        let readLen: string;
+        switch (lengthType) {
+          case "uint8":
+            readLen = "decoder.read_uint8()? as usize";
+            break;
+          case "uint16":
+            readLen = `decoder.read_uint16(Endianness::${rustEndianness})? as usize`;
+            break;
+          case "uint32":
+            readLen = `decoder.read_uint32(Endianness::${rustEndianness})? as usize`;
+            break;
+          case "uint64":
+            readLen = `decoder.read_uint64(Endianness::${rustEndianness})? as usize`;
+            break;
+          default:
+            readLen = "decoder.read_uint8()? as usize";
+        }
+        lines.push(`${innerInd}    let len = ${readLen};`);
+        lines.push(`${innerInd}    let mut buf: Vec<u8> = Vec::with_capacity(len);`);
+        lines.push(`${innerInd}    for _ in 0..len {`);
+        lines.push(`${innerInd}        buf.push(decoder.read_byte()?);`);
+        lines.push(`${innerInd}    }`);
+        lines.push(`${innerInd}    Some(buf)`);
+      } else if (kind === "null_terminated") {
+        lines.push(`${innerInd}    let mut buf: Vec<u8> = Vec::new();`);
+        lines.push(`${innerInd}    loop {`);
+        lines.push(`${innerInd}        let b = decoder.read_byte()?;`);
+        lines.push(`${innerInd}        if b == 0 { break; }`);
+        lines.push(`${innerInd}        buf.push(b);`);
+        lines.push(`${innerInd}    }`);
+        lines.push(`${innerInd}    Some(buf)`);
+      } else {
+        // Unknown kind; fall back to empty vec to keep compilation
+        lines.push(`${innerInd}    Some(Vec::<u8>::new())`);
+      }
+      lines.push(`${innerInd}}`);
+      break;
+    }
     default: {
       // Type reference - nested struct
       const typeName = toRustTypeName(valueType);

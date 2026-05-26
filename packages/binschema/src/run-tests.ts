@@ -291,6 +291,11 @@ function setupRuntimeLibrary(): void {
   const exprEvalSource = join(__dirname, 'runtime/expression-evaluator.ts');
   const exprEvalDest = join(genDir, 'expression-evaluator.ts');
   copyFileSync(exprEvalSource, exprEvalDest);
+
+  // Copy stream-decoder.ts (used by `generate_streaming: true` codegen)
+  const streamSource = join(__dirname, 'runtime/stream-decoder.ts');
+  const streamDest = join(genDir, 'stream-decoder.ts');
+  copyFileSync(streamSource, streamDest);
 }
 
 async function main() {
