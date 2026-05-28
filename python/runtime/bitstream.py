@@ -394,6 +394,35 @@ class BitStreamEncoder:
         for i in range(len(byte_list) - 1, -1, -1):
             self.write_uint8(byte_list[i])
 
+    def write_varlength_zigzag(self, value: int) -> None:
+        # ZigZag transform (64-bit) then LEB128
+        if value < -(1 << 63) or value >= (1 << 63):
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"ZigZag value {value} out of 64-bit range")
+        encoded = ((value << 1) ^ (value >> 63)) & 0xFFFFFFFFFFFFFFFF
+        while True:
+            byte = encoded & 0x7F
+            encoded >>= 7
+            if encoded != 0:
+                byte |= 0x80
+            self.write_uint8(byte)
+            if encoded == 0:
+                break
+
+    def write_varlength_sleb128(self, value: int) -> None:
+        # Signed LEB128 (sign-extension based)
+        if value < -(1 << 63) or value >= (1 << 63):
+            raise BinSchemaError(ErrorCode.INVALID_VALUE, f"SLEB128 value {value} out of 64-bit range")
+        more = True
+        while more:
+            byte = value & 0x7F
+            value >>= 7  # arithmetic shift in Python
+            sign_bit = byte & 0x40
+            if (value == 0 and not sign_bit) or (value == -1 and sign_bit):
+                more = False
+            else:
+                byte |= 0x80
+            self.write_uint8(byte)
+
     def write_bytes(self, data: bytes | bytearray | list[int]) -> None:
         for b in data:
             self.write_uint8(b)
@@ -663,6 +692,38 @@ class BitStreamDecoder:
             result = (result << 7) | (byte & 0x7F)
             if (byte & 0x80) == 0:
                 break
+        return result
+
+    def read_varlength_zigzag(self) -> int:
+        # Read LEB128 unsigned then undo ZigZag transform
+        encoded = 0
+        shift = 0
+        while True:
+            byte = self.read_uint8()
+            encoded |= (byte & 0x7F) << shift
+            shift += 7
+            if (byte & 0x80) == 0:
+                break
+            if shift > 64:
+                raise BinSchemaError(ErrorCode.INVALID_ENCODING, "ZigZag value too large (exceeds 64 bits)")
+        encoded &= 0xFFFFFFFFFFFFFFFF
+        return (encoded >> 1) ^ -(encoded & 1)
+
+    def read_varlength_sleb128(self) -> int:
+        result = 0
+        shift = 0
+        byte = 0
+        while True:
+            byte = self.read_uint8()
+            result |= (byte & 0x7F) << shift
+            shift += 7
+            if (byte & 0x80) == 0:
+                break
+            if shift > 64:
+                raise BinSchemaError(ErrorCode.INVALID_ENCODING, "SLEB128 value too large (exceeds 64 bits)")
+        # Sign-extend if the sign bit of the last byte is set
+        if shift < 64 and (byte & 0x40):
+            result |= -(1 << shift)
         return result
 
     @property

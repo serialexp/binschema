@@ -295,6 +295,42 @@ impl BitStreamEncoder {
         }
     }
 
+    /// Signed varlength dispatch. Supported encodings: "zigzag", "leb128_signed".
+    #[inline]
+    pub fn write_varlength_signed(&mut self, value: i64, encoding: &str) -> Result<()> {
+        match encoding {
+            "zigzag" => self.write_varlength_zigzag(value),
+            "leb128_signed" => self.write_varlength_sleb128(value),
+            _ => Err(BinSchemaError::InvalidValue(format!("Unknown signed varlength encoding: {}", encoding))),
+        }
+    }
+
+    /// ZigZag encoding: zigzag transform then unsigned LEB128.
+    /// zigzag(n) = (n << 1) ^ (n >> 63). Used by protobuf sint and Thrift compact.
+    #[inline]
+    fn write_varlength_zigzag(&mut self, value: i64) -> Result<()> {
+        let zz = ((value << 1) ^ (value >> 63)) as u64;
+        self.write_varlength_leb128(zz)
+    }
+
+    /// Signed LEB128 (SLEB128): sign-extension based. Used by DWARF / WebAssembly.
+    #[inline]
+    fn write_varlength_sleb128(&mut self, value: i64) -> Result<()> {
+        let mut val = value;
+        loop {
+            let mut byte = (val & 0x7F) as u8;
+            val >>= 7; // arithmetic shift for i64
+            let sign_bit_set = (byte & 0x40) != 0;
+            if (val == 0 && !sign_bit_set) || (val == -1 && sign_bit_set) {
+                self.write_uint8(byte);
+                break;
+            }
+            byte |= 0x80;
+            self.write_uint8(byte);
+        }
+        Ok(())
+    }
+
     /// DER encoding: Short form (0-127) or long form (0x80+N followed by N bytes)
     #[inline]
     fn write_varlength_der(&mut self, value: u64) -> Result<()> {
@@ -783,6 +819,48 @@ impl<'a> BitStreamDecoder<'a> {
             "vlq" => self.read_varlength_vlq(),
             _ => Err(BinSchemaError::InvalidValue(format!("Unknown varlength encoding: {}", encoding))),
         }
+    }
+
+    /// Signed varlength dispatch. Supported encodings: "zigzag", "leb128_signed".
+    #[inline]
+    pub fn read_varlength_signed(&mut self, encoding: &str) -> Result<i64> {
+        match encoding {
+            "zigzag" => self.read_varlength_zigzag(),
+            "leb128_signed" => self.read_varlength_sleb128(),
+            _ => Err(BinSchemaError::InvalidValue(format!("Unknown signed varlength encoding: {}", encoding))),
+        }
+    }
+
+    /// ZigZag decoding: unsigned LEB128 then zigzag-decode.
+    #[inline]
+    fn read_varlength_zigzag(&mut self) -> Result<i64> {
+        let u = self.read_varlength_leb128()?;
+        // zigzag decode: (u >> 1) ^ -(u & 1)
+        Ok(((u >> 1) as i64) ^ -((u & 1) as i64))
+    }
+
+    /// Signed LEB128 (SLEB128) decoding with sign extension.
+    #[inline]
+    fn read_varlength_sleb128(&mut self) -> Result<i64> {
+        let mut result: i64 = 0;
+        let mut shift: u32 = 0;
+        let mut byte: u8;
+        loop {
+            byte = self.read_uint8()?;
+            result |= ((byte & 0x7F) as i64) << shift;
+            shift += 7;
+            if (byte & 0x80) == 0 {
+                break;
+            }
+            if shift > 70 {
+                return Err(BinSchemaError::InvalidEncoding("SLEB128 value too large".to_string()));
+            }
+        }
+        // Sign-extend if the sign bit (0x40) of the final byte is set.
+        if shift < 64 && (byte & 0x40) != 0 {
+            result |= -1i64 << shift;
+        }
+        Ok(result)
     }
 
     /// DER encoding: Short form (0-127) or long form (0x80+N followed by N bytes)

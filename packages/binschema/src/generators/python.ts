@@ -479,6 +479,10 @@ function generateVarlengthEncode(field: any, fieldAccess: string, indent: string
       return `${indent}encoder.write_varlength_ebml(${fieldAccess})\n`;
     case "vlq":
       return `${indent}encoder.write_varlength_vlq(${fieldAccess})\n`;
+    case "zigzag":
+      return `${indent}encoder.write_varlength_zigzag(${fieldAccess})\n`;
+    case "leb128_signed":
+      return `${indent}encoder.write_varlength_sleb128(${fieldAccess})\n`;
     default:
       return `${indent}encoder.write_varlength_der(${fieldAccess})\n`;
   }
@@ -1849,6 +1853,10 @@ function generateVarlengthDecode(field: any, fieldAssign: string, indent: string
       return `${indent}${fieldAssign} = decoder.read_varlength_ebml()\n`;
     case "vlq":
       return `${indent}${fieldAssign} = decoder.read_varlength_vlq()\n`;
+    case "zigzag":
+      return `${indent}${fieldAssign} = decoder.read_varlength_zigzag()\n`;
+    case "leb128_signed":
+      return `${indent}${fieldAssign} = decoder.read_varlength_sleb128()\n`;
     default:
       return `${indent}${fieldAssign} = decoder.read_varlength_der()\n`;
   }

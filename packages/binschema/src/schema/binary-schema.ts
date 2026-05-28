@@ -630,17 +630,32 @@ const Int64FieldSchema = z.object({
 /**
  * Variable-length integer encoding schemes
  */
-export const VarlengthEncodingSchema = z.enum(["der", "leb128", "ebml", "vlq"]);
+export const VarlengthEncodingSchema = z.enum(["der", "leb128", "ebml", "vlq", "zigzag", "leb128_signed"]);
 export type VarlengthEncoding = z.infer<typeof VarlengthEncodingSchema>;
+
+/**
+ * Signed varlength encodings. Their decoded value can be negative, so the
+ * generated field type is a signed integer (int64/i64) rather than unsigned.
+ */
+export const SIGNED_VARLENGTH_ENCODINGS: ReadonlySet<VarlengthEncoding> = new Set([
+  "zigzag",
+  "leb128_signed",
+]);
+
+export function isSignedVarlengthEncoding(encoding: string | undefined): boolean {
+  return encoding === "zigzag" || encoding === "leb128_signed";
+}
 
 /**
  * Variable-length integer field
  *
- * Supports four encoding schemes commonly used in binary protocols:
+ * Supports several encoding schemes commonly used in binary protocols:
  * - "der": ASN.1 DER/BER length encoding (Kerberos, X.509, LDAP, SNMP)
- * - "leb128": Little Endian Base 128 (Protocol Buffers, WebAssembly, DWARF)
+ * - "leb128": Little Endian Base 128, unsigned (Protocol Buffers, WebAssembly, DWARF)
  * - "ebml": EBML variable-size integer (Matroska/WebM multimedia containers)
  * - "vlq": Variable Length Quantity - MSB-first, 7 bits/byte (MIDI, Git packfiles)
+ * - "zigzag": zigzag transform then unsigned LEB128, signed (protobuf sint, Thrift compact)
+ * - "leb128_signed": signed LEB128 / SLEB128 (DWARF, WebAssembly)
  */
 const VarlengthFieldSchema = z.object({
   name: z.string().meta({
@@ -652,8 +667,8 @@ const VarlengthFieldSchema = z.object({
   encoding: VarlengthEncodingSchema.meta({
     description: "Variable-length encoding scheme: 'der' (ASN.1 length), 'leb128' (protobuf-style), or 'ebml' (Matroska-style)"
   }),
-  max_bytes: z.number().int().min(1).max(8).optional().meta({
-    description: "Maximum number of bytes for the encoded value (default: 4 for der, 5 for leb128, 8 for ebml)"
+  max_bytes: z.number().int().min(1).max(10).optional().meta({
+    description: "Maximum number of bytes for the encoded value (default: 4 for der, 5 for leb128, 8 for ebml; up to 10 for full 64-bit leb128/zigzag)"
   }),
   computed: ComputedFieldSchema.optional().meta({
     description: "Marks this field as automatically computed (e.g., length_of)"

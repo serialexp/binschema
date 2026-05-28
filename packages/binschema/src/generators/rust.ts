@@ -1,7 +1,23 @@
 // ABOUTME: Generates Rust encoder/decoder code from BinSchema definitions
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript and Go runtimes
 
-import { type BinarySchema, type Field, type Endianness, isEnumType } from "../schema/binary-schema.js";
+import { type BinarySchema, type Field, type Endianness, isEnumType, isSignedVarlengthEncoding } from "../schema/binary-schema.js";
+
+/**
+ * Emit the encoder call for a varlength field. Signed encodings (zigzag,
+ * leb128_signed) use the i64 `write_varlength_signed` dispatch; everything else
+ * uses the u64 `write_varlength`.
+ */
+function emitRustVarlengthWrite(indent: string, valueExpr: string, encoding: string): string {
+  const method = isSignedVarlengthEncoding(encoding) ? "write_varlength_signed" : "write_varlength";
+  return `${indent}encoder.${method}(${valueExpr}, "${encoding}")?;`;
+}
+
+/** Emit the decoder call for a varlength field (signed-aware). */
+function emitRustVarlengthRead(indent: string, varName: string, encoding: string): string {
+  const method = isSignedVarlengthEncoding(encoding) ? "read_varlength_signed" : "read_varlength";
+  return `${indent}let ${varName} = decoder.${method}("${encoding}")?;`;
+}
 import { monomorphizeTemplates } from "../schema/monomorphize.js";
 
 /**
@@ -1798,7 +1814,7 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
           }
           case "varlength": {
             const vlEnc = (field as any).encoding || "der";
-            lines.push(`                encoder.write_varlength(v.${fieldName}, "${vlEnc}")?;`);
+            lines.push(emitRustVarlengthWrite("                ", `v.${fieldName}`, vlEnc));
             break;
           }
           case "bool":
@@ -2558,7 +2574,7 @@ function generateUnionEnum(enumName: string, variantTypes: string[], defaultEndi
           }
           case "varlength": {
             const vlEnc = (field as any).encoding || "der";
-            lines.push(`                encoder.write_varlength(v.${fieldName}, "${vlEnc}")?;`);
+            lines.push(emitRustVarlengthWrite("                ", `v.${fieldName}`, vlEnc));
             break;
           }
           case "bool":
@@ -5723,9 +5739,9 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
     }
 
     case "varlength": {
-      // Variable-length integer encoding (VLQ, LEB128, DER, etc.)
+      // Variable-length integer encoding (VLQ, LEB128, DER, zigzag, leb128_signed)
       const encoding = (field as any).encoding || "vlq";
-      lines.push(`${indent}encoder.write_varlength(${fieldName}, "${encoding}")?;`);
+      lines.push(emitRustVarlengthWrite(indent, fieldName, encoding));
       break;
     }
 
@@ -6656,9 +6672,9 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
     }
 
     case "varlength": {
-      // Variable-length integer decoding (VLQ, LEB128, DER, etc.)
+      // Variable-length integer decoding (VLQ, LEB128, DER, zigzag, leb128_signed)
       const encoding = (field as any).encoding || "vlq";
-      lines.push(`${indent}let ${varName} = decoder.read_varlength("${encoding}")?;`);
+      lines.push(emitRustVarlengthRead(indent, varName, encoding));
       break;
     }
 
@@ -6999,7 +7015,7 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
     }
     case "varlength": {
       const encoding = (field as any).encoding || "vlq";
-      lines.push(`${indent}let ${varName} = decoder.read_varlength("${encoding}")?;`);
+      lines.push(emitRustVarlengthRead(indent, varName, encoding));
       break;
     }
     case "bitfield": {
@@ -7855,7 +7871,7 @@ function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema, containi
     case "float64": return "f64";
     case "bool": return "bool";
     case "bytes": return "Vec<u8>";
-    case "varlength": return "u64";
+    case "varlength": return isSignedVarlengthEncoding((field as any).encoding) ? "i64" : "u64";
     case "string": return "std::string::String";
     case "bit": {
       const size = (field as any).size || 1;
@@ -8045,7 +8061,8 @@ function mapFieldToRustType(field: Field, schema?: BinarySchema, containingTypeN
     case "bytes":
       return "Vec<u8>";
     case "varlength":
-      return "u64";  // Variable-length integers decode to u64
+      // Signed encodings decode to i64; unsigned encodings to u64.
+      return isSignedVarlengthEncoding((field as any).encoding) ? "i64" : "u64";
     case "bitfield": {
       // Bitfields without sub-fields are packed integers - use appropriate size
       // Note: Bitfields WITH sub-fields are handled specially in generateStruct

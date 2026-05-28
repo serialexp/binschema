@@ -302,6 +302,39 @@ export class BitStreamEncoder {
   }
 
   /**
+   * Write zigzag-encoded signed varint (zigzag transform + unsigned LEB128).
+   * Used by Protocol Buffers (sint32/sint64) and Apache Thrift compact protocol.
+   * zigzag(n) = (n << 1) ^ (n >> 63)  [arithmetic shift], computed in 64-bit.
+   */
+  writeVarlengthZigZag(value: number | bigint): void {
+    const val = typeof value === 'bigint' ? value : BigInt(value);
+    // 64-bit zigzag: map signed -> unsigned. asUintN keeps it in the u64 domain.
+    const zz = BigInt.asUintN(64, (val << 1n) ^ (val >> 63n));
+    this.writeVarlengthLEB128(zz);
+  }
+
+  /**
+   * Write signed LEB128 (SLEB128). Used by DWARF debug info and WebAssembly.
+   * Sign-extension based; a distinct wire format from zigzag.
+   */
+  writeVarlengthSLEB128(value: number | bigint): void {
+    let val = typeof value === 'bigint' ? value : BigInt(value);
+    let more = true;
+    while (more) {
+      let byte = Number(val & 0x7Fn);
+      val >>= 7n; // arithmetic shift (BigInt >> is arithmetic for negatives)
+      // Sign bit of the 7-bit group:
+      const signBitSet = (byte & 0x40) !== 0;
+      if ((val === 0n && !signBitSet) || (val === -1n && signBitSet)) {
+        more = false;
+      } else {
+        byte |= 0x80;
+      }
+      this.writeUint8(byte);
+    }
+  }
+
+  /**
    * Write variable-length integer (EBML encoding)
    * - Leading zeros indicate width, self-synchronizing
    * - Used in Matroska/WebM
@@ -877,6 +910,49 @@ export class BitStreamDecoder {
       }
     }
 
+    return Number(result);
+  }
+
+  /**
+   * Read zigzag-encoded signed varint (unsigned LEB128 then zigzag-decode).
+   */
+  readVarlengthZigZag(): number {
+    // Read the unsigned LEB128 payload as a bigint (no precision loss).
+    let u = 0n;
+    let shift = 0;
+    while (true) {
+      const byte = this.readUint8();
+      u |= BigInt(byte & 0x7F) << BigInt(shift);
+      shift += 7;
+      if ((byte & 0x80) === 0) break;
+      if (shift > 64) {
+        throw new BinSchemaError(ErrorCode.INVALID_ENCODING, "zigzag value too large (exceeds 64 bits)", { position: this.byteOffset });
+      }
+    }
+    // zigzag decode: (u >> 1) ^ -(u & 1)
+    const signed = (u >> 1n) ^ -(u & 1n);
+    return Number(signed);
+  }
+
+  /**
+   * Read signed LEB128 (SLEB128) with sign extension.
+   */
+  readVarlengthSLEB128(): number {
+    let result = 0n;
+    let shift = 0n;
+    let byte = 0;
+    do {
+      byte = this.readUint8();
+      result |= BigInt(byte & 0x7F) << shift;
+      shift += 7n;
+      if (shift > 70n) {
+        throw new BinSchemaError(ErrorCode.INVALID_ENCODING, "SLEB128 value too large (exceeds 64 bits)", { position: this.byteOffset });
+      }
+    } while ((byte & 0x80) !== 0);
+    // Sign-extend if the sign bit (0x40) of the final byte is set.
+    if (shift < 64n && (byte & 0x40) !== 0) {
+      result |= (~0n) << shift;
+    }
     return Number(result);
   }
 

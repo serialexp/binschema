@@ -1,7 +1,7 @@
 // ABOUTME: Generates Go encoder/decoder code from BinSchema definitions
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript runtime
 
-import { type BinarySchema, type Field, type Endianness, isEnumType } from "../schema/binary-schema.js";
+import { type BinarySchema, type Field, type Endianness, isEnumType, isSignedVarlengthEncoding } from "../schema/binary-schema.js";
 
 /**
  * Get all field names for a type (only for struct types with sequence)
@@ -2539,8 +2539,7 @@ function generatePrimitiveFieldSize(fieldType: string, fieldName: string, indent
       lines.push(`${indent}size += 8${commentSuffix}`);
       break;
     case "varlength":
-      // For varlength, we need to calculate based on value
-      // Use DER encoding size formula: 1 byte if < 128, otherwise 1 + ceil(log256(value))
+      // const/computed/presence varlength fields are always unsigned (DER-style).
       lines.push(`${indent}// ${fieldName}: varlength size calculation`);
       lines.push(`${indent}size += runtime.VarlengthDERSize(m.${fieldName})`);
       break;
@@ -2609,7 +2608,7 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
       break;
     }
     case "varlength": {
-      lines.push(`${indent}size += runtime.VarlengthDERSize(${valueExpr}) // ${fieldName}`);
+      lines.push(`${indent}size += ${goVarlengthSizeExpr(fieldAny?.encoding, valueExpr)} // ${fieldName}`);
       break;
     }
     case "string": {
@@ -3658,7 +3657,9 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
         'der': 'WriteVarlengthDER',
         'leb128': 'WriteVarlengthLEB128',
         'ebml': 'WriteVarlengthEBML',
-        'vlq': 'WriteVarlengthVLQ'
+        'vlq': 'WriteVarlengthVLQ',
+        'zigzag': 'WriteVarlengthZigZag',
+        'leb128_signed': 'WriteVarlengthSLEB128'
       };
       const method = methodMap[varlengthEncoding] || 'WriteVarlengthDER';
       lines.push(`${indent}encoder.${method}(${fieldName})`);
@@ -4416,7 +4417,9 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
         'der': 'ReadVarlengthDER',
         'leb128': 'ReadVarlengthLEB128',
         'ebml': 'ReadVarlengthEBML',
-        'vlq': 'ReadVarlengthVLQ'
+        'vlq': 'ReadVarlengthVLQ',
+        'zigzag': 'ReadVarlengthZigZag',
+        'leb128_signed': 'ReadVarlengthSLEB128'
       };
       const method = methodMap[varlengthEncoding] || 'ReadVarlengthDER';
       lines.push(`${indent}${varName}, err := decoder.${method}()`);
@@ -5495,6 +5498,22 @@ function getPrimitiveSize(typeName: string): number {
  * Maps a field to its Go type
  * @param parentTypeName - Optional parent type name for generating nested type names (e.g., bitfield structs)
  */
+/**
+ * Returns the Go expression computing the encoded byte size of a varlength
+ * field, dispatched by encoding. Signed encodings (int64 value) use dedicated
+ * size helpers; everything else uses the DER-style size estimate that was the
+ * historical behavior for the unsigned encodings.
+ */
+function goVarlengthSizeExpr(encoding: string | undefined, valueExpr: string): string {
+  if (encoding === "zigzag") {
+    return `runtime.VarlengthZigZagSize(${valueExpr})`;
+  }
+  if (encoding === "leb128_signed") {
+    return `runtime.VarlengthSLEB128Size(${valueExpr})`;
+  }
+  return `runtime.VarlengthDERSize(${valueExpr})`;
+}
+
 function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: BinarySchema): string {
   switch (field.type) {
     case "uint8":
@@ -5546,8 +5565,9 @@ function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: Binary
       // Fallback for bitfields without nested fields
       return "uint64";
     case "varlength":
-      // Variable-length integers are decoded as uint64
-      return "uint64";
+      // Signed encodings (zigzag, leb128_signed) decode to a signed value;
+      // the unsigned encodings (der/leb128/ebml/vlq) use uint64.
+      return isSignedVarlengthEncoding((field as any).encoding) ? "int64" : "uint64";
     case "array":
       // Array type - get items type
       const items = (field as any).items;

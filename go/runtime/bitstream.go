@@ -787,6 +787,33 @@ func VarlengthDERSize(value uint64) int {
 	return 1 + numBytes
 }
 
+// VarlengthZigZagSize calculates the encoded byte size of a zigzag-encoded
+// signed integer (zigzag transform then LEB128).
+func VarlengthZigZagSize(value int64) int {
+	zz := uint64((value << 1) ^ (value >> 63))
+	size := 1
+	for zz >= 0x80 {
+		zz >>= 7
+		size++
+	}
+	return size
+}
+
+// VarlengthSLEB128Size calculates the encoded byte size of a signed LEB128 value.
+func VarlengthSLEB128Size(value int64) int {
+	size := 0
+	for {
+		b := uint8(value & 0x7F)
+		value >>= 7
+		size++
+		signBitSet := (b & 0x40) != 0
+		if (value == 0 && !signBitSet) || (value == -1 && signBitSet) {
+			break
+		}
+	}
+	return size
+}
+
 // WriteVarlengthLEB128 writes a variable-length integer using LEB128 encoding
 // - MSB continuation bit, little-endian, 7 bits per byte
 // - Used in Protocol Buffers, WebAssembly, DWARF
@@ -804,6 +831,29 @@ func (e *BitStreamEncoder) WriteVarlengthLEB128(value uint64) {
 		if value == 0 {
 			break
 		}
+	}
+}
+
+// WriteVarlengthZigZag writes a signed integer using zigzag + unsigned LEB128.
+// zigzag(n) = (n << 1) ^ (n >> 63). Used by protobuf sint and Thrift compact.
+func (e *BitStreamEncoder) WriteVarlengthZigZag(value int64) {
+	zz := uint64((value << 1) ^ (value >> 63))
+	e.WriteVarlengthLEB128(zz)
+}
+
+// WriteVarlengthSLEB128 writes a signed integer using signed LEB128 (SLEB128).
+// Sign-extension based; distinct wire format from zigzag. Used by DWARF / WASM.
+func (e *BitStreamEncoder) WriteVarlengthSLEB128(value int64) {
+	for {
+		b := uint8(value & 0x7F)
+		value >>= 7 // arithmetic shift (Go >> on signed is arithmetic)
+		signBitSet := (b & 0x40) != 0
+		if (value == 0 && !signBitSet) || (value == -1 && signBitSet) {
+			e.WriteUint8(b)
+			break
+		}
+		b |= 0x80
+		e.WriteUint8(b)
 	}
 }
 
@@ -927,6 +977,43 @@ func (d *BitStreamDecoder) ReadVarlengthLEB128() (uint64, error) {
 		}
 	}
 
+	return result, nil
+}
+
+// ReadVarlengthZigZag reads a zigzag-encoded signed integer (LEB128 then decode).
+func (d *BitStreamDecoder) ReadVarlengthZigZag() (int64, error) {
+	u, err := d.ReadVarlengthLEB128()
+	if err != nil {
+		return 0, err
+	}
+	// zigzag decode: (u >> 1) ^ -(u & 1)
+	return int64(u>>1) ^ -int64(u&1), nil
+}
+
+// ReadVarlengthSLEB128 reads a signed LEB128 (SLEB128) integer with sign extension.
+func (d *BitStreamDecoder) ReadVarlengthSLEB128() (int64, error) {
+	var result int64
+	var shift uint
+	var b uint8
+	for {
+		var err error
+		b, err = d.ReadUint8()
+		if err != nil {
+			return 0, err
+		}
+		result |= int64(b&0x7F) << shift
+		shift += 7
+		if (b & 0x80) == 0 {
+			break
+		}
+		if shift > 70 {
+			return 0, NewError(ErrorInvalidEncoding, "SLEB128 value too large (exceeds 64 bits)")
+		}
+	}
+	// Sign-extend if the sign bit (0x40) of the final byte is set.
+	if shift < 64 && (b&0x40) != 0 {
+		result |= -1 << shift
+	}
 	return result, nil
 }
 

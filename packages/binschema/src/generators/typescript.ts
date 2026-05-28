@@ -1373,13 +1373,15 @@ function generateEncodeFieldCoreImpl(
 
     case "varlength": {
       const encoding = 'encoding' in field ? field.encoding : 'der';
-      const methodMap = {
+      const methodMap: Record<string, string> = {
         'der': 'writeVarlengthDER',
         'leb128': 'writeVarlengthLEB128',
         'ebml': 'writeVarlengthEBML',
-        'vlq': 'writeVarlengthVLQ'
+        'vlq': 'writeVarlengthVLQ',
+        'zigzag': 'writeVarlengthZigZag',
+        'leb128_signed': 'writeVarlengthSLEB128'
       };
-      const method = methodMap[encoding as 'der' | 'leb128' | 'ebml' | 'vlq'];
+      const method = methodMap[encoding as string];
       return `${indent}this.${method}(${valuePath});\n`;
     }
 
@@ -2012,13 +2014,15 @@ function generateDecodeFieldCoreImpl(
 
     case "varlength": {
       const encoding = 'encoding' in field ? field.encoding : 'der';
-      const methodMap = {
+      const methodMap: Record<string, string> = {
         'der': 'readVarlengthDER',
         'leb128': 'readVarlengthLEB128',
         'ebml': 'readVarlengthEBML',
-        'vlq': 'readVarlengthVLQ'
+        'vlq': 'readVarlengthVLQ',
+        'zigzag': 'readVarlengthZigZag',
+        'leb128_signed': 'readVarlengthSLEB128'
       };
-      const method = methodMap[encoding as 'der' | 'leb128' | 'ebml' | 'vlq'];
+      const method = methodMap[encoding as string];
       return `${indent}${target} = this.${method}();\n`;
     }
 
