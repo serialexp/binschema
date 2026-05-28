@@ -643,7 +643,42 @@ export function generateEncodeComputedField(
   let code = "";
 
   // Generate computation based on computed field type
-  if (computed.type === "sum_of_type_sizes") {
+  if (computed.type === "field_id_delta") {
+    // Stateful field-id delta: value = id - last_emitted; last_emitted = id.
+    // Relies on a struct-scoped `__field_id_acc` declared by the encoder, which
+    // only advances for fields actually emitted (this branch runs inside the
+    // field's conditional wrapper when the field is optional).
+    const id = computed.id ?? 0;
+    const computedVar = makeUniqueComputedVar(fieldName);
+    code += `${indent}// Computed field '${fieldName}': field_id_delta from last emitted id (id=${id})\n`;
+    code += `${indent}const ${computedVar} = ${id} - __field_id_acc;\n`;
+    code += `${indent}__field_id_acc = ${id};\n`;
+    switch (field.type) {
+      case "bit":
+        code += `${indent}this.writeBits(${computedVar}, ${(fieldAny.size ?? 8)});\n`;
+        break;
+      case "uint8":
+        code += `${indent}this.writeUint8(${computedVar});\n`;
+        break;
+      case "uint16":
+        code += `${indent}this.writeUint16(${computedVar}, "${endianness}");\n`;
+        break;
+      case "uint32":
+        code += `${indent}this.writeUint32(${computedVar}, "${endianness}");\n`;
+        break;
+      case "uint64":
+        code += `${indent}this.writeUint64(BigInt(${computedVar}), "${endianness}");\n`;
+        break;
+      case "varlength": {
+        const encoding = (fieldAny.encoding as string) || "leb128";
+        const methodName = getVarlengthWriteMethod(encoding);
+        code += `${indent}this.${methodName}(${computedVar});\n`;
+        break;
+      }
+      default:
+        throw new Error(`Computed field '${fieldName}' (field_id_delta) has unsupported type '${field.type}'. Supported types: bit, uint8, uint16, uint32, uint64, varlength`);
+    }
+  } else if (computed.type === "sum_of_type_sizes") {
     const target = computed.target || "";
     const elementType = computed.element_type || "";
     const computedVar = makeUniqueComputedVar(fieldName);

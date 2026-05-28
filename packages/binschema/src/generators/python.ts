@@ -963,7 +963,17 @@ function generateComputedFieldEncode(field: any, valuePath: string, indent: stri
   const bitOrder = schema.config?.bit_order || 'msb_first';
 
   // Computed fields are calculated during encoding
-  if (computed.type === "count_of") {
+  if (computed.type === "field_id_delta") {
+    // Stateful field-id delta: delta = id - last_emitted; last_emitted = id.
+    // Only emitted (conditional-true) fields advance the accumulator. The
+    // conditional wrap (if any) is handled by the caller.
+    const id = computed.id ?? 0;
+    code += `${indent}# Computed: field_id_delta (id=${id})\n`;
+    code += `${indent}_fid_delta = ${id} - __field_id_acc\n`;
+    code += `${indent}__field_id_acc = ${id}\n`;
+    code += generateComputedWrite(field.type, "_fid_delta", indent, e);
+    return code;
+  } else if (computed.type === "count_of") {
     const target = computed.target;
     const targetAccess = resolveComputedTarget(target, valuePath);
     const lengthExpr = `len(${targetAccess})`;
@@ -1701,6 +1711,35 @@ function generateFieldDecode(field: any, resultPath: string, indent: string, end
   // Handle const fields - read and validate
   if (field.const !== undefined) {
     code += generateConstDecode(field, fieldAssign, indent, endianness);
+    return code;
+  }
+
+  // field_id_delta: read the wire delta, then reconstruct the absolute id by
+  // adding the running accumulator. The decoded value is the absolute id.
+  if (field.computed?.type === "field_id_delta") {
+    const e = field.endianness || endianness;
+    let readExpr: string;
+    switch (field.type) {
+      case "uint8": readExpr = "decoder.read_uint8()"; break;
+      case "uint16": readExpr = `decoder.read_uint16(${pyEndianness(e)})`; break;
+      case "uint32": readExpr = `decoder.read_uint32(${pyEndianness(e)})`; break;
+      case "uint64": readExpr = `decoder.read_uint64(${pyEndianness(e)})`; break;
+      case "varlength": {
+        const enc = field.encoding || "leb128";
+        const methodMap: { [k: string]: string } = {
+          der: "read_varlength_der", leb128: "read_varlength_leb128",
+          ebml: "read_varlength_ebml", vlq: "read_varlength_vlq",
+          zigzag: "read_varlength_zigzag", leb128_signed: "read_varlength_sleb128",
+        };
+        readExpr = `decoder.${methodMap[enc] || "read_varlength_leb128"}()`;
+        break;
+      }
+      default:
+        throw new Error(`field_id_delta unsupported field type '${field.type}'`);
+    }
+    code += `${indent}_fid_delta = ${readExpr}\n`;
+    code += `${indent}${fieldAssign} = __field_id_acc + _fid_delta\n`;
+    code += `${indent}__field_id_acc = ${fieldAssign}\n`;
     return code;
   }
 
@@ -2499,6 +2538,12 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   const crc32OfFields = fields.filter((f: any) => f.computed?.type === "crc32_of");
   const needsFieldTracking = positionOfFields.length > 0 || crc32OfFields.length > 0;
 
+  // Stateful accumulator for field_id_delta computed fields (Thrift-style field-id
+  // deltas). One per struct, advances only for fields actually emitted.
+  if (fields.some((f: any) => f.computed?.type === "field_id_delta")) {
+    lines.push(`        __field_id_acc = 0`);
+  }
+
   // Generate encoding for each field
   for (const field of fields) {
     const fieldAny = field as any;
@@ -2643,6 +2688,11 @@ function generateStructCode(name: string, typeDef: any, schema: BinarySchema, en
   // field doesn't live in the local scope.
   lines.push(`    if _root is None:`);
   lines.push(`        _root = result`);
+
+  // Stateful accumulator for field_id_delta computed fields (mirrors encode).
+  if (fields.some((f: any) => f.computed?.type === "field_id_delta")) {
+    lines.push(`    __field_id_acc = 0`);
+  }
 
   for (const field of fields) {
     lines.push(generateFieldDecode(field, 'result', '    ', endianness, schema, bitOrder));

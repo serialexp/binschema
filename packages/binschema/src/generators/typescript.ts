@@ -1148,6 +1148,12 @@ function generateEncoder(
     }
   }
 
+  // Stateful accumulator for field_id_delta computed fields (Thrift-style field-id
+  // deltas). One per struct, advances only for fields actually emitted.
+  if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+    code += `    let __field_id_acc = 0;\n`;
+  }
+
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
     const isArray = 'type' in field && field.type === 'array';
@@ -1231,6 +1237,16 @@ function generateEncodeField(
 
   // Handle computed fields - generate computation code instead of reading from value
   if (fieldAny.computed) {
+    // A computed field may also be conditional (e.g. a field_id_delta header that
+    // is only emitted when its optional field is present). Wrap accordingly so the
+    // accumulator only advances for emitted fields.
+    if (isFieldConditional(field)) {
+      const tsCondition = convertConditionalToTypeScript(field.conditional!, "value");
+      let code = `${indent}if (${tsCondition}) {\n`;
+      code += generateEncodeComputedField(field, schema, globalEndianness, indent + "  ", undefined, typeName, allFields);
+      code += `${indent}}\n`;
+      return code;
+    }
     return generateEncodeComputedField(field, schema, globalEndianness, indent, undefined, typeName, allFields);
   }
 
@@ -1846,6 +1862,11 @@ function generateDecoder(
     // No instance fields - return plain object
     code += `    const value: any = {};\n\n`;
 
+    // Stateful accumulator for field_id_delta computed fields (mirrors encode).
+    if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+      code += `    let __field_id_acc = 0;\n`;
+    }
+
     for (const field of fields) {
       code += generateDecodeField(field, schema, globalEndianness, "    ", addTraceLogs);
     }
@@ -1878,6 +1899,11 @@ function generateDecoderWithLazyFields(
 
   // Decode sequence fields first
   code += `${indent}const sequenceData: any = {};\n\n`;
+
+  // Stateful accumulator for field_id_delta computed fields (mirrors encode).
+  if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+    code += `${indent}let __field_id_acc = 0;\n`;
+  }
 
   for (const field of fields) {
     code += generateDecodeField(field, schema, globalEndianness, indent, addTraceLogs).replace(/value\./g, "sequenceData.");
@@ -1976,6 +2002,35 @@ function generateDecodeFieldCoreImpl(
   // E.g., "shapes__iter" or "shapes__iter.vertices" should not be prefixed with "value."
   const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
   const target = isArrayItem ? fieldName : `value.${fieldName}`;
+
+  // field_id_delta: read the delta off the wire, reconstruct the absolute id via
+  // the struct-scoped accumulator, and expose the id as the decoded value.
+  const fieldAnyDecode = field as any;
+  if (fieldAnyDecode.computed?.type === "field_id_delta") {
+    let readExpr: string;
+    switch (field.type) {
+      case "bit": readExpr = `Number(this.readBits(${fieldAnyDecode.size ?? 8}))`; break;
+      case "uint8": readExpr = `this.readUint8()`; break;
+      case "uint16": readExpr = `this.readUint16("${endianness}")`; break;
+      case "uint32": readExpr = `this.readUint32("${endianness}")`; break;
+      case "uint64": readExpr = `Number(this.readUint64("${endianness}"))`; break;
+      case "varlength": {
+        const encoding = ('encoding' in field ? field.encoding : 'leb128') as string;
+        const methodMap: Record<string, string> = {
+          'der': 'readVarlengthDER', 'leb128': 'readVarlengthLEB128', 'ebml': 'readVarlengthEBML',
+          'vlq': 'readVarlengthVLQ', 'zigzag': 'readVarlengthZigZag', 'leb128_signed': 'readVarlengthSLEB128',
+        };
+        readExpr = `this.${methodMap[encoding]}()`;
+        break;
+      }
+      default:
+        throw new Error(`Computed field '${fieldName}' (field_id_delta) has unsupported type '${field.type}'. Supported types: bit, uint8, uint16, uint32, uint64, varlength`);
+    }
+    let code = `${indent}const __delta_${fieldName} = ${readExpr};\n`;
+    code += `${indent}${target} = __field_id_acc + __delta_${fieldName};\n`;
+    code += `${indent}__field_id_acc = ${target};\n`;
+    return code;
+  }
 
   switch (field.type) {
     case "bit":

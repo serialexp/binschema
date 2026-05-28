@@ -2316,6 +2316,13 @@ function generateEncodeMethod(name: string, fields: Field[], defaultEndianness: 
   // Track which fields have been encoded (for from_after_field handling)
   const encodedFields = new Set<number>();
 
+  // Stateful accumulator for field_id_delta computed fields (Thrift-style field-id
+  // deltas). One per struct, advances only for fields actually emitted.
+  if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+    lines.push(`\t__fieldIdAcc := 0`);
+    lines.push(`\t_ = __fieldIdAcc`);
+  }
+
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
     const fieldAny = field as any;
@@ -3105,6 +3112,13 @@ function generateDecodeFunction(name: string, fields: Field[], defaultEndianness
   lines.push(`\tresult := &${name}{}`);
   lines.push(``);
 
+  // Stateful accumulator for field_id_delta computed fields (mirrors encode).
+  if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+    lines.push(`\t__fieldIdAcc := 0`);
+    lines.push(`\t_ = __fieldIdAcc`);
+    lines.push(``);
+  }
+
   // Generate decoding logic for each field
   for (const field of fields) {
     lines.push(...generateDecodeField(field, defaultEndianness, "\t", schema, name));
@@ -3196,6 +3210,30 @@ function generateEncodeField(
   // Handle computed fields - compute the value instead of reading from struct
   if (fieldAny.computed) {
     const computed = fieldAny.computed;
+
+    // field_id_delta: stateful accumulator (Thrift-style field-id deltas).
+    // delta = id - lastEmitted; lastEmitted = id. Only emitted (conditional-true)
+    // fields advance the accumulator.
+    if (computed.type === "field_id_delta") {
+      const id = computed.id ?? 0;
+      const computedVarName = `${toGoFieldName(field.name)}_computed`;
+      const goType = mapPrimitiveToGoType(field.type);
+      const body: string[] = [];
+      const innerIndent = fieldAny.conditional ? indent + "\t" : indent;
+      body.push(`${innerIndent}// Computed field '${field.name}': field_id_delta (id=${id})`);
+      body.push(`${innerIndent}${computedVarName} := ${goType}(${id} - __fieldIdAcc)`);
+      body.push(`${innerIndent}__fieldIdAcc = ${id}`);
+      body.push(...generateEncodeFieldImpl(field, computedVarName, endianness, runtimeEndianness, innerIndent, schema));
+      if (fieldAny.conditional) {
+        const condition = convertConditionalToGo(fieldAny.conditional);
+        lines.push(`${indent}if ${condition} {`);
+        lines.push(...body);
+        lines.push(`${indent}}`);
+      } else {
+        lines.push(...body);
+      }
+      return lines;
+    }
 
     // Check for parent reference (../) or sum_of computed types
     const target = computed.target;
@@ -4341,6 +4379,40 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
  */
 function generateDecodeFieldImpl(field: Field, fieldName: string, varName: string, endianness: string, runtimeEndianness: string, indent: string, schema?: BinarySchema, parentTypeName?: string): string[] {
   const lines: string[] = [];
+
+  // field_id_delta: read the wire delta, then reconstruct the absolute id by
+  // adding the running accumulator. The decoded value is the absolute id.
+  if ((field as any).computed?.type === "field_id_delta") {
+    const goType = mapPrimitiveToGoType(field.type);
+    const deltaVar = `${varName}Delta`;
+    let readExpr: string;
+    switch (field.type) {
+      case "uint8": readExpr = `decoder.ReadUint8()`; break;
+      case "uint16": readExpr = `decoder.ReadUint16(runtime.${runtimeEndianness})`; break;
+      case "uint32": readExpr = `decoder.ReadUint32(runtime.${runtimeEndianness})`; break;
+      case "uint64": readExpr = `decoder.ReadUint64(runtime.${runtimeEndianness})`; break;
+      case "varlength": {
+        const varlengthEncoding = (field as any).encoding || "leb128";
+        const methodMap: { [key: string]: string } = {
+          'der': 'ReadVarlengthDER', 'leb128': 'ReadVarlengthLEB128',
+          'ebml': 'ReadVarlengthEBML', 'vlq': 'ReadVarlengthVLQ',
+          'zigzag': 'ReadVarlengthZigZag', 'leb128_signed': 'ReadVarlengthSLEB128',
+        };
+        readExpr = `decoder.${methodMap[varlengthEncoding] || 'ReadVarlengthLEB128'}()`;
+        break;
+      }
+      default:
+        throw new Error(`field_id_delta unsupported field type '${field.type}'`);
+    }
+    lines.push(`${indent}${deltaVar}, err := ${readExpr}`);
+    lines.push(`${indent}if err != nil {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name || 'field_id_delta'}: %w", err)`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}result.${fieldName} = ${goType}(__fieldIdAcc) + ${goType}(${deltaVar})`);
+    lines.push(`${indent}__fieldIdAcc = int(result.${fieldName})`);
+    lines.push(``);
+    return lines;
+  }
 
   switch (field.type) {
     case "uint8":

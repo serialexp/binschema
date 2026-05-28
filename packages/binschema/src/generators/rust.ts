@@ -3762,13 +3762,30 @@ function generateFromInputToOutput(name: string, schemaTypeName: string, fields:
     if (fieldAny.const != null) {
       expr = generateConstFieldExpression(field, defaultEndianness);
     } else if (fieldAny.computed != null) {
-      const plan = computedPlans.get(field.name!);
-      if (plan) {
-        // Cast the usize/u32 binding to the field's actual Rust integer type.
-        expr = castComputedExprToFieldType(plan.varName, field);
+      if (fieldAny.computed.type === "field_id_delta") {
+        // field_id_delta: the decoded value is the absolute id, which is known
+        // statically. Reconstruct it directly so input.into() matches decode().
+        const id = fieldAny.computed.id ?? 0;
+        const baseRustType = mapFieldToRustType(field);
+        const idExpr = `${id} as ${baseRustType}`;
+        if (isFieldConditional(field)) {
+          const cond = convertConditionalToRust(fieldAny.conditional, "i.", fields);
+          expr = `if ${cond} { Some(${idExpr}) } else { None }`;
+        } else {
+          expr = idExpr;
+        }
       } else {
-        // Context-dependent computed field — placeholder; encode() recomputes.
-        expr = generateComputedFieldPlaceholder(field, schema);
+        const plan = computedPlans.get(field.name!);
+        if (plan) {
+          // Cast the usize/u32 binding to the field's actual Rust integer type.
+          expr = castComputedExprToFieldType(plan.varName, field);
+          // Conditional computed fields are Option<T> in the Output struct.
+          if (isFieldConditional(field)) expr = `Some(${expr})`;
+        } else {
+          // Context-dependent computed field — placeholder; encode() recomputes.
+          // Conditional computed fields are Option<T>, so the placeholder is None.
+          expr = isFieldConditional(field) ? "None" : generateComputedFieldPlaceholder(field, schema);
+        }
       }
     } else {
       // Regular Input field — same conversion logic as Output→Input direction,
@@ -4285,6 +4302,13 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
   // Compute per-field byte-alignment for optimized encode calls
   const fieldAlignments = computeFieldAlignments(fields);
 
+  // Stateful accumulator for field_id_delta computed fields (Thrift-style field-id
+  // deltas). One per struct, advances only for fields actually emitted.
+  if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+    lines.push(`        let mut __field_id_acc: i64 = 0;`);
+    lines.push(`        let _ = &mut __field_id_acc;`);
+  }
+
   // Generate encoding logic for each field
   for (let fieldIdx = 0; fieldIdx < fields.length; fieldIdx++) {
     const field = fields[fieldIdx];
@@ -4484,6 +4508,29 @@ function generateEncodeComputedField(
 
   // Helper to convert computed variable name (avoid Rust reserved keywords)
   const computedVarName = toRustFieldName(fieldName) + "_computed";
+
+  // field_id_delta: stateful accumulator (Thrift-style field-id deltas).
+  // delta = id - last_emitted; last_emitted = id. Only emitted (conditional-true)
+  // fields advance the accumulator.
+  if (computed.type === "field_id_delta") {
+    const id = computed.id ?? 0;
+    const isConditional = isFieldConditional(field);
+    const innerIndent = isConditional ? indent + "    " : indent;
+    const body: string[] = [];
+    body.push(`${innerIndent}// Computed field '${fieldName}': field_id_delta (id=${id})`);
+    body.push(`${innerIndent}let ${computedVarName} = ${id}i64 - __field_id_acc;`);
+    body.push(`${innerIndent}__field_id_acc = ${id}i64;`);
+    body.push(...generateComputedFieldWrite(field, computedVarName, rustEndianness, innerIndent));
+    if (isConditional) {
+      const condition = convertConditionalToRust(fieldAny.conditional, "self.", allFields);
+      lines.push(`${indent}if ${condition} {`);
+      lines.push(...body);
+      lines.push(`${indent}}`);
+    } else {
+      lines.push(...body);
+    }
+    return lines;
+  }
 
   if (computed.type === "length_of") {
     // Check for from_after_field (ASN.1/DER style length calculation)
@@ -5458,6 +5505,12 @@ function generateDecodeMethod(name: string, fields: Field[], defaultEndianness: 
 
   // Compute per-field byte-alignment for optimized decode calls
   const fieldAlignments = computeFieldAlignments(fields);
+
+  // Stateful accumulator for field_id_delta computed fields (mirrors encode).
+  if (fields.some(f => (f as any).computed?.type === "field_id_delta")) {
+    lines.push(`        let mut __field_id_acc: i64 = 0;`);
+    lines.push(`        let _ = &mut __field_id_acc;`);
+  }
 
   // Generate decoding logic for each field
   // Note: We decode ALL fields (including unnamed) because they may be referenced
@@ -6621,6 +6674,36 @@ function generateEncodeOptional(field: any, fieldName: string, endianness: strin
 /**
  * Generates decoding code for a single field
  */
+/**
+ * Generate decode code for a field_id_delta computed field.
+ * Reads the wire delta, then reconstructs the absolute id by adding the running
+ * `__field_id_acc` accumulator. The decoded value is the absolute id; the
+ * accumulator advances to that id.
+ */
+function generateDecodeFieldIdDelta(field: Field, varName: string, rustEndianness: string, indent: string, aligned: boolean): string[] {
+  const lines: string[] = [];
+  const rustType = mapFieldToRustType(field);
+  const deltaVar = `${varName}_delta`;
+  switch (field.type) {
+    case "uint8":
+    case "uint16":
+    case "uint32":
+    case "uint64":
+      lines.push(`${indent}let ${deltaVar} = ${emitDecoderRead(field.type, rustEndianness, aligned)};`);
+      break;
+    case "varlength": {
+      const encoding = (field as any).encoding || "leb128";
+      lines.push(emitRustVarlengthRead(indent, deltaVar, encoding));
+      break;
+    }
+    default:
+      throw new Error(`field_id_delta unsupported field type '${field.type}'`);
+  }
+  lines.push(`${indent}let ${varName} = (__field_id_acc + ${deltaVar} as i64) as ${rustType};`);
+  lines.push(`${indent}__field_id_acc = ${varName} as i64;`);
+  return lines;
+}
+
 function generateDecodeField(field: Field, defaultEndianness: string, indent: string, containingTypeName: string, schema: BinarySchema, allFields?: Field[], hasContext?: boolean, byteAligned?: boolean): string[] {
   const lines: string[] = [];
   const varName = toRustFieldName(field.name);
@@ -6653,6 +6736,12 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
     lines.push(`${indent}    None`);
     lines.push(`${indent}};`);
 
+    return lines;
+  }
+
+  // field_id_delta: read wire delta, reconstruct absolute id via accumulator.
+  if ((field as any).computed?.type === "field_id_delta") {
+    lines.push(...generateDecodeFieldIdDelta(field, varName, rustEndianness, indent, aligned));
     return lines;
   }
 
@@ -7000,6 +7089,12 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
   const endianness = (field as any).endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
   const aligned = byteAligned === true;
+
+  // field_id_delta: read wire delta, reconstruct absolute id via accumulator.
+  if ((field as any).computed?.type === "field_id_delta") {
+    lines.push(...generateDecodeFieldIdDelta(field, varName, rustEndianness, indent, aligned));
+    return lines;
+  }
 
   switch (field.type) {
     case "uint8":

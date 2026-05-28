@@ -94,8 +94,11 @@ export type StringEncoding = z.infer<typeof StringEncodingSchema>;
  * Phase 5: sum_of_type_sizes - sum the encoded sizes of array elements of a specific type
  */
 const ComputedFieldSchema = z.object({
-  type: z.enum(["length_of", "crc32_of", "position_of", "sum_of_sizes", "sum_of_type_sizes"]).meta({
+  type: z.enum(["length_of", "crc32_of", "position_of", "sum_of_sizes", "sum_of_type_sizes", "field_id_delta"]).meta({
     description: "Type of computation to perform"
+  }),
+  id: z.number().int().optional().meta({
+    description: "For field_id_delta: this field's absolute id. The encoded value is (id - last_emitted_id) where last_emitted_id is a struct-scoped accumulator that advances only for emitted fields. Used to model Thrift compact field headers."
   }),
   target: z.string().optional().meta({
     description: "Name of the field or type to compute from (supports dot notation like 'header.data'). Used by length_of, crc32_of, position_of, sum_of_type_sizes"

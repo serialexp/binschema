@@ -298,6 +298,24 @@ function validateComputedField(
         message: `Computed field with type 'position_of' must have unsigned integer type (uint8, uint16, uint32, uint64), got '${field.type}'`
       });
     }
+  } else if (computed.type === "field_id_delta") {
+    // field_id_delta uses a stateful per-struct accumulator; it carries an
+    // absolute field 'id' instead of a 'target'. Value type must be an
+    // unsigned integer or varlength (it holds the delta on the wire).
+    if (!isUnsignedIntType(field.type) && field.type !== "varlength") {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'field_id_delta' must have unsigned integer or varlength type (uint8, uint16, uint32, uint64, varlength), got '${field.type}'`
+      });
+    }
+    if (computed.id === undefined) {
+      errors.push({
+        path: `${path} (${field.name})`,
+        message: `Computed field with type 'field_id_delta' must have an 'id' property`
+      });
+    }
+    // No target reference; accumulator is resolved at encode/decode time.
+    return;
   } else if (computed.type === "sum_of_sizes") {
     // sum_of_sizes requires unsigned integer type
     if (!isUnsignedIntType(field.type)) {
