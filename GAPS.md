@@ -1,97 +1,107 @@
 # BinSchema Feature Gap Analysis
 
-Analysis performed 2026-03-03 by thorough exploration of the TypeScript generator, schema definitions, test suites, and real-world example schemas.
+Originally analyzed 2026-03-03. **Updated 2026-05-28** after a re-audit of the
+TypeScript/Go/Rust/Python generators, schema definitions, test suites, and a
+round of real-world pressure-testing against Apache Parquet/Thrift.
+
+> Source now lives under `packages/binschema/src/` (monorepo layout). Paths in
+> this document reflect that.
 
 ## What's Already Excellent
 
 The type system is remarkably complete for binary format definition:
 
-- **Primitives**: uint8-64, int8-64, float32/64, varlength (DER, LEB128, VLQ, EBML)
-- **Strings**: fixed, length-prefixed, field-referenced, null-terminated; utf8/ascii/latin1 encodings
+- **Primitives**: uint8-64, int8-64, float32/64, **bool**, varlength (DER, LEB128, VLQ, EBML)
+- **Strings**: fixed, length-prefixed, field-referenced, null-terminated; **utf8/utf16(LE+BE)/ascii/latin1** encodings
+- **Raw bytes**: first-class `bytes` type with the same kind options as arrays (fixed, length-prefixed, field-referenced, byte-length-prefixed, signature-terminated, computed-count) → `Uint8Array`/`[]byte`/`Vec<u8>`
 - **Arrays**: 10 kinds (fixed, length-prefixed, length-prefixed-items, byte-length-prefixed, field-referenced, null-terminated, signature-terminated, variant-terminated, computed-count, eof-terminated)
 - **Bit-level**: bitfields, single bits, multi-byte bits, MSB/LSB ordering
 - **Unions**: discriminated_union (peek/field-based), choice (auto-detected from const values)
 - **Computed fields**: length_of, count_of, position_of, crc32_of, sum_of_sizes, sum_of_type_sizes
+- **Expression language**: arithmetic (`+ - * /`) with precedence and parentheses, comparisons, boolean/bitwise operators, field references
 - **Structural**: conditional fields, optional fields, back-references, padding/alignment, enums
 - **Random-access**: position fields with seekable parsing
+- **Streaming**: async-generator decode wrappers (`decode{Type}Stream`) for chunked inputs
+- **Generators**: TypeScript (reference), Go, Rust, Python
 - **Real-world formats modeled**: DNS, ZIP, PNG, MIDI, PCF fonts, Kerberos
 
 ## Genuinely Missing Features
 
-Ordered roughly by how often you'd hit them in practice.
+Ordered roughly by how often you'd hit them in practice. The first two are the
+features blocking byte-exact Apache Parquet/Thrift output.
 
-### 1. No boolean type
+### 1. No signed / zigzag variable-length integers
 
-Every protocol has flag bytes. Currently requires `uint8` with 0/1 convention and manual interpretation. A native `bool` (1-byte or 1-bit) mapping to language-native booleans would reduce friction.
+`varlength` only supports unsigned values (`der`, `leb128`, `ebml`, `vlq`). Missing:
+- **ZigZag encoding**: maps `0,-1,1,-2,2…` → `0,1,2,3,4…` so small-magnitude negatives stay short, then LEB128. Used by Protocol Buffers (sint32/sint64) and **Apache Thrift compact protocol — every `i16/i32/i64`**.
+- **Signed LEB128**: DWARF debug info, WebAssembly (i32/i64 types).
 
-**Formats affected**: virtually all protocols
+These are distinct wire formats that can't be worked around with unsigned
+varlength — the *value* round-trips but the *bytes* don't match a real reader.
+This is the single most pervasive gap for Parquet: nearly every Thrift field is
+an i32/i64.
 
-### 2. No UTF-16 string encoding
+**Proposed shape**: add `"encoding": "zigzag"` (or a `"signed": true` flag) to `varlength`.
 
-Currently supports `utf8`, `ascii`, `latin1`. UTF-16 is used in:
-- Windows formats (PE headers, SMB, NTFS)
-- Java serialization
-- BMP/ICO metadata
-- USB descriptors
-- PDF internals
+**Formats affected**: Apache Parquet/Thrift, Protocol Buffers, WebAssembly, DWARF, ELF debug sections
 
-Both LE and BE variants are needed.
+### 2. No packed collection header (count + type tag in one byte)
 
-### 3. No raw bytes shorthand
+Thrift lists/maps start with one byte that crams two things together:
+`(count << 4) | element_type`, with a `0xF` escape in the low nibble when
+`count ≥ 15` (the real count then follows as a varint). BinSchema's `computed`
+system can compute a count, but it can't express "shift it left 4, OR in a type
+tag, and switch to an escape form past a threshold." Without this, any Thrift
+`list<…>` — and the Parquet footer is *made* of lists (`schema`, `row_groups`,
+`columns`) — can't be laid out field-by-field.
 
-"Give me the next N bytes" is possibly the most common pattern in binary formats. Currently requires:
-```json5
-{ "type": "array", "items": { "type": "uint8" }, "kind": "fixed", "length": N }
-```
+**Proposed shape**: a small computed-field kind like `packed_count` that knows
+the element-type tag and the escape rule.
 
-A `bytes` type with the same kind options as arrays (fixed, length-prefixed, field-referenced, eof-terminated) would dramatically reduce schema verbosity. In generated code, this would map to `Uint8Array` (TS), `[]byte` (Go), `Vec<u8>` (Rust) instead of number arrays.
+**Formats affected**: Apache Parquet/Thrift, any Thrift-encoded protocol
 
-**Formats affected**: virtually all binary formats
+### 3. No stateful field-id deltas (running accumulator across fields)
 
-### 4. No signed variable-length integers
+Thrift compact-protocol field headers store the field id as a *delta from the
+previous written field*. When a writer omits optional fields, the next field's
+delta changes. A fixed-shape writer sidesteps this (every delta is a
+compile-time constant), but a general writer that conditionally drops optional
+fields needs BinSchema to track "what was the last field id I actually emitted"
+and compute the running delta. That's a stateful accumulator across
+`conditional`/`optional` fields, which `computed` doesn't have today.
 
-`varlength` only supports unsigned values. Missing encodings:
-- **Signed LEB128**: Used in DWARF debug info, WebAssembly (i32/i64 types)
-- **ZigZag encoding**: Used in Protocol Buffers (sint32, sint64)
+Only required for a *fully general, spec-complete* Thrift encoder — a
+fixed-shape Parquet footer (features 1 + 2) does not need it.
 
-These are distinct wire formats that can't be worked around with unsigned varlength.
+**Formats affected**: general Apache Thrift encoders
 
-**Formats affected**: Protocol Buffers, WebAssembly, DWARF, ELF debug sections
+### 4. No checksum validation on decode
 
-### 5. No arithmetic in computed expressions
-
-Common patterns that can't be expressed:
-- `field_value * 512` — sector-based offsets (FAT, ext4, disk images)
-- `field_value - 2` — JPEG markers where length includes the length field itself
-- `field_value * 4` — word-aligned offsets (ARM, many embedded protocols)
-- `field_value + 1` — zero-indexed counts (e.g., "0 means 1 element")
-
-The expression language only supports comparisons and boolean/bitwise operators, not arithmetic.
-
-**Formats affected**: JPEG, FAT/ext4, ARM binaries, many embedded/hardware protocols
-
-### 6. No checksum validation on decode
-
-CRC32 is computed during encode via `computed: { type: "crc32_of", target: "field" }`, but during decode the computed value is just stored — there's no validation that it matches the data. For a format tool, being able to say "validate this CRC on decode and raise an error on mismatch" would catch data corruption.
+CRC32 is computed during encode via `computed: { type: "crc32_of", target: "field" }`,
+but during decode the computed value is just stored — there's no validation that
+it matches the data. For a format tool, being able to say "validate this CRC on
+decode and raise an error on mismatch" would catch data corruption.
 
 Could extend to other checksums too: Adler32 (zlib), MD5, SHA-256.
 
 **Formats affected**: PNG, ZIP, Ethernet frames, TCP/UDP, any format with integrity checks
 
-### 7. No bit-shift operators in expressions
+### 5. No bit-shift operators in expressions
 
-`<<` and `>>` are missing from the expression language. Used in formats where:
+`<<` and `>>` are missing from the expression language (which now does `+ - * /`).
+Used in formats where:
 - `size = value << 4` (block size encoding)
 - `offset = value >> 2` (word-aligned offset encoding)
 - `flags = value & (1 << bit_index)` (individual bit testing)
 
 **Formats affected**: hardware registers, embedded protocols, multimedia codecs
 
-### 8. No bitmask/flags type
+### 6. No bitmask/flags type
 
-Distinct from bitfields: a `flags` type where a uint8/uint16/uint32 is decoded into a set of named boolean flags.
-
-Bitfields work when bits are contiguous and explicitly defined, but the common "flags register" pattern (scattered named bits with reserved/unused gaps) would benefit from:
+Distinct from bitfields: a `flags` type where a uint8/uint16/uint32 is decoded
+into a set of named boolean flags. Bitfields work when bits are contiguous and
+explicitly defined, but the common "flags register" pattern (scattered named
+bits with reserved/unused gaps) would benefit from:
 ```json5
 {
   "type": "flags",
@@ -109,17 +119,7 @@ This is more natural than a bitfield when bits aren't contiguous.
 
 **Formats affected**: ZIP local file headers, TCP flags, USB endpoint descriptors, ELF section flags
 
-### 9. Field-based discriminators (schema-supported but unimplemented)
-
-The schema allows `discriminator: { field: "earlier_field" }` but **all three generators** throw "not implemented" at code generation time. This is a usability trap — the schema validates fine, but code generation fails.
-
-This is needed when the discriminator is a regular field that was already consumed (not peek-able), such as:
-- A `type` field earlier in the struct determines which variant follows
-- A bitfield sub-field discriminates the payload
-
-**Current workaround**: Use peek-based discriminators or restructure the schema. But this forces unnatural schema design.
-
-### 10. No `assert` / validation constraints
+### 7. No `assert` / validation constraints
 
 Beyond `const` (exact match required), there's no way to express:
 - Range constraints: `value >= 1 && value <= 10`
@@ -133,36 +133,71 @@ Useful for both format validation and self-documenting schemas.
 
 ## Smaller Gaps
 
-### Default values for optional/conditional fields
-When a conditional/optional field is absent, decoded value is `undefined`. Some formats define default values for absent fields (e.g., "if flag not set, assume version = 1").
+### Field-based discriminators incomplete in Go/Rust encode
+The schema allows `discriminator: { field: "earlier_field" }`. It now works in
+**TypeScript and Python** (encode + decode) and in **Go/Rust decode**, but the
+**Go and Rust encode paths still throw** `field-based discriminator not implemented`
+(`go.ts` ~L1847, `rust.ts` ~L1994). Inline (in-array) field-based discriminators
+are also still unsupported in TypeScript. The schema validates fine, so this
+remains a partial usability trap on the unfinished paths.
 
-### Latin1 string size calculation incomplete
-Size calculation for latin1 strings in computed fields throws an error. Only UTF-8 and ASCII are implemented.
+### Default values for optional/conditional fields
+When a conditional/optional field is absent, decoded value is `undefined`/`nil`/`None`.
+Some formats define default values for absent fields (e.g., "if flag not set,
+assume version = 1"). No `default_value` support in the schema.
 
 ### No ternary expressions
 Can't write `condition ? value_a : value_b` in conditional or computed expressions.
 
-### Varlength size calculation incomplete
-Computed fields that depend on varlength fields can't accurately calculate sizes. Only fixed-size types are reliable.
+### Varlength size calculation incomplete (LEB128/EBML)
+Computed-field size calculation now handles DER and VLQ varlength, but **LEB128
+and EBML still throw** a "not yet implemented" error
+(`typescript/size-calculation.ts` ~L245). Computed fields that depend on
+LEB128/EBML-sized fields can't calculate sizes.
 
 ## Implementation Status Across Generators
 
-| Feature | TypeScript | Go | Rust |
-|---------|-----------|-----|------|
-| Field-based discriminators | ❌ Throws | ❌ Throws | ❌ Throws |
-| Corresponding selectors in CRC32 | ✅ | ✅ | ❌ |
-| Inline choice in sequences | ✅ | ❌ | ✅ |
-| Parent field references (../) | ✅ | ✅ | ⚠️ Partial |
-| Context threading | ✅ Full | ⚠️ Partial | ❌ |
-| String type aliases | ✅ | ✅ | ✅ |
-| Overall test pass rate | ~99.7% | ~99% | ~69.8% |
+| Feature | TypeScript | Go | Rust | Python |
+|---------|-----------|-----|------|--------|
+| Field-based discriminators (decode) | ✅ | ✅ | ✅ | ✅ |
+| Field-based discriminators (encode) | ✅ | ❌ Throws | ❌ Throws | ✅ |
+| Inline (in-array) field-based discriminators | ❌ Throws | ❌ | ❌ | ❌ |
+| Corresponding selectors in CRC32 | ✅ | ✅ | ✅ | ⚠️ Partial |
+| Inline choice in sequences | ✅ | ❌ | ✅ | ✅ |
+| Parent field references (../) | ✅ | ✅ | ✅ | ⚠️ Partial |
+| Context threading | ✅ Full | ⚠️ Partial | ✅ Full | ⚠️ Partial |
+| String type aliases | ✅ | ✅ | ✅ | ✅ |
+| Overall test pass rate | high* | high* | 100% (756/756) | ~93% (730/785) |
+
+\* TypeScript and Go were not freshly re-measured in this audit; both were
+near-perfect at last measurement and no regressions are documented. Rust pass
+rate jumped from ~70% (March) to 100%. Python is the newest generator and its
+remaining failures are tracked in `CURRENT_TASK.md` (encode-time context
+threading for selectors, corresponding correlations, multi-level parent refs,
+and DNS/ZIP/PCF integration).
+
+## Known Bugs
+
+### ~~Rust: off-by-one in parent-frame depth for `../` references from a nested child struct~~ — FIXED 2026-05-28
+
+When a nested struct referenced a field in its containing struct via `../` *and*
+that same struct also contained a nested struct of its own, the Rust generator
+resolved the struct's own `../` computed fields against `child_ctx` (which has
+the struct's own frame pushed on top for its children), instead of the incoming
+`ctx`. The extra frame put the target one level too deep, producing
+`InvalidValue("Parent field 'foo' not found at level 1")` at encode time.
+
+Fixed in `rust.ts`: parent-reference computed fields now resolve against the
+incoming `ctx` (`parentRefCtxVar`), while tracking-based selectors
+(first/last/corresponding/position) continue to use `child_ctx`. Regression test:
+`tests/composite/parent-reference-with-nested-struct.test.ts` (passes on all four
+generators).
 
 ## Not Missing (Reasonable Design Decisions)
 
 These were considered but are intentionally out of scope:
 
-- **No compression/decompression**: BinSchema defines wire format, not data transforms
-- **No streaming/async decode**: Reasonable for schema-based code generation
+- **No compression/decompression**: BinSchema defines wire format, not data transforms. A page body (Parquet) or compressed file body (ZIP) is correctly treated as an opaque payload; zstd/RLE/dictionary encoding run *over* bytes, not layout.
 - **No type inheritance/generics**: Keeps the type system simple and predictable
 - **No recursive self-referential types**: Extremely rare in wire formats
 - **No TLV as first-class type**: Can be modeled with discriminated_union + computed length fields
