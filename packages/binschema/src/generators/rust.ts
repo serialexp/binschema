@@ -3026,6 +3026,104 @@ function generateSimpleStruct(name: string, fields: Field[], schemaTypeName?: st
 }
 
 /**
+ * For every `length_of` field with `from_after_field`, emit a helper
+ * `_post_<fieldName>_bytes(&self) -> Result<Vec<u8>>` on the Input impl. The
+ * helper encodes all fields after `from_after_field` (excluding the computed
+ * length field itself, and excluding any fields consumed by a nested
+ * `from_after_field`) into a fresh BitStreamEncoder and returns the bytes.
+ *
+ * This mirrors the encode pipeline's content-first construction and reuses
+ * the same per-field encode generators, so it handles nested computed
+ * fields, arrays of every kind, conditional fields, and recursive
+ * from_after_field with no special-casing.
+ *
+ * The `From<XInput> for XOutput` impl uses these helpers to fill computed
+ * from_after_field-style length fields with their real values instead of
+ * placeholder zeros.
+ */
+function generateFromAfterContentHelpers(
+  fields: Field[],
+  defaultEndianness: string,
+  defaultBitOrder: string,
+  schema: BinarySchema,
+): string[] {
+  const lines: string[] = [];
+  const bitOrder = mapBitOrder(defaultBitOrder);
+
+  for (const field of fields) {
+    const fa: any = field;
+    if (fa.computed?.type !== "length_of" || !fa.computed.from_after_field) continue;
+
+    const fromAfter = fa.computed.from_after_field as string;
+    const fromAfterIdx = fields.findIndex((f) => f.name === fromAfter);
+    if (fromAfterIdx < 0) continue;
+
+    const subsequent = fields.slice(fromAfterIdx + 1);
+
+    // Replicate the encode pipeline's `fieldsConsumedByFromAfter` logic so
+    // we don't double-emit fields that a *nested* from_after_field claims.
+    // Skip the current field itself — its own from_after relationship is
+    // what defines this helper, not a nested one.
+    const consumedByNested = new Set<string>();
+    for (const sf of subsequent) {
+      if (sf.name === field.name) continue;
+      const sfa: any = sf;
+      if (sfa.computed?.type === "length_of" && sfa.computed.from_after_field) {
+        const innerFromAfter = sfa.computed.from_after_field;
+        const innerFromAfterIdx = fields.findIndex((f) => f.name === innerFromAfter);
+        if (innerFromAfterIdx >= 0) {
+          for (let j = innerFromAfterIdx + 1; j < fields.length; j++) {
+            const nm = fields[j].name;
+            if (nm && nm !== sf.name) consumedByNested.add(nm);
+          }
+        }
+      }
+    }
+
+    const helperName = `_post_${toRustFieldName(field.name!)}_bytes`;
+    const intoHelperName = `_post_${toRustFieldName(field.name!)}_into`;
+
+    // Wrapper that constructs an encoder, delegates to the `_into` helper,
+    // then returns the finished bytes.
+    lines.push(``);
+    lines.push(`    pub(crate) fn ${helperName}(&self) -> Result<Vec<u8>> {`);
+    lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
+    lines.push(`        self.${intoHelperName}(&mut encoder)?;`);
+    lines.push(`        Ok(encoder.finish())`);
+    lines.push(`    }`);
+
+    // The `_into` helper accepts `&mut BitStreamEncoder` exactly like the
+    // generated encode_into bodies, so the per-field encode generators
+    // (which emit `encoder.write_*(...)`, `item.encode_into(encoder)`, etc.)
+    // type-check without any adaptation.
+    lines.push(``);
+    lines.push(`    fn ${intoHelperName}(&self, encoder: &mut BitStreamEncoder) -> Result<()> {`);
+
+    for (const sf of subsequent) {
+      if (!sf.name) continue;
+      if (sf.name === field.name) continue;
+      if (consumedByNested.has(sf.name)) continue;
+
+      const sfa: any = sf;
+      if (sfa.const != null) {
+        lines.push(...generateEncodeConstField(sf, sfa.const, defaultEndianness, "        ", true));
+      } else if (sfa.computed != null) {
+        lines.push(...generateEncodeComputedField(sf, fields, defaultEndianness, "        ", undefined, schema));
+      } else if (isFieldConditional(sf)) {
+        lines.push(...generateEncodeConditionalField(sf, fields, defaultEndianness, "        ", true));
+      } else {
+        lines.push(...generateEncodeField(sf, defaultEndianness, "        ", schema, false, undefined, true));
+      }
+    }
+
+    lines.push(`        Ok(())`);
+    lines.push(`    }`);
+  }
+
+  return lines;
+}
+
+/**
  * Generates impl blocks for a sequence type.
  * If the type needs Input/Output split, generates separate impls for Input (encode) and Output (decode)
  * plus a From conversion. Otherwise generates a single impl with both encode and decode.
@@ -3037,6 +3135,12 @@ function generateImpl(name: string, schemaTypeName: string, fields: Field[], def
     // Split mode: encode on Input, decode on Output, From conversion
     lines.push(`impl ${name}Input {`);
     lines.push(...generateEncodeMethod(fields, defaultEndianness, defaultBitOrder, schema, schemaTypeName));
+    // For each from_after_field computed length field, also emit a helper
+    // method that encodes the post-`from_after_field` content (excluding the
+    // computed length field itself) and returns the resulting bytes. The
+    // `From<Input> for Output` impl uses these to compute real values for
+    // from_after_field-style lengths instead of placeholder zeros.
+    lines.push(...generateFromAfterContentHelpers(fields, defaultEndianness, defaultBitOrder, schema));
     lines.push(`}`);
     lines.push(``);
 
@@ -3055,7 +3159,7 @@ function generateImpl(name: string, schemaTypeName: string, fields: Field[], def
     // Generate From<Input> for Output conversion (fills in const, placeholder
     // for computed). Lets callers construct discriminated_union / choice
     // variants directly from Input structs via `MyVariant(input.into())`.
-    lines.push(...generateFromInputToOutput(name, fields, schema, defaultEndianness));
+    lines.push(...generateFromInputToOutput(name, schemaTypeName, fields, schema, defaultEndianness, defaultBitOrder));
   } else {
     // Unified mode: single impl with both encode and decode
     lines.push(`impl ${name} {`);
@@ -3330,6 +3434,249 @@ function generateConstFieldExpression(field: Field, defaultEndianness: string): 
 }
 
 /**
+ * Generates pure-compute Rust code for a computed field's value, suitable
+ * for use in both encode() (then followed by a write) and From<Input> for
+ * Output (then used as the field expression). Returns null when the
+ * computation requires the encoder (e.g. `encoder.byte_offset()` for
+ * position_of) or runtime context (parent refs, selectors,
+ * from_after_field). The caller falls back to inline encoder-aware code
+ * for null cases.
+ *
+ * The emitted code uses `${selfRef}.${field}` so it works whether the
+ * surrounding scope binds `self` (encode methods on Input) or `i`
+ * (From<Input> for Output).
+ *
+ * Returned `valueExpr` is a Rust expression yielding the computed value.
+ * For multi-statement compute, callers should push `lines` first and use
+ * `valueExpr` in the write/struct-field position.
+ */
+function generateComputeComputedValue(
+  field: Field,
+  allFields: Field[],
+  defaultEndianness: string,
+  defaultBitOrder: string,
+  indent: string,
+  selfRef: string,
+  schema: BinarySchema,
+): { lines: string[]; valueExpr: string } | null {
+  const fieldAny = field as any;
+  const computed = fieldAny.computed;
+  if (!computed) return null;
+
+  const fieldName = field.name!;
+  const computedVarName = toRustFieldName(fieldName) + "_computed";
+
+  // Helper: does this target use selectors, parent refs, or other context?
+  const isContextDependentTarget = (target: any): boolean => {
+    if (typeof target !== "string") return true;
+    return target.includes("[") || target.includes("<") || target.startsWith("..") || target.includes("/");
+  };
+
+  if (computed.type === "length_of") {
+    if (computed.from_after_field) {
+      // The Input impl block emits a `_post_<fieldName>_bytes(&self) -> Result<Vec<u8>>`
+      // helper for every from_after_field computed length field. The helper
+      // reuses the full encode pipeline (handles nested computed fields,
+      // arrays, conditional fields, recursive from_after_field, etc.) and
+      // returns the encoded post-content bytes. We just take its length.
+      const helperName = `_post_${toRustFieldName(fieldName)}_bytes`;
+      const lines: string[] = [
+        `${indent}let ${computedVarName}: usize = ${selfRef}.${helperName}().map(|b| b.len()).unwrap_or(0);`,
+      ];
+      return { lines, valueExpr: computedVarName };
+    }
+    const target = computed.target;
+    if (isContextDependentTarget(target)) return null;
+
+    const targetField = allFields.find((f) => f.name === target);
+    if (!targetField) return null;
+
+    const targetRust = toRustFieldName(target as string);
+    const targetPath = `${selfRef}.${targetRust}`;
+    const lines: string[] = [];
+
+    if ((targetField.type as string) === "discriminated_union") {
+      // Discriminated union — needs encoding to measure. Use unwrap_or_default
+      // so the From<Input> for Output path is infallible. If encoding fails,
+      // the Output's len field will be 0 — which is wrong, but the subsequent
+      // encode() recomputes it correctly via the encoder path. The From path
+      // is purely for inspection.
+      lines.push(`${indent}let ${computedVarName}: usize = ${targetPath}.encode().map(|b| b.len()).unwrap_or(0);`);
+    } else if ((targetField.type as string) === "string") {
+      const encoding = (targetField as any).encoding || "utf8";
+      if (encoding === "latin1" || encoding === "ascii") {
+        lines.push(`${indent}let ${computedVarName}: usize = ${targetPath}.chars().count();`);
+      } else {
+        lines.push(`${indent}let ${computedVarName}: usize = ${targetPath}.len();`);
+      }
+    } else if (schema.types && schema.types[targetField.type as string]) {
+      // Composite type — needs encode to measure. Use infallible map for From path.
+      const targetTypeName = targetField.type as string;
+      if (typeNeedsInputOutputSuffix(targetTypeName, schema) && selfRef !== "self") {
+        // In From<Input> for Output, the input field is an Input type — has encode().
+        lines.push(`${indent}let ${computedVarName}: usize = ${targetPath}.encode().map(|b| b.len()).unwrap_or(0);`);
+      } else {
+        lines.push(`${indent}let ${computedVarName}: usize = ${targetPath}.encode().map(|b| b.len()).unwrap_or(0);`);
+      }
+    } else if ((targetField.type as string) === "array") {
+      lines.push(`${indent}let ${computedVarName}: usize = ${targetPath}.len();`);
+    } else {
+      // Primitive — .len() doesn't apply; fall back
+      return null;
+    }
+
+    if (computed.offset != null && computed.offset !== 0) {
+      lines.push(`${indent}let ${computedVarName}: usize = ${computedVarName} + ${computed.offset};`);
+    }
+    return { lines, valueExpr: computedVarName };
+  }
+
+  if (computed.type === "count_of") {
+    const target = computed.target;
+    if (isContextDependentTarget(target)) return null;
+    const targetField = allFields.find((f) => f.name === target);
+    if (!targetField) return null;
+    const targetRust = toRustFieldName(target as string);
+    return {
+      lines: [`${indent}let ${computedVarName}: usize = ${selfRef}.${targetRust}.len();`],
+      valueExpr: computedVarName,
+    };
+  }
+
+  if (computed.type === "crc32_of") {
+    const target = computed.target;
+    if (isContextDependentTarget(target)) return null;
+    const targetField = allFields.find((f) => f.name === target);
+    if (!targetField) return null;
+    const targetRust = toRustFieldName(target as string);
+    const targetPath = `${selfRef}.${targetRust}`;
+    const lines: string[] = [];
+
+    if ((targetField.type as string) === "array") {
+      const items = (targetField as any).items;
+      if (items?.type === "uint8") {
+        lines.push(`${indent}let ${computedVarName}: u32 = binschema_runtime::crc32(&${targetPath});`);
+        return { lines, valueExpr: computedVarName };
+      }
+    }
+    if (schema.types && schema.types[targetField.type as string]) {
+      lines.push(`${indent}let ${computedVarName}: u32 = ${targetPath}.encode().map(|b| binschema_runtime::crc32(&b)).unwrap_or(0);`);
+      return { lines, valueExpr: computedVarName };
+    }
+    return null;
+  }
+
+  if (computed.type === "position_of") {
+    const target = computed.target;
+    if (isContextDependentTarget(target)) return null;
+    const targetIdx = allFields.findIndex((f) => f.name === target);
+    if (targetIdx < 0) return null;
+
+    // Sum byte sizes of fields preceding the target. Each piece must produce
+    // a Rust usize expression we can add up.
+    const fieldsBefore = allFields.slice(0, targetIdx);
+    const sizePieces: string[] = [];
+    for (const f of fieldsBefore) {
+      if (!f.name) continue;
+      const piece = generateFieldByteSizeExpr(f, schema, selfRef);
+      if (piece === null) return null; // bail to placeholder
+      sizePieces.push(piece);
+    }
+    const sumExpr = sizePieces.length === 0 ? "0usize" : sizePieces.join(" + ");
+    return {
+      lines: [`${indent}let ${computedVarName}: usize = ${sumExpr};`],
+      valueExpr: computedVarName,
+    };
+  }
+
+  // sum_of_type_sizes, sum_of_sizes — all require parent context. Skip.
+  return null;
+}
+
+/**
+ * Returns the static or dynamic byte size of one encoded field, as a Rust
+ * usize expression, or null if the size can't be expressed without running
+ * the encoder. Used by the position_of computer in the `From<Input> for
+ * Output` impl.
+ *
+ * Const, computed and primitive value fields collapse to their static byte
+ * size. Strings, arrays and composite type references emit a dynamic
+ * expression that borrows from `selfRef`.
+ */
+function generateFieldByteSizeExpr(
+  field: Field,
+  schema: BinarySchema,
+  selfRef: string,
+): string | null {
+  const fa: any = field;
+  const t = field.type as string;
+  const rustName = field.name ? toRustFieldName(field.name) : null;
+  const accessor = rustName ? `${selfRef}.${rustName}` : null;
+
+  const primSize = (tn: string): number | null => {
+    switch (tn) {
+      case "uint8": case "int8": case "bool": return 1;
+      case "uint16": case "int16": return 2;
+      case "uint32": case "int32": case "float32": return 4;
+      case "uint64": case "int64": case "float64": return 8;
+    }
+    return null;
+  };
+
+  // Const fields encode their fixed value at their declared primitive size.
+  if (fa.const != null) {
+    const s = primSize(t);
+    return s == null ? null : `${s}usize`;
+  }
+
+  // Computed fields encode at their declared primitive size (uint*, int*,
+  // float*). varlength is value-dependent — bail.
+  if (fa.computed != null) {
+    const s = primSize(t);
+    if (s != null) return `${s}usize`;
+    return null;
+  }
+
+  // Plain primitive value.
+  const ps = primSize(t);
+  if (ps != null) return `${ps}usize`;
+
+  if (!accessor) return null;
+
+  switch (t) {
+    case "string": {
+      const encoding = fa.encoding || "utf8";
+      if (encoding === "latin1" || encoding === "ascii") {
+        return `${accessor}.chars().count()`;
+      }
+      return `${accessor}.len()`;
+    }
+    case "array": {
+      const kind = fa.kind;
+      const items = fa.items;
+      if (kind === "fixed" && items?.type) {
+        const itemPrim = primSize(items.type);
+        if (itemPrim != null) {
+          return `${(fa.length ?? 0) * itemPrim}usize`;
+        }
+      }
+      // Other array kinds (field_referenced/byte_length_prefixed/...) plus
+      // composite items: fall back to encoding the field to measure.
+      return null;
+    }
+    case "varlength":
+      return null;
+    default: {
+      if (schema.types && schema.types[t]) {
+        // Composite — call .encode() on Input field.
+        return `${accessor}.encode().map(|b| b.len()).unwrap_or(0)`;
+      }
+      return null;
+    }
+  }
+}
+
+/**
  * Generates a Rust expression for a computed/missing field's placeholder
  * value when constructing Output from Input. Computed fields are recomputed
  * by encode(), so any sentinel value works — we prefer Default::default()
@@ -3366,13 +3713,31 @@ function generateComputedFieldPlaceholder(field: Field, schema: BinarySchema): s
  * The point is to make `Some(my_input.into())` work when assembling
  * discriminated_union / choice variants that hold Output structs.
  */
-function generateFromInputToOutput(name: string, fields: Field[], schema: BinarySchema, defaultEndianness: string): string[] {
+function generateFromInputToOutput(name: string, schemaTypeName: string, fields: Field[], schema: BinarySchema, defaultEndianness: string, defaultBitOrder: string): string[] {
   const lines: string[] = [];
   const outputFields = fields.filter(f => f.name && f.type && f.type !== "padding");
+
+  // Precompute compute-lines for computed fields where we can produce the
+  // real value from Input alone. Fields whose computation requires context
+  // (parent refs, selectors, from_after_field) keep the placeholder.
+  type ComputedPlan = { varName: string; lines: string[] };
+  const computedPlans: Map<string, ComputedPlan> = new Map();
+  for (const field of outputFields) {
+    const fa = field as any;
+    if (fa.computed == null) continue;
+    const plan = generateComputeComputedValue(field, fields, defaultEndianness, defaultBitOrder, "        ", "i", schema);
+    if (plan) {
+      computedPlans.set(field.name!, { varName: plan.valueExpr, lines: plan.lines });
+    }
+  }
 
   lines.push(`impl From<${name}Input> for ${name}Output {`);
   const fromSigIdx = lines.length;
   lines.push(`    fn from(i: ${name}Input) -> Self {`);
+  // Emit compute lines (let-bindings) BEFORE the struct literal so they're in scope.
+  for (const plan of computedPlans.values()) {
+    lines.push(...plan.lines);
+  }
   lines.push(`        Self {`);
   for (const field of outputFields) {
     const fieldName = toRustFieldName(field.name!);
@@ -3381,12 +3746,31 @@ function generateFromInputToOutput(name: string, fields: Field[], schema: Binary
     if (fieldAny.const != null) {
       expr = generateConstFieldExpression(field, defaultEndianness);
     } else if (fieldAny.computed != null) {
-      expr = generateComputedFieldPlaceholder(field, schema);
+      const plan = computedPlans.get(field.name!);
+      if (plan) {
+        // Cast the usize/u32 binding to the field's actual Rust integer type.
+        expr = castComputedExprToFieldType(plan.varName, field);
+      } else {
+        // Context-dependent computed field — placeholder; encode() recomputes.
+        expr = generateComputedFieldPlaceholder(field, schema);
+      }
     } else {
       // Regular Input field — same conversion logic as Output→Input direction,
       // but with `i.` accessor. Both From directions exist for any split type,
       // so `.into()` resolves correctly in both directions.
-      expr = generateFromFieldConversion(fieldName, field, schema).replace(/\bo\./g, "i.");
+      //
+      // Special case: array of choice/discriminated_union whose variant
+      // payload types have an Input/Output split. The variants wrap Output
+      // structs by design; an identity copy of the Vec would leak the test
+      // constructor's placeholder-zeroed computed fields into the result.
+      // Emit an explicit per-variant `Output::from(Input::from(p))` refresh
+      // so each variant's computed fields are recomputed from its Input data.
+      const refreshExpr = generateArrayVariantRefresh(fieldName, schemaTypeName, field, schema, "i");
+      if (refreshExpr !== null) {
+        expr = refreshExpr;
+      } else {
+        expr = generateFromFieldConversion(fieldName, field, schema).replace(/\bo\./g, "i.");
+      }
     }
     lines.push(`            ${fieldName}: ${expr},`);
   }
@@ -3399,6 +3783,93 @@ function generateFromInputToOutput(name: string, fields: Field[], schema: Binary
   rewriteBindingIfUnused(lines, fromSigIdx, "i");
 
   return lines;
+}
+
+/**
+ * For array fields whose items are an inline choice/discriminated_union with
+ * variants that have Input/Output split payloads, generate a per-variant
+ * refresh expression that maps each `Variant(p)` to
+ * `Variant(<PayloadOutput>::from(<PayloadInput>::from(p)))`. This forces a
+ * recomputation of the payload's computed fields when constructing the outer
+ * Output via `From<Input>`.
+ *
+ * Returns null when the field is not an applicable array shape, or when no
+ * variant payload has a split (identity copy is correct in that case).
+ */
+function generateArrayVariantRefresh(
+  rustFieldName: string,
+  containingSchemaTypeName: string,
+  field: Field,
+  schema: BinarySchema,
+  selfRef: string,
+): string | null {
+  if ((field.type as string) !== "array") return null;
+  const items: any = (field as any).items;
+  if (!items) return null;
+  if (items.type !== "choice" && items.type !== "discriminated_union") return null;
+
+  const variantList: any[] = items.choices || items.variants || [];
+  if (variantList.length === 0) return null;
+
+  const variantNeedsSplit: boolean[] = variantList.map((v) =>
+    typeNeedsInputOutputSuffix(v.type, schema),
+  );
+  if (!variantNeedsSplit.some((b) => b)) return null;
+
+  // Inline enum names are derived from the parent type + the field name in
+  // the schema. The Input/Output suffix is not part of the enum name.
+  const schemaFieldName = field.name!;
+  const enumName = inlineEnumName(containingSchemaTypeName, schemaFieldName);
+
+  const arms: string[] = [];
+  for (let idx = 0; idx < variantList.length; idx++) {
+    const v = variantList[idx];
+    const variantTypeName = v.type as string;
+    const variantRustName = toRustTypeName(variantTypeName);
+    if (variantNeedsSplit[idx]) {
+      arms.push(
+        `${enumName}::${variantRustName}(p) => ` +
+        `${enumName}::${variantRustName}(` +
+        `${variantRustName}Output::from(${variantRustName}Input::from(p))` +
+        `),`,
+      );
+    } else {
+      arms.push(
+        `${enumName}::${variantRustName}(p) => ` +
+        `${enumName}::${variantRustName}(p),`,
+      );
+    }
+  }
+
+  const accessor = `${selfRef}.${rustFieldName}`;
+  let out = `${accessor}.into_iter().map(|v| match v {`;
+  for (const arm of arms) {
+    out += `\n                ${arm}`;
+  }
+  out += `\n            }).collect()`;
+  return out;
+}
+
+/**
+ * The compute helper emits `let X_computed: usize = ...;` for length-like
+ * values and `: u32` for crc32. The Output field's actual Rust type may be
+ * uint8/uint16/uint32/uint64/varlength — cast appropriately. For varlength
+ * the Rust type is u64.
+ */
+function castComputedExprToFieldType(varName: string, field: Field): string {
+  switch (field.type) {
+    case "uint8": return `${varName} as u8`;
+    case "uint16": return `${varName} as u16`;
+    case "uint32": return `${varName} as u32`;
+    case "uint64": return `${varName} as u64`;
+    case "int8": return `${varName} as i8`;
+    case "int16": return `${varName} as i16`;
+    case "int32": return `${varName} as i32`;
+    case "int64": return `${varName} as i64`;
+    case "varlength": return `${varName} as u64`;
+    default:
+      return varName;
+  }
 }
 
 /**
@@ -3825,9 +4296,14 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
     // Handle computed fields - compute value and encode it
     if (fieldAny.computed != null) {
       // Use child_ctx if we have nested structs (it has parent fields + position tracking),
-      // otherwise use ctx (the raw parameter)
+      // otherwise use ctx (the raw parameter). Tracking-based selectors need this.
       const ctxVarForComputed = hasNestedStructs ? "child_ctx" : (needsContext ? "ctx" : undefined);
-      lines.push(...generateEncodeComputedField(field, fields, defaultEndianness, "        ", ctxVarForComputed, schema));
+      // `../` parent references must resolve against the INCOMING context (`ctx`),
+      // never `child_ctx`. `child_ctx` has THIS struct's own frame pushed on top
+      // (for its nested children), so resolving the struct's own `../foo` against
+      // it would be off by one frame ("Parent field 'foo' not found at level 1").
+      const parentRefCtxVar = ctxVarForComputed === undefined ? undefined : "ctx";
+      lines.push(...generateEncodeComputedField(field, fields, defaultEndianness, "        ", ctxVarForComputed, schema, parentRefCtxVar));
       continue;
     }
 
@@ -3967,7 +4443,16 @@ function generateEncodeComputedField(
   defaultEndianness: string,
   indent: string,
   ctxVar?: string,
-  schema?: BinarySchema
+  schema?: BinarySchema,
+  // Context to resolve `../` parent references against. This MUST be the
+  // INCOMING context (the function's `ctx` parameter), not `child_ctx`.
+  // `child_ctx` has THIS struct's own frame pushed on top (for its nested
+  // children to reference), so resolving the struct's own `../foo` against it
+  // would look one frame too shallow — the off-by-one that produced
+  // "Parent field 'foo' not found at level 1". Tracking-based selectors
+  // (first/last/corresponding/position) still use `ctxVar` (child_ctx) because
+  // that is where their position/iteration state is recorded.
+  parentRefCtxVar?: string
 ): string[] {
   const lines: string[] = [];
   const fieldAny = field as any;
@@ -3975,6 +4460,11 @@ function generateEncodeComputedField(
   const fieldName = field.name;
   const endianness = fieldAny.endianness || defaultEndianness;
   const rustEndianness = mapEndianness(endianness);
+
+  // Context used for `../` parent-reference resolution. Falls back to ctxVar
+  // for callers that don't distinguish (e.g. sub-field encoding without a
+  // pushed child frame).
+  const parentCtx = parentRefCtxVar ?? ctxVar;
 
   // Helper to convert computed variable name (avoid Rust reserved keywords)
   const computedVarName = toRustFieldName(fieldName) + "_computed";
@@ -4418,14 +4908,14 @@ function generateEncodeComputedField(
     // Check for simple parent reference (../) — no selectors
     const parentRef = parseParentPath(target);
     if (parentRef) {
-      if (!ctxVar) {
+      if (!parentCtx) {
         throw new Error(`Computed field '${fieldName}' has parent reference but no context available: ${target}`);
       }
 
       const { levelsUp, fieldName: targetFieldName } = parentRef;
 
       lines.push(`${indent}// Computed field '${fieldName}': length_of '${target}' (parent reference)`);
-      lines.push(`${indent}let ${computedVarName} = match ${ctxVar}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
+      lines.push(`${indent}let ${computedVarName} = match ${parentCtx}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
       lines.push(`${indent}    Some(field_value) => field_value.length_of_value(),`);
       lines.push(`${indent}    None => return Err(binschema_runtime::BinSchemaError::InvalidValue(`);
       lines.push(`${indent}        format!("Parent field '${targetFieldName}' not found at level ${levelsUp}")`);
@@ -4485,14 +4975,14 @@ function generateEncodeComputedField(
     // Check for parent reference (../)
     const parentRef = parseParentPath(target);
     if (parentRef) {
-      if (!ctxVar) {
+      if (!parentCtx) {
         throw new Error(`Computed field '${fieldName}' has parent reference but no context available: ${target}`);
       }
 
       const { levelsUp, fieldName: targetFieldName } = parentRef;
 
       lines.push(`${indent}// Computed field '${fieldName}': count_of '${target}' (parent reference)`);
-      lines.push(`${indent}let ${computedVarName} = match ${ctxVar}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
+      lines.push(`${indent}let ${computedVarName} = match ${parentCtx}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
       lines.push(`${indent}    Some(field_value) => field_value.len(),`);
       lines.push(`${indent}    None => return Err(binschema_runtime::BinSchemaError::InvalidValue(`);
       lines.push(`${indent}        format!("Parent field '${targetFieldName}' not found at level ${levelsUp}")`);
@@ -4585,14 +5075,14 @@ function generateEncodeComputedField(
     // Check for parent reference (../)
     const parentRef = parseParentPath(target);
     if (parentRef) {
-      if (!ctxVar) {
+      if (!parentCtx) {
         throw new Error(`Computed field '${fieldName}' has parent reference but no context available: ${target}`);
       }
 
       const { levelsUp, fieldName: targetFieldName } = parentRef;
 
       lines.push(`${indent}// Computed field '${fieldName}': crc32_of '${target}' (parent reference)`);
-      lines.push(`${indent}let ${computedVarName} = match ${ctxVar}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
+      lines.push(`${indent}let ${computedVarName} = match ${parentCtx}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
       lines.push(`${indent}    Some(field_value) => binschema_runtime::crc32(&field_value.to_bytes()),`);
       lines.push(`${indent}    None => return Err(binschema_runtime::BinSchemaError::InvalidValue(`);
       lines.push(`${indent}        format!("Parent field '${targetFieldName}' not found at level ${levelsUp}")`);
@@ -4663,7 +5153,7 @@ function generateEncodeComputedField(
     // Check for parent reference (../)
     const parentRef = parseParentPath(target);
     if (parentRef) {
-      if (!ctxVar) {
+      if (!parentCtx) {
         throw new Error(`Computed field '${fieldName}' has parent reference but no context available: ${target}`);
       }
 
@@ -4672,7 +5162,7 @@ function generateEncodeComputedField(
       lines.push(`${indent}// Computed field '${fieldName}': position_of '${target}' (parent reference)`);
       const fieldSize = getFieldSize(field);
       lines.push(`${indent}let ${computedVarName} = encoder.byte_offset() + ${fieldSize};`);
-      lines.push(`${indent}let _ = ${ctxVar}.get_parent_field(${levelsUp}, "${targetFieldName}"); // Validate parent exists`);
+      lines.push(`${indent}let _ = ${parentCtx}.get_parent_field(${levelsUp}, "${targetFieldName}"); // Validate parent exists`);
 
       lines.push(...generateComputedFieldWrite(field, computedVarName, rustEndianness, indent));
       return lines;
@@ -4707,14 +5197,14 @@ function generateEncodeComputedField(
       throw new Error(`sum_of_type_sizes target '${target}' must be a parent reference (../)`);
     }
 
-    if (!ctxVar) {
+    if (!parentCtx) {
       throw new Error(`Computed field '${fieldName}' (sum_of_type_sizes) has parent reference but no context available`);
     }
 
     const { levelsUp, fieldName: targetFieldName } = parentRef;
 
     lines.push(`${indent}// Computed field '${fieldName}': sum_of_type_sizes for '${elementType}' in '${target}'`);
-    lines.push(`${indent}let ${computedVarName} = match ${ctxVar}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
+    lines.push(`${indent}let ${computedVarName} = match ${parentCtx}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
     lines.push(`${indent}    Some(field_value) => field_value.sum_type_sizes("${elementType}"),`);
     lines.push(`${indent}    None => return Err(binschema_runtime::BinSchemaError::InvalidValue(`);
     lines.push(`${indent}        format!("Parent field '${targetFieldName}' not found at level ${levelsUp}")`);
@@ -4740,13 +5230,13 @@ function generateEncodeComputedField(
         throw new Error(`sum_of_sizes target '${target}' must be a parent reference (../)`);
       }
 
-      if (!ctxVar) {
+      if (!parentCtx) {
         throw new Error(`Computed field '${fieldName}' (sum_of_sizes) has parent reference but no context available`);
       }
 
       const { levelsUp, fieldName: targetFieldName } = parentRef;
 
-      lines.push(`${indent}${computedVarName} += match ${ctxVar}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
+      lines.push(`${indent}${computedVarName} += match ${parentCtx}.get_parent_field(${levelsUp}, "${targetFieldName}") {`);
       lines.push(`${indent}    Some(field_value) => field_value.length_of_value(),`);
       lines.push(`${indent}    None => return Err(binschema_runtime::BinSchemaError::InvalidValue(`);
       lines.push(`${indent}        format!("Parent field '${targetFieldName}' not found at level ${levelsUp}")`);
