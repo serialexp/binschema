@@ -101,6 +101,19 @@ export function generateEncodeArray(
     }
   }
 
+  // Write Thrift packed collection header: (count<<4)|element_type_tag, with a
+  // 0xF nibble escape + unsigned LEB128 count when count >= 15.
+  if (field.kind === "packed_count") {
+    const tag = (field.element_type_tag ?? 0) & 0xF;
+    code += `${indent}// Thrift packed collection header (count<<4 | type_tag, 0xF escape)\n`;
+    code += `${indent}if (${valuePath}.length < 15) {\n`;
+    code += `${indent}  this.writeUint8((${valuePath}.length << 4) | ${tag});\n`;
+    code += `${indent}} else {\n`;
+    code += `${indent}  this.writeUint8(0xF0 | ${tag});\n`;
+    code += `${indent}  this.writeVarlengthLEB128(${valuePath}.length);\n`;
+    code += `${indent}}\n`;
+  }
+
   // Compute and write byte length for byte_length_prefixed arrays
   // This requires a double-pass: first encode to measure size, then write length + items
   if (field.kind === "byte_length_prefixed") {
@@ -633,6 +646,18 @@ export function generateDecodeArray(
     code += `${indent}  throw new Error(\`Failed to evaluate count expression '${countExpr}': \${${lengthVarName}_result.error}\${${lengthVarName}_result.details ? ' (' + ${lengthVarName}_result.details + ')' : ''}\`);\n`;
     code += `${indent}}\n`;
     code += `${indent}const ${lengthVarName} = ${lengthVarName}_result.value;\n`;
+    code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
+  } else if (field.kind === "packed_count") {
+    // Thrift packed collection header: read one byte, take the high nibble as
+    // the count (low nibble is the element type tag, ignored on decode). If the
+    // high nibble is the 0xF escape, the real count follows as an unsigned LEB128.
+    const lengthVarName = fieldName.replace(/\./g, "_") + "_length";
+    const headerVarName = fieldName.replace(/\./g, "_") + "_header";
+    code += `${indent}const ${headerVarName} = this.readUint8();\n`;
+    code += `${indent}let ${lengthVarName} = (${headerVarName} >> 4) & 0x0F;\n`;
+    code += `${indent}if (${lengthVarName} === 0x0F) {\n`;
+    code += `${indent}  ${lengthVarName} = this.readVarlengthLEB128();\n`;
+    code += `${indent}}\n`;
     code += `${indent}for (let i = 0; i < ${lengthVarName}; i++) {\n`;
   } else if (field.kind === "byte_length_prefixed") {
     // Read byte length prefix, then read items until we've consumed N bytes (ASN.1 SEQUENCE pattern)

@@ -787,6 +787,16 @@ func VarlengthDERSize(value uint64) int {
 	return 1 + numBytes
 }
 
+// VarlengthLEB128Size calculates the encoded byte size of an unsigned LEB128 value.
+func VarlengthLEB128Size(value uint64) int {
+	size := 1
+	for value >= 0x80 {
+		value >>= 7
+		size++
+	}
+	return size
+}
+
 // VarlengthZigZagSize calculates the encoded byte size of a zigzag-encoded
 // signed integer (zigzag transform then LEB128).
 func VarlengthZigZagSize(value int64) int {

@@ -6191,6 +6191,19 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     }
   }
 
+  // Write Thrift packed collection header: (count<<4)|element_type_tag, with a
+  // 0xF nibble escape + unsigned LEB128 count when count >= 15.
+  if (kind === "packed_count") {
+    const tag = ((field as any).element_type_tag ?? 0) & 0xF;
+    lines.push(`${indent}// Thrift packed collection header (count<<4 | type_tag, 0xF escape)`);
+    lines.push(`${indent}if ${fieldName}.len() < 15 {`);
+    lines.push(`${indent}    ${emitEncoderWrite("uint8", `((${fieldName}.len() << 4) | ${tag}) as u8`, rustEndianness, aligned)}`);
+    lines.push(`${indent}} else {`);
+    lines.push(`${indent}    ${emitEncoderWrite("uint8", `(0xF0u8 | ${tag}u8)`, rustEndianness, aligned)}`);
+    lines.push(`${indent}    encoder.write_varlength(${fieldName}.len() as u64, "leb128")?;`);
+    lines.push(`${indent}}`);
+  }
+
   // Handle byte_length_prefixed arrays - need to write total byte length, not item count
   if (kind === "byte_length_prefixed") {
     const lengthType = field.length_type || "uint8";
@@ -7608,6 +7621,19 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     // Wrap the whole expression in parentheses before casting to usize,
     // otherwise `as usize` only applies to the last operand
     lines.push(`${indent}let count = (${countExpr}) as usize;`);
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
+    lines.push(`${indent}for _ in 0..count {`);
+  } else if (kind === "packed_count") {
+    // Thrift packed collection header: high nibble is the count (low nibble is
+    // the element type tag, ignored on decode); 0xF high nibble escapes to a
+    // following unsigned LEB128 count.
+    const readHeader = aligned ? "decoder.read_byte()?" : "decoder.read_uint8()?";
+    lines.push(`${indent}let packed_header = ${readHeader};`);
+    lines.push(`${indent}let count = if ((packed_header >> 4) & 0x0F) == 0x0F {`);
+    lines.push(`${indent}    decoder.read_varlength("leb128")? as usize`);
+    lines.push(`${indent}} else {`);
+    lines.push(`${indent}    ((packed_header >> 4) & 0x0F) as usize`);
+    lines.push(`${indent}};`);
     lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
     lines.push(`${indent}for _ in 0..count {`);
   } else if (kind === "signature_terminated") {

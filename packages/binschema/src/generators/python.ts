@@ -608,6 +608,16 @@ function generateArrayEncode(field: any, fieldAccess: string, indent: string, en
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     code += generateLengthPrefixEncode(lengthType, `len(${fieldAccess})`, indent, endianness);
+  } else if (kind === "packed_count") {
+    // Thrift packed collection header: (count<<4)|element_type_tag, with a 0xF
+    // nibble escape + unsigned LEB128 count when count >= 15.
+    const tag = (field.element_type_tag ?? 0) & 0xF;
+    code += `${indent}# Thrift packed collection header (count<<4 | type_tag, 0xF escape)\n`;
+    code += `${indent}if len(${fieldAccess}) < 15:\n`;
+    code += `${indent}    encoder.write_uint8((len(${fieldAccess}) << 4) | ${tag})\n`;
+    code += `${indent}else:\n`;
+    code += `${indent}    encoder.write_uint8(0xF0 | ${tag})\n`;
+    code += `${indent}    encoder.write_varlength_leb128(len(${fieldAccess}))\n`;
   } else if (kind === "byte_length_prefixed") {
     const lengthType = field.length_type || "uint8";
     // Need to encode items first to measure byte length
@@ -2015,6 +2025,18 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     } else {
       code += `${indent}${countVar} = 0  # computed_count without field reference\n`;
     }
+    code += `${indent}${fieldAssign} = []\n`;
+    code += `${indent}for ${iVar} in range(${countVar}):\n`;
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+  } else if (kind === "packed_count") {
+    // Thrift packed collection header: high nibble is the count (low nibble is
+    // the element type tag, ignored on decode); 0xF high nibble escapes to a
+    // following unsigned LEB128 count.
+    const headerVar = `_packed_hdr_${uid}`;
+    code += `${indent}${headerVar} = decoder.read_uint8()\n`;
+    code += `${indent}${countVar} = (${headerVar} >> 4) & 0x0F\n`;
+    code += `${indent}if ${countVar} == 0x0F:\n`;
+    code += `${indent}    ${countVar} = decoder.read_varlength_leb128()\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
     code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);

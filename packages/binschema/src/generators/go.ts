@@ -2708,6 +2708,16 @@ function generateArraySizeCalculation(fieldAny: any, valueExpr: string, schema: 
     lines.push(`${indent}size += ${prefixSize} // ${fieldName} length prefix`);
   }
 
+  // Handle Thrift packed collection header: 1 byte normally, or 1 + LEB128(count)
+  // bytes when count >= 15 (the 0xF nibble escape).
+  if (kind === "packed_count") {
+    lines.push(`${indent}if len(${valueExpr}) < 15 {`);
+    lines.push(`${indent}\tsize += 1 // ${fieldName} packed header`);
+    lines.push(`${indent}} else {`);
+    lines.push(`${indent}\tsize += 1 + runtime.VarlengthLEB128Size(uint64(len(${valueExpr}))) // ${fieldName} packed header + escape count`);
+    lines.push(`${indent}}`);
+  }
+
   // Handle byte_length_prefixed arrays - need to calculate items size first, then add prefix size
   if (kind === "byte_length_prefixed") {
     const lengthType = fieldAny.length_type || "uint8";
@@ -3979,6 +3989,19 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     }
   }
 
+  // Write Thrift packed collection header: (count<<4)|element_type_tag, with a
+  // 0xF nibble escape + unsigned LEB128 count when count >= 15.
+  if (kind === "packed_count") {
+    const tag = ((field as any).element_type_tag ?? 0) & 0xF;
+    lines.push(`${indent}// Thrift packed collection header (count<<4 | type_tag, 0xF escape)`);
+    lines.push(`${indent}if len(${fieldName}) < 15 {`);
+    lines.push(`${indent}\tencoder.WriteUint8(uint8((len(${fieldName}) << 4) | ${tag}))`);
+    lines.push(`${indent}} else {`);
+    lines.push(`${indent}\tencoder.WriteUint8(uint8(0xF0 | ${tag}))`);
+    lines.push(`${indent}\tencoder.WriteVarlengthLEB128(uint64(len(${fieldName})))`);
+    lines.push(`${indent}}`);
+  }
+
   // Write byte length prefix for byte_length_prefixed arrays
   // For primitive types, byte length = len(arr) * item_size
   if (kind === "byte_length_prefixed") {
@@ -4967,6 +4990,27 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     lines.push(`${indent}${countVarName} := ${goCountExpr}`);
     lines.push(`${indent}result.${fieldName} = make([]${itemType}, ${countVarName})`);
     lines.push(`${indent}for i := 0; i < ${countVarName}; i++ {`);
+  } else if (kind === "packed_count") {
+    // Thrift packed collection header: high nibble is the count (low nibble is
+    // the element type tag, ignored on decode); 0xF high nibble escapes to a
+    // following unsigned LEB128 count.
+    const headerVar = `${varName}Header`;
+    const countVar = `${varName}Count`;
+    lines.push(`${indent}// Thrift packed collection header (count<<4 | type_tag, 0xF escape)`);
+    lines.push(`${indent}${headerVar}, err := decoder.ReadUint8()`);
+    lines.push(`${indent}if err != nil {`);
+    lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name} packed header: %w", err)`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${countVar} := int((${headerVar} >> 4) & 0x0F)`);
+    lines.push(`${indent}if ${countVar} == 0x0F {`);
+    lines.push(`${indent}\t${countVar}Escaped, err := decoder.ReadVarlengthLEB128()`);
+    lines.push(`${indent}\tif err != nil {`);
+    lines.push(`${indent}\t\treturn nil, fmt.Errorf("failed to decode ${field.name} packed count: %w", err)`);
+    lines.push(`${indent}\t}`);
+    lines.push(`${indent}\t${countVar} = int(${countVar}Escaped)`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}result.${fieldName} = make([]${itemType}, ${countVar})`);
+    lines.push(`${indent}for i := range result.${fieldName} {`);
   } else if (kind === "byte_length_prefixed") {
     // Read byte length prefix, then read items until we've consumed N bytes
     const lengthType = field.length_type || "uint8";
@@ -5149,7 +5193,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     lines.push(`${indent}\t}`);
 
     // Close outer loop
-    if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count") {
+    if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count" || kind === "packed_count") {
       lines.push(`${indent}}`);
     } else if (kind === "null_terminated" || kind === "eof_terminated") {
       lines.push(`${indent}}`);
@@ -5231,7 +5275,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     lines.push(`${indent}\t}`);
 
     // Assign to array (interface returned directly, no dereference needed)
-    if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count") {
+    if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count" || kind === "packed_count") {
       lines.push(`${indent}\tresult.${fieldName}[i] = ${itemVar}`);
       lines.push(`${indent}}`);
     } else if (kind === "null_terminated" || kind === "byte_length_prefixed" || kind === "signature_terminated" || kind === "eof_terminated") {
@@ -5266,7 +5310,7 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
   const itemValue = isStructItem ? `*${itemVar}` : itemVar;
 
   // Assign to array
-  if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count") {
+  if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count" || kind === "packed_count") {
     lines.push(`${indent}\tresult.${fieldName}[i] = ${itemValue}`);
     lines.push(`${indent}}`);
   } else if (kind === "null_terminated" || kind === "variant_terminated") {

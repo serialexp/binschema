@@ -848,6 +848,7 @@ const ArrayKindSchema = z.enum([
   "field_referenced", // Length comes from a field decoded earlier
   "variant_terminated", // Elements until a specific variant type is encountered (for choice/discriminated union items)
   "computed_count",  // Length is computed from an expression referencing earlier fields
+  "packed_count",    // Thrift packed header: (count<<4)|element_type_tag, 0xF escape + LEB128
 ]);
 export type ArrayKind = z.infer<typeof ArrayKindSchema>;
 
@@ -1341,6 +1342,7 @@ const ArrayElementSchema = z.object({
   item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
   length_field: z.string().optional(), // For field_referenced: field name to read length from (supports dot notation)
   count_expr: z.string().optional(), // For computed_count: expression to compute array length
+  element_type_tag: z.number().int().min(0).max(15).optional(), // For packed_count: Thrift element type id (low nibble)
   terminator_value: z.number().optional(), // For signature_terminated: signature value to stop on
   terminator_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For signature_terminated: type to peek for terminator
   terminator_endianness: EndiannessSchema.optional(), // For signature_terminated: endianness of terminator (required for uint16/uint32/uint64)
@@ -1359,10 +1361,11 @@ const ArrayElementSchema = z.object({
     if (data.kind === "signature_terminated") return data.terminator_value !== undefined && data.terminator_type !== undefined;
     if (data.kind === "variant_terminated") return data.terminal_variants !== undefined && data.terminal_variants.length > 0;
     if (data.kind === "computed_count") return data.count_expr !== undefined;
+    if (data.kind === "packed_count") return data.element_type_tag !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', signature_terminated arrays require 'terminator_value' and 'terminator_type', variant_terminated arrays require 'terminal_variants', computed_count arrays require 'count_expr'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', signature_terminated arrays require 'terminator_value' and 'terminator_type', variant_terminated arrays require 'terminal_variants', computed_count arrays require 'count_expr', packed_count arrays require 'element_type_tag'",
   }
 );
 
@@ -1483,6 +1486,7 @@ const ArrayFieldSchema = z.object({
   item_length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For length_prefixed_items: per-item length prefix type
   length_field: z.string().optional(), // For field_referenced: field name to read item count from (supports dot notation like "flags.opcode")
   count_expr: z.string().optional(), // For computed_count: expression to compute array length (e.g., "(max - min + 1) * count")
+  element_type_tag: z.number().int().min(0).max(15).optional(), // For packed_count: Thrift element type id (low nibble)
   terminator_value: z.number().optional(), // For signature_terminated: signature value to stop on
   terminator_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional(), // For signature_terminated: type to peek for terminator
   terminator_endianness: EndiannessSchema.optional(), // For signature_terminated: endianness of terminator (required for uint16/uint32/uint64)
@@ -1502,10 +1506,11 @@ const ArrayFieldSchema = z.object({
     if (data.kind === "signature_terminated") return data.terminator_value !== undefined && data.terminator_type !== undefined;
     if (data.kind === "variant_terminated") return data.terminal_variants !== undefined && data.terminal_variants.length > 0;
     if (data.kind === "computed_count") return data.count_expr !== undefined;
+    if (data.kind === "packed_count") return data.element_type_tag !== undefined;
     return true;
   },
   {
-    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', byte_length_prefixed arrays require 'length_type', signature_terminated arrays require 'terminator_value' and 'terminator_type', variant_terminated arrays require 'terminal_variants', computed_count arrays require 'count_expr'",
+    message: "Fixed arrays require 'length', length_prefixed arrays require 'length_type', length_prefixed_items arrays require 'length_type' and 'item_length_type', field_referenced arrays require 'length_field', byte_length_prefixed arrays require 'length_type', signature_terminated arrays require 'terminator_value' and 'terminator_type', variant_terminated arrays require 'terminal_variants', computed_count arrays require 'count_expr', packed_count arrays require 'element_type_tag'",
   }
 ).meta({
   title: "Array",
