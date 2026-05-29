@@ -678,6 +678,7 @@ fn main() -&gt; Result&lt;()&gt; {
               <li>Fixed count, field-referenced count</li>
               <li>Length-delimited (byte length from another field)</li>
               <li>Variant-terminated (read until a discriminator matches)</li>
+              <li><code>delta</code> transform &mdash; store elements as differences from the previous one</li>
             </ul>
           </div>
           <div class="ref-category">
@@ -695,6 +696,7 @@ fn main() -&gt; Result&lt;()&gt; {
               <li>Discriminated unions (tagged variants)</li>
               <li>Conditional fields (<code>if</code> expressions)</li>
               <li>Variable-length integers (LEB128, VLQ, DER)</li>
+              <li><code>compressed</code> regions (pluggable codecs: store/deflate/gzip)</li>
               <li>Constant and reserved fields</li>
             </ul>
           </div>

@@ -673,7 +673,7 @@ function generateTypesSection(metadata: Map<string, ExtractedMetadata>, linkTarg
     "Unsigned Integers": ["uint8", "uint16", "uint32", "uint64"],
     "Signed Integers": ["int8", "int16", "int32", "int64"],
     "Floating Point": ["float32", "float64"],
-    "Complex Types": ["string", "array", "optional", "discriminated_union", "bitfield", "back_reference"],
+    "Complex Types": ["string", "array", "optional", "compressed", "discriminated_union", "bitfield", "back_reference"],
   };
 
   // Track which types we've rendered

@@ -184,10 +184,12 @@ function linkifyType(typeName: string, schema: BinarySchema): string {
     }
   }
 
-  // Handle generic types like Optional<uint64>
-  const genericMatch = typeName.match(/^(\w+)<(.+)>$/);
+  // Handle generic types like Optional<uint64> or compressed<Inner> (deflate).
+  // The optional trailing "(...)" carries an annotation (e.g. the codec name)
+  // that should render verbatim after the linked type argument.
+  const genericMatch = typeName.match(/^(\w+)<(.+)>(\s*\(.*\))?$/);
   if (genericMatch) {
-    const [, genericType, typeArg] = genericMatch;
+    const [, genericType, typeArg, suffix] = genericMatch;
 
     // Check if there's a generic template (e.g., Optional<T>) in the schema
     const templateName = Object.keys(schema.types).find(
@@ -202,7 +204,7 @@ function linkifyType(typeName: string, schema: BinarySchema): string {
     }
 
     const linkedArg = linkifyType(typeArg, schema);
-    return `${linkedGeneric}&lt;${linkedArg}&gt;`;
+    return `${linkedGeneric}&lt;${linkedArg}&gt;${suffix ? escapeHtml(suffix) : ""}`;
   }
 
   // Check if it's a custom type (exists in schema and not built-in)
@@ -1477,6 +1479,16 @@ function getFieldTypeInfo(
     case "string":
       const encoding = "encoding" in field ? field.encoding : "utf8";
       return { displayType: `string (${encoding})`, size: "variable", bytes: 4 };
+    case "compressed": {
+      // The wire is [uncompressed_size][compressed_length][bytes…] — variable
+      // size. Show the inner type (linkified) plus the codec, mirroring how
+      // array renders `Inner[]` and string renders `string (utf8)`.
+      const innerType = "value_type" in field && typeof (field as any).value_type === "string"
+        ? (field as any).value_type
+        : "value";
+      const codec = "codec" in field && (field as any).codec ? ` (${(field as any).codec})` : "";
+      return { displayType: `compressed<${innerType}>${codec}`, size: "variable", bytes: 4 };
+    }
     default:
       // Check if field has variants (compression pointers, etc.)
       if ("variants" in field && field.variants && Array.isArray(field.variants)) {
