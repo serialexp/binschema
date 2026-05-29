@@ -1091,6 +1091,24 @@ func formatArrayWithSchema(arr []interface{}, fieldDef map[string]interface{}, t
 		return fmt.Sprintf("[]%s{%s}", goElemType, strings.Join(elements, ", "))
 	}
 
+	// Variable-length integer arrays: signed encodings (zigzag, leb128_signed)
+	// decode to int64; the unsigned encodings (der/leb128/ebml/vlq) use uint64.
+	if itemType == "varlength" {
+		encoding, _ := items["encoding"].(string)
+		goElemType := "uint64"
+		if encoding == "zigzag" || encoding == "leb128_signed" {
+			goElemType = "int64"
+		}
+		if len(arr) == 0 {
+			return fmt.Sprintf("[]%s{}", goElemType)
+		}
+		var elements []string
+		for _, elem := range arr {
+			elements = append(elements, formatValueWithType(elem, goElemType))
+		}
+		return fmt.Sprintf("[]%s{%s}", goElemType, strings.Join(elements, ", "))
+	}
+
 	// String arrays (inline string items, not type references)
 	if itemType == "string" {
 		if len(arr) == 0 {

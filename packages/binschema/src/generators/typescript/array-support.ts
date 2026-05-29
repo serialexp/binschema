@@ -316,6 +316,13 @@ export function generateEncodeArray(
     code += `${indent}let ${terminatedVar} = false;\n`;
   }
 
+  // Delta transform: loop-local accumulator holding the previous absolute value.
+  // Encode writes value[i] - prev; the logical array is absolutes on both sides.
+  const isDeltaTransform = (field as any).transform === "delta";
+  if (isDeltaTransform) {
+    code += `${indent}let ${itemVar}_delta_prev = 0;\n`;
+  }
+
   code += `${indent}for (let ${itemVar}_index = 0; ${itemVar}_index < ${valuePath}.length; ${itemVar}_index++) {\n`;
   code += `${indent}  const ${itemVar} = ${valuePath}[${itemVar}_index];\n`;
 
@@ -461,11 +468,19 @@ export function generateEncodeArray(
   if (!(field.kind === "length_prefixed_items" && field.item_length_type && !['uint8', 'int8', 'uint16', 'int16', 'uint32', 'int32', 'float32', 'uint64', 'int64', 'float64'].includes(field.items?.type))) {
     // Pass field-specific context variable name for choice arrays
     const contextVarForItem = schemaRequiresContext(schema) ? getContextVarName(fieldName) : undefined;
+    // For delta arrays, write value[i] - prev using the item's own encoding;
+    // the value passed to the item encoder is the delta, not the absolute.
+    let encodeValueVar = itemVar;
+    if (isDeltaTransform) {
+      encodeValueVar = `${itemVar}_delta`;
+      code += `${indent}  const ${encodeValueVar} = ${itemVar} - ${itemVar}_delta_prev;\n`;
+      code += `${indent}  ${itemVar}_delta_prev = ${itemVar};\n`;
+    }
     code += generateEncodeFieldCoreImpl(
       field.items as Field,
       schema,
       globalEndianness,
-      itemVar,
+      encodeValueVar,
       indent + "  ",
       contextVarForItem
     );
@@ -532,6 +547,14 @@ export function generateDecodeArray(
   }
 
   code += `${indent}${target} = [];\n`;
+
+  // Delta transform: loop-local running accumulator. Each wire value is a delta;
+  // the decoded array is the running sum (absolutes), so value === decoded_value.
+  const isDeltaTransform = (field as any).transform === "delta";
+  const deltaRunVar = fieldName.replace(/[.\[\]]/g, "_") + "_delta_run";
+  if (isDeltaTransform) {
+    code += `${indent}let ${deltaRunVar} = 0;\n`;
+  }
 
   // Read length if length_prefixed or length_prefixed_items
   if (field.kind === "length_prefixed" || field.kind === "length_prefixed_items") {
@@ -768,7 +791,13 @@ export function generateDecodeArray(
   if (itemDecodeCode.includes(`${itemVar} =`)) {
     code += `${indent}  let ${itemVar}: any;\n`;
     code += itemDecodeCode;
-    code += `${indent}  ${target}.push(${itemVar});\n`;
+    if (isDeltaTransform) {
+      // The wire value is a delta; reconstruct the absolute via running sum.
+      code += `${indent}  ${deltaRunVar} += ${itemVar};\n`;
+      code += `${indent}  ${target}.push(${deltaRunVar});\n`;
+    } else {
+      code += `${indent}  ${target}.push(${itemVar});\n`;
+    }
 
     // Check if this is a terminal variant (for null_terminated or variant_terminated arrays with discriminated unions)
     if ((field.kind === "null_terminated" || field.kind === "variant_terminated") && field.terminal_variants && Array.isArray(field.terminal_variants)) {

@@ -1501,6 +1501,24 @@ function validateField(
         }
       }
 
+      // Validate transform: "delta" — only meaningful on numeric/varlength items
+      // (the delta is stored using the item's own wire encoding). Composite items
+      // (string/array/struct/choice/discriminated_union) have no arithmetic.
+      if ((field as any).transform === "delta") {
+        const itemType = (field as any).items?.type;
+        const deltaAllowed = new Set([
+          "uint8", "uint16", "uint32", "uint64",
+          "int8", "int16", "int32", "int64",
+          "varlength",
+        ]);
+        if (!itemType || !deltaAllowed.has(itemType)) {
+          errors.push({
+            path: `${path} (${field.name || "array"})`,
+            message: `transform 'delta' requires numeric or varlength items (uint8/16/32/64, int8/16/32/64, varlength), got '${itemType ?? "unknown"}'`,
+          });
+        }
+      }
+
       // Recursively validate items (as element type, which doesn't require 'name')
       validateElementType(field.items as any, `${path}.items`, schema, errors);
     }

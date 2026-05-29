@@ -712,11 +712,28 @@ function generateArrayEncode(field: any, fieldAccess: string, indent: string, en
     return code;
   }
 
+  // Delta transform: loop-local accumulator holding the previous absolute value.
+  // Each element is written as value[i] - prev using the item's own encoding; the
+  // logical array is absolutes on both sides. (Python ints are arbitrary precision,
+  // so no range caveat here.)
+  const isDeltaTransform = field.transform === "delta";
+  const deltaPrevVar = `_delta_prev_${encUid}`;
+
   // Iterate over elements
   code += generateArrayIterationInit(arrName, indent);
+  if (isDeltaTransform) {
+    code += `${indent}${deltaPrevVar} = 0\n`;
+  }
   code += `${indent}for ${idxVar}, ${encItemVar} in enumerate(${fieldAccess}):\n`;
   code += generateArrayIterationTracking(arrName, encItemVar, indent + '    ', idxVar);
-  code += generateArrayItemEncode(items, encItemVar, indent + '    ', endianness, schema, bitOrder);
+  let encItemForItem = encItemVar;
+  if (isDeltaTransform) {
+    const deltaVar = `_delta_${encUid}`;
+    code += `${indent}    ${deltaVar} = ${encItemVar} - ${deltaPrevVar}\n`;
+    code += `${indent}    ${deltaPrevVar} = ${encItemVar}\n`;
+    encItemForItem = deltaVar;
+  }
+  code += generateArrayItemEncode(items, encItemForItem, indent + '    ', endianness, schema, bitOrder);
   code += generateArrayIterationDone(arrName, indent);
 
   return code;
@@ -2034,21 +2051,31 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
   const iVar = `_i_${uid}`;
   const itemVar = `_arr_item_${uid}`;
 
+  // Delta transform: loop-local running accumulator. Each wire value is a delta;
+  // the decoded element is the running sum (absolute). The validator restricts
+  // delta to numeric/varlength items, so it never reaches the nested-array path.
+  const isDeltaTransform = field.transform === "delta";
+  const deltaRunVar = `_delta_run_${uid}`;
+  const deltaArg = isDeltaTransform ? deltaRunVar : undefined;
+  if (isDeltaTransform) {
+    code += `${indent}${deltaRunVar} = 0\n`;
+  }
+
   if (kind === "fixed" && field.length !== undefined) {
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${field.length}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     code += generateLengthPrefixDecode(lengthType, lenVar, indent, endianness);
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${lenVar}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "field_referenced" && field.length_field) {
     code += `${indent}${countVar} = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "computed_count") {
     const countExpr = field.count_expr;
     const countField = field.count_field || field.length_field;
@@ -2066,7 +2093,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     }
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "packed_count") {
     // Thrift packed collection header: high nibble is the count (low nibble is
     // the element type tag, ignored on decode); 0xF high nibble escapes to a
@@ -2078,7 +2105,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}    ${countVar} = decoder.read_varlength_leb128()\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "length_prefixed_items") {
     const lengthType = field.length_type || "uint8";
     const itemLengthType = field.item_length_type || "uint32";
@@ -2087,7 +2114,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}for ${iVar} in range(${lenVar}):\n`;
     const itemByteLenVar = `_item_byte_len_${uid}`;
     code += generateLengthPrefixDecode(itemLengthType, itemByteLenVar, indent + '    ', endianness);
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "byte_length_prefixed") {
     const lengthType = field.length_type || "uint8";
     const byteLenVar = `_arr_byte_len_${uid}`;
@@ -2096,12 +2123,12 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}${endVar} = decoder.position + ${byteLenVar}\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while decoder.position < ${endVar}:\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "variant_terminated") {
     const terminalVariants = field.terminal_variants || [];
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while True:\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
     if (terminalVariants.length > 0) {
       const checks = terminalVariants.map((v: string) => `${fieldAssign}[-1].get("type") == "${v}"`).join(' or ');
       code += `${indent}    if ${checks}:\n`;
@@ -2131,7 +2158,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}        break\n`;
     code += `${indent}    if decoder.peek_${terminatorType}(${peekArgs}) == ${terminatorValue}:\n`;
     code += `${indent}        break\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (kind === "null_terminated") {
     const terminator = field.terminator !== undefined ? field.terminator : 0;
     const terminalVariants: string[] = field.terminal_variants || [];
@@ -2142,7 +2169,7 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
     code += `${indent}    if decoder.peek_uint8() == ${terminator}:\n`;
     code += `${indent}        decoder.read_uint8()  # consume terminator\n`;
     code += `${indent}        break\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
     if (terminalVariants.length > 0) {
       const variantList = terminalVariants.map(v => `"${v}"`).join(", ") + (terminalVariants.length === 1 ? "," : "");
       code += `${indent}    # terminal_variants: stop after reading one of ${terminalVariants.join('/')}\n`;
@@ -2152,35 +2179,46 @@ function generateArrayDecode(field: any, fieldAssign: string, resultPath: string
   } else if (kind === "eof_terminated") {
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while decoder.has_more():\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (field.length !== undefined) {
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${field.length}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else if (field.length_field) {
     code += `${indent}${countVar} = ${pyFieldAccessWithRootFallback(field.length_field)}\n`;
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}for ${iVar} in range(${countVar}):\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   } else {
     code += `${indent}${fieldAssign} = []\n`;
     code += `${indent}while decoder.has_more():\n`;
-    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder);
+    code += generateArrayItemDecode(items, fieldAssign, itemVar, indent + '    ', endianness, schema, bitOrder, deltaArg);
   }
 
   return code;
 }
 
-function generateArrayItemDecode(items: any, arrayVar: string, itemVar: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+function generateArrayItemDecode(items: any, arrayVar: string, itemVar: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string, deltaRunVar?: string): string {
   let code = '';
+
+  // For delta arrays the decoded value is a delta; reconstruct the absolute via
+  // the running accumulator, then append the absolute.
+  const appendValue = (v: string) => {
+    if (deltaRunVar) {
+      code += `${indent}${deltaRunVar} += ${v}\n`;
+      code += `${indent}${arrayVar}.append(${deltaRunVar})\n`;
+    } else {
+      code += `${indent}${arrayVar}.append(${v})\n`;
+    }
+  };
 
   if (items && typeof items === 'object' && items.type) {
     const itemField = { ...items, name: undefined };
     code += generateFieldDecode(itemField, itemVar, indent, endianness, schema, bitOrder);
-    code += `${indent}${arrayVar}.append(${itemVar})\n`;
+    appendValue(itemVar);
   } else if (typeof items === 'string') {
     code += generateFieldDecode({ type: items, name: undefined }, itemVar, indent, endianness, schema, bitOrder);
-    code += `${indent}${arrayVar}.append(${itemVar})\n`;
+    appendValue(itemVar);
   }
 
   return code;

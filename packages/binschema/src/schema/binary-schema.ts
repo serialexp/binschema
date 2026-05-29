@@ -1352,6 +1352,9 @@ const ArrayElementSchema = z.object({
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
+  transform: z.enum(["delta"]).optional().meta({
+    description: "Optional stateful wire transform applied to array elements. 'delta' stores value[i]-value[i-1] (accumulator starts at 0); logical values are absolute on both sides. The delta uses the item's own encoding (e.g. zigzag varlength handles negative deltas)."
+  }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),
@@ -1440,6 +1443,23 @@ const BytesElementSchema = z.object({
  * Element type union - all possible array element types
  * Note: Uses getter for recursive array elements (Zod 4 pattern)
  */
+// Variable-length integer element (name-less form for use as an array item).
+// Mirrors VarlengthFieldSchema without the required `name`.
+const VarlengthElementSchema = z.object({
+  type: z.literal("varlength").meta({
+    description: "Element type (always 'varlength')"
+  }),
+  encoding: VarlengthEncodingSchema.meta({
+    description: "Variable-length encoding scheme (der, leb128, ebml, vlq, zigzag, leb128_signed)"
+  }),
+  max_bytes: z.number().int().min(1).max(10).optional().meta({
+    description: "Maximum number of bytes for the encoded value"
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this element"
+  }),
+});
+
 const ElementTypeSchema: z.ZodType<any> = z.union([
   // Discriminated union for typed elements (includes nested arrays)
   z.discriminatedUnion("type", [
@@ -1456,6 +1476,7 @@ const ElementTypeSchema: z.ZodType<any> = z.union([
     Int64ElementSchema,
     Float32ElementSchema,
     Float64ElementSchema,
+    VarlengthElementSchema, // Support varlength items (delta arrays, packed columns)
     OptionalElementSchema, // Support optional elements
     ArrayElementSchema, // Support nested arrays
     BytesElementSchema, // Support bytes (sugar for array<uint8>)
@@ -1496,6 +1517,9 @@ const ArrayFieldSchema = z.object({
   variants: z.array(z.string()).optional(), // Optional: possible type names this could contain
   notes: z.array(z.string()).optional(), // Optional: notes about variants or usage
   terminal_variants: z.array(z.string()).optional(), // Optional: variant types that terminate the array (no null terminator after)
+  transform: z.enum(["delta"]).optional().meta({
+    description: "Optional stateful wire transform applied to array elements. 'delta' stores value[i]-value[i-1] (accumulator starts at 0); logical values are absolute on both sides. The delta uses the item's own encoding (e.g. zigzag varlength handles negative deltas)."
+  }),
   description: z.string().optional().meta({
     description: "Human-readable description of this field"
   }),

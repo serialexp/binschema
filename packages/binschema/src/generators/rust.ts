@@ -6295,6 +6295,14 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     }
   }
 
+  // Delta transform: loop-local i64 accumulator holding the previous absolute
+  // value. Each element is written as value[i] - prev using the item's own
+  // encoding; the logical array is absolutes on both sides.
+  const isDeltaTransform = (field as any).transform === "delta";
+  if (isDeltaTransform) {
+    lines.push(`${indent}let mut item_delta_prev: i64 = 0;`);
+  }
+
   // Generate loop for encoding items
   // If we have a context variable, use enumerate for iteration index tracking
   if (choiceEncodeCtxVar) {
@@ -6360,7 +6368,17 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     lines.push(`${indent}    let item_ctx = ctx.with_base_offset(encoder.byte_offset());`);
   }
 
-  const innerLines = generateEncodeArrayItem(itemField, "item", endianness, `${indent}    `, schema, itemsNeedContext, choiceEncodeCtxVar, itemsContainBackRef, aligned);
+  let encodeItemVar = "item";
+  if (isDeltaTransform) {
+    // Compute the delta (cast to the item's Rust type), advance the accumulator,
+    // and bind a reference so the item encoder's `*itemVar` deref still applies.
+    const itemRustType = mapFieldToRustTypeForInput(itemField, schema as BinarySchema);
+    lines.push(`${indent}    let item_delta = ((*item as i64) - item_delta_prev) as ${itemRustType};`);
+    lines.push(`${indent}    item_delta_prev = *item as i64;`);
+    lines.push(`${indent}    let item_delta_ref = &item_delta;`);
+    encodeItemVar = "item_delta_ref";
+  }
+  const innerLines = generateEncodeArrayItem(itemField, encodeItemVar, endianness, `${indent}    `, schema, itemsNeedContext, choiceEncodeCtxVar, itemsContainBackRef, aligned);
   lines.push(...innerLines);
 
   lines.push(`${indent}}`);
@@ -6453,6 +6471,13 @@ function generateEncodeArrayItem(field: Field, itemVar: string, endianness: stri
     case "int": {
       const bitSize = (field as any).size || 1;
       lines.push(`${indent}encoder.write_bits(*${itemVar} as u64, ${bitSize});`);
+      break;
+    }
+    case "varlength": {
+      // Variable-length integer item: signed encodings dispatch to the i64
+      // signed writer, unsigned to the u64 writer.
+      const encoding = (field as any).encoding || "der";
+      lines.push(emitRustVarlengthWrite(indent, `*${itemVar}`, encoding));
       break;
     }
     case "string": {
@@ -7624,6 +7649,15 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
 
   const aligned = byteAligned === true;
 
+  // Delta transform: loop-local i64 running accumulator. Each wire value is a
+  // delta; the decoded element is the running sum (absolute). The validator
+  // restricts delta to numeric/varlength items, so this never collides with the
+  // nested-array / choice item paths.
+  const isDeltaTransform = (field as any).transform === "delta";
+  if (isDeltaTransform) {
+    lines.push(`${indent}let mut item_delta_run: i64 = 0;`);
+  }
+
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     lines.push(`${indent}let length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
@@ -7785,7 +7819,14 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
   // Decode item
   const itemLines = generateDecodeArrayItem(items, endianness, rustEndianness, `${indent}    `, schema, containingTypeName, field.name, byteAligned);
   lines.push(...itemLines);
-  lines.push(`${indent}    ${varName}.push(item);`);
+  if (isDeltaTransform) {
+    // The decoded value is a delta; reconstruct the absolute via a running i64
+    // sum, then cast back to the item's Rust type.
+    lines.push(`${indent}    item_delta_run += item as i64;`);
+    lines.push(`${indent}    ${varName}.push(item_delta_run as ${itemType});`);
+  } else {
+    lines.push(`${indent}    ${varName}.push(item);`);
+  }
 
   // For variant_terminated arrays, check if the decoded item is a terminal variant and break
   if (kind === "variant_terminated" && field.terminal_variants && Array.isArray(field.terminal_variants)) {
@@ -7855,6 +7896,13 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
       const bitSize = items.size || 1;
       const rustType = mapFieldToRustType(items);
       lines.push(`${indent}let item = decoder.read_bits(${bitSize})? as ${rustType};`);
+      break;
+    }
+    case "varlength": {
+      // Variable-length integer item: signed encodings dispatch to the i64
+      // signed reader, unsigned to the u64 reader.
+      const encoding = (items as any).encoding || "der";
+      lines.push(emitRustVarlengthRead(indent, "item", encoding));
       break;
     }
     case "choice": {

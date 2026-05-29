@@ -2786,6 +2786,15 @@ function generateArraySizeCalculation(fieldAny: any, valueExpr: string, schema: 
     if (isPrimitiveType(itemType)) {
       const itemSize = getPrimitiveSizeForType(itemType);
       lines.push(`${indent}size += len(${valueExpr}) * ${itemSize} // ${fieldName} items`);
+    } else if (itemType === "varlength") {
+      // Variable-length items: each element's wire size depends on its value and
+      // encoding. (For delta arrays this over-counts since the wire stores deltas,
+      // not absolutes; CalculateSize is approximate there and is not used to frame
+      // delta arrays in any current schema.)
+      const itemVar = fieldName.replace(/\./g, "_") + "_item";
+      lines.push(`${indent}for _, ${itemVar} := range ${valueExpr} {`);
+      lines.push(`${indent}\tsize += ${goVarlengthSizeExpr(items.encoding, itemVar)} // ${fieldName} varlength item`);
+      lines.push(`${indent}}`);
     } else if (itemType === "array") {
       // Nested array (2D array) - iterate outer array and calculate inner array sizes
       const innerItems = items.items;
@@ -4194,6 +4203,15 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     const terminalVariants = (field as any).terminal_variants;
     const hasTerminalVariants = terminalVariants && Array.isArray(terminalVariants) && terminalVariants.length > 0;
 
+    // Delta transform: loop-local i64 accumulator holding the previous absolute
+    // value. Each element is written as value[i] - prev using the item's own
+    // encoding; the logical array is absolutes on both sides.
+    const isDeltaTransform = (field as any).transform === "delta";
+    const deltaPrevVar = `${itemVar}_deltaPrev`;
+    if (isDeltaTransform) {
+      lines.push(`${indent}var ${deltaPrevVar} int64 = 0`);
+    }
+
     // Track if we hit a terminal variant (for null_terminated with terminal_variants)
     const terminatedVarName = `${itemVar}_terminated`;
     if (kind === "null_terminated" && hasTerminalVariants) {
@@ -4217,7 +4235,15 @@ function generateEncodeArray(field: any, fieldName: string, endianness: string, 
     } else {
       itemField = { name: "", type: items.type, ...(items as any) };
     }
-    const innerLines = generateEncodeFieldImpl(itemField, itemVar, endianness, runtimeEndianness, indent + "\t", schema);
+    let encodeItemVar = itemVar;
+    if (isDeltaTransform) {
+      // Compute the delta (cast to the item's Go type) and advance the accumulator.
+      const itemGoType = mapFieldToGoType(items, undefined, schema);
+      encodeItemVar = `${itemVar}_delta`;
+      lines.push(`${indent}\t${encodeItemVar} := ${itemGoType}(int64(${itemVar}) - ${deltaPrevVar})`);
+      lines.push(`${indent}\t${deltaPrevVar} = int64(${itemVar})`);
+    }
+    const innerLines = generateEncodeFieldImpl(itemField, encodeItemVar, endianness, runtimeEndianness, indent + "\t", schema);
     lines.push(...innerLines);
 
     // Check for terminal variants and break if encountered
@@ -4978,6 +5004,16 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     itemType = mapFieldToGoType(items, parentTypeName, schema);
   }
 
+  // Delta transform: loop-local i64 running accumulator. Each wire value is a
+  // delta; the decoded element is the running sum (absolute). The validator
+  // restricts delta to numeric/varlength items, so this never collides with the
+  // nested-array / choice paths below.
+  const isDeltaTransform = (field as any).transform === "delta";
+  const deltaRunVar = `${varName}_deltaRun`;
+  if (isDeltaTransform) {
+    lines.push(`${indent}var ${deltaRunVar} int64 = 0`);
+  }
+
   // Read length prefix for length_prefixed arrays
   if (kind === "length_prefixed" || kind === "length_prefixed_items") {
     const lengthType = field.length_type || "uint8";
@@ -5379,7 +5415,14 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
     !["string", "array", "bit", "int", "bitfield", "discriminated_union"].includes(items.type) &&
     !isDiscriminatedUnionTypeRef &&
     !isStringAlias;
-  const itemValue = isStructItem ? `*${itemVar}` : itemVar;
+  let itemValue = isStructItem ? `*${itemVar}` : itemVar;
+
+  // Delta transform: the decoded value is a delta; reconstruct the absolute via
+  // a running i64 sum, then cast back to the item's Go type.
+  if (isDeltaTransform) {
+    lines.push(`${indent}\t${deltaRunVar} += int64(${itemVar})`);
+    itemValue = `${itemType}(${deltaRunVar})`;
+  }
 
   // Assign to array
   if (kind === "fixed" || kind === "length_prefixed" || kind === "field_referenced" || kind === "computed_count" || kind === "packed_count") {
@@ -5626,6 +5669,9 @@ function goVarlengthSizeExpr(encoding: string | undefined, valueExpr: string): s
   }
   if (encoding === "leb128_signed") {
     return `runtime.VarlengthSLEB128Size(${valueExpr})`;
+  }
+  if (encoding === "leb128") {
+    return `runtime.VarlengthLEB128Size(${valueExpr})`;
   }
   return `runtime.VarlengthDERSize(${valueExpr})`;
 }
