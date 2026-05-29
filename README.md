@@ -110,6 +110,47 @@ Supports all array kinds: `fixed`, `length_prefixed`, `field_referenced`, `null_
 | `variant_terminated` | Read until terminal variant type (`terminal_variants` property) |
 | `eof_terminated` | Read until end of stream |
 
+### Array Transforms
+
+The optional `transform` slot rewrites how array elements are laid out on the
+wire while leaving the logical values untouched. It is orthogonal to `kind`
+(which only controls length framing) and to the item's own wire type.
+
+| Transform | Description |
+|-----------|-------------|
+| `delta` | Store each element as the difference from the previous one (`value[i] - value[i-1]`, first relative to 0). Shrinks sorted/correlated integer columns — timestamps, IDs, sensor data. |
+
+`delta` is a **pure wire transform**: the decoded array is identical to the
+input (the deltas exist only on the wire). The delta is written using the
+item's own encoding, so a `zigzag` varlength item yields zigzag-varint deltas —
+the right default, since deltas go negative when the data dips. On a plain
+unsigned fixed-width item it only works for monotonic data (author's
+responsibility, like Thrift). Items must be numeric (`uint*`/`int*`) or
+`varlength`. v1 is whole-array with a single 64-bit accumulator.
+
+```json5
+// Timestamps [1700000000, 1700000001, 1700000003] are stored as deltas
+// [1700000000, 1, 2] — only the first element pays the full width.
+{
+  "name": "timestamps",
+  "type": "array",
+  "kind": "length_prefixed",
+  "length_type": "uint16",
+  "transform": "delta",
+  "items": { "type": "varlength", "encoding": "leb128" }
+}
+
+// Signed deltas: zigzag handles values that dip below the previous one.
+{
+  "name": "samples",
+  "type": "array",
+  "kind": "length_prefixed",
+  "length_type": "uint16",
+  "transform": "delta",
+  "items": { "type": "varlength", "encoding": "zigzag" }
+}
+```
+
 ### Computed Fields
 
 ```json5
