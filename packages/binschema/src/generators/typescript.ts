@@ -33,6 +33,11 @@ import {
   generateDecodeArray,
   getItemSize
 } from "./typescript/array-support.js";
+import {
+  generateEncodeCompressed,
+  generateDecodeCompressed,
+  schemaUsesCompression
+} from "./typescript/compressed-support.js";
 import { generateContextInterface, schemaRequiresContext } from "./typescript/context-analysis.js";
 import { generateNestedTypeContextExtension } from "./typescript/context-extension.js";
 import { generateInterfaces, getFieldTypeScriptType as getFieldTypeScriptTypeFromInterface } from "./typescript/interface-generation.js";
@@ -78,6 +83,9 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
   code += `import { crc32 } from "./crc32.js";\n`;
   code += `import { evaluateExpression } from "./expression-evaluator.js";\n`;
   code += `import { BinSchemaError, ErrorCode } from "./errors.js";\n`;
+  if (schemaUsesCompression(schema)) {
+    code += `import { resolveCodec } from "./codecs.js";\n`;
+  }
 
   // Pre-compute streaming wrappers so we can emit their import alongside the
   // other runtime imports (saves us a post-hoc injection step).
@@ -835,6 +843,10 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
           : resolveTypeReference(vt, schema);
         return `${valueType} | undefined`;
       }
+      case "compressed": {
+        // Compressed region decodes to its inner type (the framing is consumed).
+        return resolveTypeReference((field as any).value_type, schema);
+      }
       default:
         // Type reference (e.g., "Point", "Optional<uint64>")
         return resolveTypeReference(field.type, schema);
@@ -1431,6 +1443,9 @@ function generateEncodeFieldCoreImpl(
 
     case "optional":
       return generateEncodeOptional(field, schema, globalEndianness, valuePath, indent);
+
+    case "compressed":
+      return generateEncodeCompressed(field, schema, globalEndianness, valuePath, indent);
 
     case "padding": {
       // Alignment padding: write zero bytes to align to the specified boundary
@@ -2111,6 +2126,9 @@ function generateDecodeFieldCoreImpl(
 
     case "optional":
       return generateDecodeOptional(field, schema, globalEndianness, fieldName, indent);
+
+    case "compressed":
+      return generateDecodeCompressed(field, schema, globalEndianness, getTargetPath(fieldName), indent);
 
     case "padding": {
       // Alignment padding: skip bytes to align to the specified boundary

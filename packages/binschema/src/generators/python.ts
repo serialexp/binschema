@@ -162,6 +162,14 @@ function mapFieldToPythonType(field: any, schema: BinarySchema): string {
     }
     case "back_reference":
       return "Any";
+    case "compressed": {
+      // The logical value is the inner type — framing is consumed, not part
+      // of the value.
+      const vt = field.value_type;
+      return typeof vt === "object"
+        ? mapFieldToPythonType(vt, schema)
+        : mapFieldToPythonType({ type: vt }, schema);
+    }
     case "padding":
       return "None";
     default:
@@ -352,6 +360,9 @@ function generateFieldEncode(field: any, valuePath: string, indent: string, endi
       break;
     case "optional":
       code += generateOptionalEncode(field, fieldAccess, indent, endianness, schema, bitOrder);
+      break;
+    case "compressed":
+      code += generateCompressedEncode(field, fieldAccess, indent, endianness, schema);
       break;
     default:
       // Type reference - delegate to that type's encoder
@@ -970,6 +981,98 @@ function generateTypeRefEncode(field: any, fieldAccess: string, indent: string, 
     code += `${indent}# TODO: type ref encode for ${field.type}\n`;
   }
 
+  return code;
+}
+
+/**
+ * Return true if any type in the schema uses a `compressed` field, so the
+ * generator can conditionally import the codec registry.
+ */
+function schemaUsesCompression(schema: BinarySchema): boolean {
+  const seen = new Set<unknown>();
+  const scan = (node: unknown): boolean => {
+    if (node === null || typeof node !== "object") return false;
+    if (seen.has(node)) return false;
+    seen.add(node);
+    if (Array.isArray(node)) return node.some(scan);
+    const obj = node as Record<string, unknown>;
+    if (obj.type === "compressed") return true;
+    return Object.values(obj).some(scan);
+  };
+  return scan(schema.types);
+}
+
+/** Emit a statement writing a size/length value with the given width. */
+function pyWriteSize(sizeType: string, valueExpr: string, endianness: string, indent: string): string {
+  switch (sizeType) {
+    case "uint8":  return `${indent}encoder.write_uint8(${valueExpr})\n`;
+    case "uint16": return `${indent}encoder.write_uint16(${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "uint64": return `${indent}encoder.write_uint64(${valueExpr}, ${pyEndianness(endianness)})\n`;
+    case "uint32":
+    default:       return `${indent}encoder.write_uint32(${valueExpr}, ${pyEndianness(endianness)})\n`;
+  }
+}
+
+/** Emit an expression reading a size/length value of the given width. */
+function pyReadSize(sizeType: string, endianness: string): string {
+  switch (sizeType) {
+    case "uint8":  return `decoder.read_uint8()`;
+    case "uint16": return `decoder.read_uint16(${pyEndianness(endianness)})`;
+    case "uint64": return `decoder.read_uint64(${pyEndianness(endianness)})`;
+    case "uint32":
+    default:       return `decoder.read_uint32(${pyEndianness(endianness)})`;
+  }
+}
+
+/**
+ * Generate encoding for a `compressed` field: encode the inner type to a
+ * self-contained buffer, compress via the named codec, then frame as
+ * `[uncompressed_size][compressed_length][compressed_bytes]`.
+ */
+function generateCompressedEncode(field: any, fieldAccess: string, indent: string, endianness: string, schema: BinarySchema): string {
+  const innerType = toPascalCase(typeof field.value_type === "string" ? field.value_type : "");
+  const codec: string = field.codec;
+  const sizeType: string = field.size_type || "uint32";
+  const lengthType: string = field.length_type || "uint32";
+  const suffix = (field.name || "field").replace(/[^a-zA-Z0-9_]/g, "_");
+  const innerVar = `_inner_${suffix}`;
+  const compVar = `_comp_${suffix}`;
+
+  let code = "";
+  code += `${indent}# Compressed region: encode inner type, compress, frame\n`;
+  code += `${indent}${innerVar} = ${innerType}Encoder().encode(${fieldAccess})\n`;
+  code += `${indent}${compVar} = resolve_codec(${JSON.stringify(codec)}).compress(${innerVar})\n`;
+  code += pyWriteSize(sizeType, `len(${innerVar})`, endianness, indent);
+  code += pyWriteSize(lengthType, `len(${compVar})`, endianness, indent);
+  code += `${indent}encoder.write_bytes(${compVar})\n`;
+  return code;
+}
+
+/**
+ * Generate decoding for a `compressed` field: read framing, slice the
+ * compressed bytes, decompress, verify the uncompressed size, then decode the
+ * inner type from a fresh decoder over the decompressed buffer.
+ */
+function generateCompressedDecode(field: any, fieldAssign: string, indent: string, endianness: string, schema: BinarySchema, bitOrder: string): string {
+  const innerType = toPascalCase(typeof field.value_type === "string" ? field.value_type : "");
+  const codec: string = field.codec;
+  const sizeType: string = field.size_type || "uint32";
+  const lengthType: string = field.length_type || "uint32";
+  const suffix = (field.name || "field").replace(/[^a-zA-Z0-9_]/g, "_");
+  const uSizeVar = `_usize_${suffix}`;
+  const cLenVar = `_clen_${suffix}`;
+  const sliceVar = `_cslice_${suffix}`;
+  const decompVar = `_decomp_${suffix}`;
+
+  let code = "";
+  code += `${indent}# Compressed region: read framing, decompress, decode inner type\n`;
+  code += `${indent}${uSizeVar} = ${pyReadSize(sizeType, endianness)}\n`;
+  code += `${indent}${cLenVar} = ${pyReadSize(lengthType, endianness)}\n`;
+  code += `${indent}${sliceVar} = decoder.read_bytes_slice(${cLenVar})\n`;
+  code += `${indent}${decompVar} = resolve_codec(${JSON.stringify(codec)}).decompress(${sliceVar}, ${uSizeVar})\n`;
+  code += `${indent}if len(${decompVar}) != ${uSizeVar}:\n`;
+  code += `${indent}    raise BinSchemaError(ErrorCode.INVALID_ENCODING, f"Decompressed size mismatch for ${suffix}: expected {${uSizeVar}}, got {len(${decompVar})}")\n`;
+  code += `${indent}${fieldAssign} = ${innerType}Decoder(${decompVar}).decode()\n`;
   return code;
 }
 
@@ -1843,6 +1946,9 @@ function generateFieldDecode(field: any, resultPath: string, indent: string, end
     case "optional":
       code += generateOptionalDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
       break;
+    case "compressed":
+      code += generateCompressedDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
+      break;
     default:
       // Type reference
       if (field.type && schema.types[field.type]) {
@@ -2479,7 +2585,8 @@ export function generatePython(
   lines.push(`from typing import Any`);
   lines.push(`import math`);
   lines.push(`import struct`);
-  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32, _resolve_deferred_patches, BinSchemaError, ErrorCode, _decode_text`);
+  const codecImport = schemaUsesCompression(schema) ? ", resolve_codec" : "";
+  lines.push(`from ${runtimeModule} import BitStreamEncoder, BitStreamDecoder, SeekableBitStreamDecoder, compute_crc32, _resolve_deferred_patches, BinSchemaError, ErrorCode, _decode_text${codecImport}`);
   lines.push(``);
   lines.push(``);
 

@@ -13,6 +13,10 @@ import math
 import zlib
 from typing import Literal
 from .errors import BinSchemaError, ErrorCode
+# Re-exported so generated code (and the test harness, which rewrites the
+# runtime import to `runtime.bitstream`) can pull the codec registry from a
+# single module name.
+from .codecs import resolve_codec, register_codec, Codec
 
 Endianness = Literal["big_endian", "little_endian"]
 

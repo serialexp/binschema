@@ -396,6 +396,41 @@ async function runTestCase(
     };
   }
 
+  // Round-trip-only test case: encode → decode == value, no byte assertion.
+  // Used for runtime-dependent encodings (e.g. real deflate) whose exact bytes
+  // aren't stable across implementations.
+  if (testCase.round_trip_only) {
+    const debugTest = process.env.DEBUG_TEST === "1" || process.env.DEBUG_TEST === "true";
+    try {
+      const encoder = new EncoderClass();
+      const encoded = encoder.encode(testCase.value);
+      const decoder = new DecoderClass(new Uint8Array(encoded));
+      const decoded = decoder.decode();
+      const expectedDecoded = testCase.decoded_value !== undefined ? testCase.decoded_value : testCase.value;
+      if (!deepEqual(decoded, expectedDecoded)) {
+        failures.push({
+          description: testCase.description,
+          type: "decode",
+          expected: stringifyWithBigInt(expectedDecoded),
+          actual: stringifyWithBigInt(decoded),
+          message: "Round-trip decode does not match expected value",
+        });
+      }
+    } catch (error) {
+      if (debugTest && error instanceof Error) {
+        logger.debug("Round-trip exception stack:", error.stack);
+      }
+      failures.push({
+        description: testCase.description,
+        type: "encode",
+        expected: stringifyWithBigInt(testCase.value),
+        actual: "",
+        message: `Round-trip exception: ${error}`,
+      });
+    }
+    return { passed: failures.length === 0, failures };
+  }
+
   // Normal test case (not error test)
   const format = testCase.bytes ? "bytes" : "bits";
   const debugTest = process.env.DEBUG_TEST === "1" || process.env.DEBUG_TEST === "true";

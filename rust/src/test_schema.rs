@@ -202,4 +202,6 @@ pub struct TestCase {
     pub should_error_on_encode: Option<bool>,
     #[serde(default)]
     pub should_error_on_decode: Option<bool>,
+    #[serde(default)]
+    pub round_trip_only: Option<bool>,  // Skip byte assertion; only assert encode->decode == value
 }

@@ -18,6 +18,8 @@ The type system is remarkably complete for binary format definition:
 - **Bit-level**: bitfields, single bits, multi-byte bits, MSB/LSB ordering
 - **Unions**: discriminated_union (peek/field-based), choice (auto-detected from const values)
 - **Computed fields**: length_of, count_of, position_of, crc32_of, sum_of_sizes, sum_of_type_sizes
+- **Array transforms**: `delta` (store elements as differences from the previous one — a pure wire transform for sorted/correlated integer columns)
+- **Compressed regions**: `compressed` wrapper type with a pluggable codec registry (built-in `store`/`deflate`/`gzip`; inject `zstd`/`lz4`/… via `registerCodec`). Frames `[uncompressed_size][compressed_length][bytes…]`; the inner type encodes/decodes through the codec as a self-contained sub-stream.
 - **Expression language**: arithmetic (`+ - * /`) with precedence and parentheses, comparisons, boolean/bitwise operators, field references
 - **Structural**: conditional fields, optional fields, back-references, padding/alignment, enums
 - **Random-access**: position fields with seekable parsing
@@ -197,7 +199,6 @@ generators).
 
 These were considered but are intentionally out of scope:
 
-- **No compression/decompression**: BinSchema defines wire format, not data transforms. A page body (Parquet) or compressed file body (ZIP) is correctly treated as an opaque payload; zstd/RLE/dictionary encoding run *over* bytes, not layout.
 - **No type inheritance/generics**: Keeps the type system simple and predictable
 - **No recursive self-referential types**: Extremely rare in wire formats
 - **No TLV as first-class type**: Can be modeled with discriminated_union + computed length fields

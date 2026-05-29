@@ -232,8 +232,24 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       const outputPath = join(absoluteOut, "generated.ts");
       writeFileSync(outputPath, code, "utf-8");
 
-      // Copy runtime dependencies
-      const runtimeFiles = ["bit-stream.ts", "seekable-bit-stream.ts", "binary-reader.ts", "crc32.ts"];
+      // Copy runtime dependencies. errors.ts and expression-evaluator.ts are
+      // imported unconditionally by the generated code (and bit-stream.ts itself
+      // imports errors.js), so they must always travel with the output.
+      const runtimeFiles = [
+        "bit-stream.ts",
+        "seekable-bit-stream.ts",
+        "binary-reader.ts",
+        "crc32.ts",
+        "errors.ts",
+        "expression-evaluator.ts",
+      ];
+      // The codec registry (and its vendored fflate source) is only needed when
+      // the schema actually uses a `compressed` region — the generated code
+      // imports `./codecs.js` conditionally.
+      const { schemaUsesCompression } = await import("../generators/typescript/compressed-support.js");
+      if (schemaUsesCompression(schema)) {
+        runtimeFiles.push("codecs.ts", "fflate.js", "fflate.d.ts");
+      }
       const runtimeDir = resolve(process.cwd(), "src/runtime");
       for (const file of runtimeFiles) {
         const srcPath = join(runtimeDir, file);
@@ -417,7 +433,7 @@ async function runRustGenerator(opts: { schema: BinarySchema; typeName: string; 
   mkdirSync(runtimeCrateSrcDir, { recursive: true });
 
   // Copy runtime source files (exclude test_schema.rs which is test-only)
-  const runtimeFiles = ["bitstream.rs", "context.rs"];
+  const runtimeFiles = ["bitstream.rs", "context.rs", "codecs.rs"];
   for (const file of runtimeFiles) {
     const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
     writeFileSync(join(runtimeCrateSrcDir, file), content, "utf-8");
@@ -430,11 +446,15 @@ async function runRustGenerator(opts: { schema: BinarySchema; typeName: string; 
     .replace(/pub use test_schema[^\n]*\n?/g, "");
   writeFileSync(join(runtimeCrateSrcDir, "lib.rs"), strippedLibRs, "utf-8");
 
-  // Write Cargo.toml for the runtime crate (no external deps needed)
+  // Write Cargo.toml for the runtime crate. flate2 backs the built-in
+  // deflate/gzip codecs used by `compressed` regions.
   const runtimeCargoToml = `[package]
 name = "binschema-runtime"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+flate2 = "1.0"
 
 [lib]
 name = "binschema_runtime"

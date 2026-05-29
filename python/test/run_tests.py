@@ -266,6 +266,38 @@ def run_single_test(
     should_error = tc.get("should_error", False)
     should_error_encode = tc.get("should_error_on_encode", False)
     should_error_decode = tc.get("should_error_on_decode", False)
+    round_trip_only = tc.get("round_trip_only", False)
+
+    # round_trip_only: no byte pin (e.g. real deflate is non-deterministic
+    # across implementations). Assert encode -> decode == value instead.
+    if round_trip_only:
+        try:
+            encoder = encoder_class()
+            encoded = encoder.encode(value)
+        except Exception as e:
+            return {
+                "description": description,
+                "pass": False,
+                "error": f"Encode error: {e}\n{__import__('traceback').format_exc()}",
+            }
+        try:
+            if decoder_class:
+                decoded = decoder_class(bytes(encoded)).decode()
+            elif decode_func:
+                from runtime.bitstream import BitStreamDecoder as BD
+                decoded = decode_func(BD(bytes(encoded)))
+            else:
+                return {"description": description, "pass": False, "error": "No decoder available"}
+        except Exception as e:
+            return {"description": description, "pass": False, "error": f"Decode error: {e}"}
+
+        if not values_equal(decoded, decoded_value):
+            return {
+                "description": description,
+                "pass": False,
+                "error": f"Round-trip mismatch: expected {decoded_value}, got {decoded}",
+            }
+        return {"description": description, "pass": True}
 
     # Test encoding (skipped for types with instance fields - decode-only)
     if not skip_encoding or should_error or should_error_encode:

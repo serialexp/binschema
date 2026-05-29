@@ -341,6 +341,7 @@ fn type_needs_input_output_split(type_name: &str, schema: &Schema) -> bool {
     }
 }
 
+
 /// Generate the test harness main function
 fn generate_test_harness(suites: &[(String, TestSuite)]) -> String {
     let mut harness = String::from(
@@ -400,6 +401,7 @@ fn main() {
             }
 
             let should_error_on_encode = tc.should_error_on_encode.unwrap_or(false);
+            let round_trip_only = tc.round_trip_only.unwrap_or(false);
 
             // Generate test case
             harness.push_str(&format!(
@@ -487,10 +489,29 @@ fn main() {
                             "                        match {}::decode(&encoded) {{\n",
                             output_type
                         ));
-                        harness.push_str("                            Ok(_decoded) => {\n");
-                        // Can't compare Input with Output, so just verify encode/decode round-trip works
-                        harness.push_str("                                result.pass = true;\n");
-                        harness.push_str("                                results.push(result);\n");
+                        harness.push_str("                            Ok(decoded) => {\n");
+                        if uses_input_output {
+                            // Verify From<Input> for Output populates computed/const fields
+                            // identically to what decode produces. The assertion runs
+                            // UNCONDITIONALLY — any type with placeholder values in computed
+                            // fields will fail here, and that's the point: the failure tells
+                            // us which cases the From impl doesn't yet handle.
+                            harness.push_str(&format!(
+                                "                                let via_into: {} = test_value.clone().into();\n",
+                                output_type
+                            ));
+                            harness.push_str("                                if via_into != decoded {\n");
+                            harness.push_str("                                    result.error = Some(format!(\"input.into() != decoded: via .into() = {:?}, decoded = {:?}\", via_into, decoded));\n");
+                            harness.push_str("                                    results.push(result);\n");
+                            harness.push_str("                                } else {\n");
+                            harness.push_str("                                    result.pass = true;\n");
+                            harness.push_str("                                    results.push(result);\n");
+                            harness.push_str("                                }\n");
+                        } else {
+                            harness.push_str("                                let _ = decoded;\n");
+                            harness.push_str("                                result.pass = true;\n");
+                            harness.push_str("                                results.push(result);\n");
+                        }
                         harness.push_str("                            }\n");
                         harness.push_str("                            Err(e) => {\n");
                         harness.push_str("                                result.error = Some(format!(\"decode error: {}\", e));\n");
@@ -498,6 +519,36 @@ fn main() {
                         harness.push_str("                            }\n");
                         harness.push_str("                        }\n");
                         harness.push_str("                    }\n");
+                    } else if round_trip_only {
+                        // No byte pin (e.g. real deflate is non-deterministic across
+                        // implementations): assert encode -> decode == value instead.
+                        harness.push_str(&format!(
+                            "                    match {}::decode(&encoded) {{\n",
+                            output_type
+                        ));
+                        harness.push_str("                        Ok(decoded) => {\n");
+                        harness.push_str(&format!(
+                            "                            let via_into: {} = test_value.clone().into();\n",
+                            output_type
+                        ));
+                        harness.push_str("                            if via_into != decoded {\n");
+                        harness.push_str("                                result.error = Some(format!(\"round-trip mismatch: value = {:?}, decoded = {:?}\", via_into, decoded));\n");
+                        harness.push_str("                                results.push(result);\n");
+                        harness.push_str("                            } else {\n");
+                        harness.push_str("                                result.pass = true;\n");
+                        harness.push_str("                                results.push(result);\n");
+                        harness.push_str("                            }\n");
+                        harness.push_str("                        }\n");
+                        harness.push_str("                        Err(e) => {\n");
+                        harness.push_str("                            result.error = Some(format!(\"decode error: {}\", e));\n");
+                        harness.push_str("                            results.push(result);\n");
+                        harness.push_str("                        }\n");
+                        harness.push_str("                    }\n");
+                    } else {
+                        // No bytes and not round-trip-only: nothing to assert, but we must
+                        // still record a result so the case isn't silently dropped.
+                        harness.push_str("                    result.error = Some(\"no bytes and not round_trip_only\".to_string());\n");
+                        harness.push_str("                    results.push(result);\n");
                     }
 
                     // Close Ok(encoded) arm
@@ -812,6 +863,24 @@ fn format_value_with_field_and_suffix(
                 .collect();
             let field_name = field.name.as_deref().unwrap_or("");
             return format_choice_value(value, &variant_types, schema, prefix, containing_type_name, field_name);
+        }
+    }
+
+    // Handle compressed fields - the constructed value is the inner type
+    // (the uncompressed_size/length framing is consumed, not part of the value).
+    if field_type == "compressed" {
+        if let Some(ref value_type) = field.value_type {
+            if let Some(type_def) = schema.types.get(value_type) {
+                match type_def {
+                    TypeDef::Sequence { .. } => {
+                        return format_nested_struct_with_suffix(value, value_type, schema, prefix, suffix);
+                    }
+                    TypeDef::Direct { .. } => {
+                        return format_value_as_newtype(value, value_type, prefix, schema);
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 

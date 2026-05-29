@@ -4,9 +4,11 @@
 pub mod bitstream;
 pub mod test_schema;
 pub mod context;
+pub mod codecs;
 
 pub use bitstream::{BitStreamEncoder, BitStreamDecoder, Endianness, BitOrder};
 pub use context::{EncodeContext, FieldValue};
+pub use codecs::{Codec, register_codec, resolve_codec};
 
 /// Canonical error codes shared with the TypeScript, Go, and Python runtimes.
 ///

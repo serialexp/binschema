@@ -440,8 +440,11 @@ func main() {
 				harness += generateValueConstructionWithSchema(prefixedType, tc.Value, "testValue", suite, typePrefix)
 			}
 
-			// Define expectedBytes for types with instance fields (used for decode-only testing)
-			harness += fmt.Sprintf("\t\t\texpectedBytes := []byte{%s}\n", formatByteSlice(tc.Bytes))
+			// Define expectedBytes for types with instance fields (used for decode-only testing).
+			// round_trip_only suites have no pinned bytes (non-deterministic codec) — skip it.
+			if !tc.RoundTripOnly {
+				harness += fmt.Sprintf("\t\t\texpectedBytes := []byte{%s}\n", formatByteSlice(tc.Bytes))
+			}
 
 			if hasInstanceFields {
 				// For types with instance fields, only test decoding
@@ -466,12 +469,14 @@ func main() {
 				harness += "\t\t\t}\n"
 				harness += "\t\t\tresult.EncodedBytes = encoded\n\n"
 
-				// Compare bytes
-				harness += "\t\t\tif !bytes.Equal(encoded, expectedBytes) {\n"
-				harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"encoded bytes mismatch: got %v, want %v\", encoded, expectedBytes)\n"
-				harness += "\t\t\t\tresult.Pass = false\n"
-				harness += "\t\t\t\treturn\n"
-				harness += "\t\t\t}\n\n"
+				// Compare bytes (skipped for round_trip_only — codec output is not byte-pinned)
+				if !tc.RoundTripOnly {
+					harness += "\t\t\tif !bytes.Equal(encoded, expectedBytes) {\n"
+					harness += "\t\t\t\tresult.Error = fmt.Sprintf(\"encoded bytes mismatch: got %v, want %v\", encoded, expectedBytes)\n"
+					harness += "\t\t\t\tresult.Pass = false\n"
+					harness += "\t\t\t\treturn\n"
+					harness += "\t\t\t}\n\n"
+				}
 
 				// Decode
 				harness += fmt.Sprintf("\t\t\tdecoded, decErr := Decode%s(encoded)\n", prefixedType)
@@ -820,6 +825,19 @@ func formatValueWithSchema(val interface{}, fieldDef map[string]interface{}, typ
 				}
 			}
 			return formattedVal
+		}
+	}
+
+	// Handle compressed fields - the decoded value is the inner type (the
+	// uncompressed_size/length framing is consumed, not part of the value).
+	if fieldType == "compressed" {
+		valueType, _ := fieldDef["value_type"].(string)
+		if valueType != "" {
+			if innerTypeDef, ok := types[valueType].(map[string]interface{}); ok {
+				if valMap, ok := val.(map[string]interface{}); ok {
+					return formatStructValue(valMap, innerTypeDef, types, typePrefix, valueType)
+				}
+			}
 		}
 	}
 

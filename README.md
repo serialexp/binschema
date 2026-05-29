@@ -151,6 +151,78 @@ responsibility, like Thrift). Items must be numeric (`uint*`/`int*`) or
 }
 ```
 
+### Compressed Regions
+
+The `compressed` wrapper type marks a byte region whose wire bytes are not the
+logical value — they are the inner type run through a codec. It is the
+region-level analogue of the array `delta` transform: where `delta` rewrites
+array *elements*, `compressed` transforms a whole *byte region*. On encode the
+inner `value_type` is serialized to a buffer, compressed, and framed; on decode
+the bytes are decompressed and the inner type is parsed back out.
+
+Wire layout:
+
+```
+[uncompressed_size: size_type][compressed_length: length_type][compressed_bytes…]
+```
+
+Both size fields default to `uint32` and are configurable via `size_type` /
+`length_type`. They are **consumed framing** (like an array length prefix) — they
+do *not* appear in the decoded value, so the logical value is just the inner type
+on both sides (`value === decoded_value`).
+
+`store`, `deflate`, and `gzip` are **built-in codecs** that work after `generate`
+with no extra wiring — each runtime uses its language's standard library (Go
+`compress/flate`+`compress/gzip`, Python `zlib`+`gzip`, Rust `flate2`, TypeScript
+vendors `fflate`). `store` is the identity codec (compressed bytes == inner
+bytes), useful when you want the framing without paying for compression.
+
+```json5
+// A length-prefixed compressed blob that decodes as a SignalBatch.
+{
+  "name": "payload",
+  "type": "compressed",
+  "codec": "deflate",
+  "value_type": "SignalBatch"
+}
+
+// Narrow the framing to uint16 size + uint16 length prefixes.
+{
+  "name": "payload",
+  "type": "compressed",
+  "codec": "store",
+  "value_type": "Inner",
+  "size_type": "uint16",
+  "length_type": "uint16"
+}
+```
+
+The codec registry is **pluggable**: unknown codec names (e.g. `zstd`, `lz4`,
+`snappy`) resolve to a codec you register before encoding/decoding, so you can
+plug in any compression library without forcing a heavy dependency on everyone:
+
+```ts
+// TypeScript
+import { registerCodec } from "./binschema_runtime/codecs.js";
+registerCodec("zstd", { compress: zstdCompress, decompress: zstdDecompress });
+```
+
+```python
+# Python
+from binschema_runtime import register_codec, Codec
+register_codec("zstd", MyZstdCodec())
+```
+
+```go
+// Go
+runtime.RegisterCodec("zstd", myZstdCodec{})
+```
+
+```rust
+// Rust
+binschema_runtime::register_codec("zstd", std::sync::Arc::new(MyZstdCodec));
+```
+
 ### Computed Fields
 
 ```json5

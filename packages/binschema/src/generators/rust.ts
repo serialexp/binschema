@@ -5852,6 +5852,10 @@ function generateEncodeField(field: Field, defaultEndianness: string, indent: st
       lines.push(...generateEncodeBackReference(field as any, fieldName, indent));
       break;
 
+    case "compressed":
+      lines.push(...generateEncodeCompressed(field, fieldName, defaultEndianness, indent));
+      break;
+
     case "choice":
     case "discriminated_union": {
       // Inline choice/discriminated_union — check if any variant transitively contains back_references
@@ -6588,6 +6592,106 @@ function generateEncodeNestedStruct(field: Field, fieldName: string, indent: str
 }
 
 /**
+ * Emit a statement writing a length value (`lenExpr` is a usize expression)
+ * using the given size type and endianness.
+ */
+function rustWriteSizeStmt(sizeType: string, lenExpr: string, rustEndianness: string, indent: string): string {
+  switch (sizeType) {
+    case "uint8":
+      return `${indent}encoder.write_uint8(${lenExpr} as u8);`;
+    case "uint16":
+      return `${indent}encoder.write_uint16(${lenExpr} as u16, Endianness::${rustEndianness});`;
+    case "uint64":
+      return `${indent}encoder.write_uint64(${lenExpr} as u64, Endianness::${rustEndianness});`;
+    case "uint32":
+    default:
+      return `${indent}encoder.write_uint32(${lenExpr} as u32, Endianness::${rustEndianness});`;
+  }
+}
+
+/**
+ * Emit a `let <target> = decoder.read_*()?;` statement reading a length value.
+ */
+function rustReadSizeStmt(sizeType: string, target: string, rustEndianness: string, indent: string): string {
+  switch (sizeType) {
+    case "uint8":
+      return `${indent}let ${target} = decoder.read_uint8()?;`;
+    case "uint16":
+      return `${indent}let ${target} = decoder.read_uint16(Endianness::${rustEndianness})?;`;
+    case "uint64":
+      return `${indent}let ${target} = decoder.read_uint64(Endianness::${rustEndianness})?;`;
+    case "uint32":
+    default:
+      return `${indent}let ${target} = decoder.read_uint32(Endianness::${rustEndianness})?;`;
+  }
+}
+
+/**
+ * Generates encoding code for a compressed field. `fieldName` is the access
+ * path (e.g. `self.payload`).
+ */
+function generateEncodeCompressed(field: Field, fieldName: string, defaultEndianness: string, indent: string): string[] {
+  const f = field as any;
+  const codec: string = f.codec;
+  const sizeType: string = f.size_type || "uint32";
+  const lengthType: string = f.length_type || "uint32";
+  const rustEndianness = mapEndianness(defaultEndianness);
+  const clean = toRustFieldName(field.name || "compressed");
+  const innerVar = `inner_${clean}`;
+  const codecVar = `codec_${clean}`;
+  const compVar = `comp_${clean}`;
+
+  const lines: string[] = [];
+  lines.push(`${indent}// Compressed region: encode inner type, compress, frame`);
+  lines.push(`${indent}let ${innerVar} = ${fieldName}.encode()?;`);
+  lines.push(`${indent}let ${codecVar} = binschema_runtime::resolve_codec("${codec}")?;`);
+  lines.push(`${indent}let ${compVar} = ${codecVar}.compress(&${innerVar})?;`);
+  lines.push(rustWriteSizeStmt(sizeType, `${innerVar}.len()`, rustEndianness, indent));
+  lines.push(rustWriteSizeStmt(lengthType, `${compVar}.len()`, rustEndianness, indent));
+  lines.push(`${indent}for b in &${compVar} { encoder.write_uint8(*b); }`);
+  return lines;
+}
+
+/**
+ * Generates decoding code for a compressed field, binding `let <varName> = ...`.
+ */
+function generateDecodeCompressed(field: Field, varName: string, defaultEndianness: string, indent: string, schema: BinarySchema): string[] {
+  const f = field as any;
+  const vt = f.value_type;
+  const innerTypeName = toRustTypeName(vt);
+  const typeDef = schema.types[vt];
+  const isComposite = typeDef && "sequence" in typeDef;
+  const needsSplit = isComposite && typeNeedsInputOutputSplit(vt, schema);
+  const decodeName = needsSplit ? `${innerTypeName}Output` : innerTypeName;
+  const codec: string = f.codec;
+  const sizeType: string = f.size_type || "uint32";
+  const lengthType: string = f.length_type || "uint32";
+  const rustEndianness = mapEndianness(defaultEndianness);
+  const bitOrder = mapBitOrder(schema.config?.bit_order || "msb_first");
+  const uSizeVar = `usize_${varName}`;
+  const cLenVar = `clen_${varName}`;
+  const sliceVar = `cslice_${varName}`;
+  const codecVar = `codec_${varName}`;
+  const decompVar = `decomp_${varName}`;
+  const innerDecoderVar = `inner_decoder_${varName}`;
+  const nm = field.name || varName;
+
+  const lines: string[] = [];
+  lines.push(`${indent}// Compressed region: read framing, decompress, decode inner type`);
+  lines.push(rustReadSizeStmt(sizeType, uSizeVar, rustEndianness, indent));
+  lines.push(rustReadSizeStmt(lengthType, cLenVar, rustEndianness, indent));
+  lines.push(`${indent}let ${sliceVar} = decoder.read_bytes_vec(${cLenVar} as usize)?;`);
+  lines.push(`${indent}let ${codecVar} = binschema_runtime::resolve_codec("${codec}")?;`);
+  lines.push(`${indent}let ${decompVar} = ${codecVar}.decompress(&${sliceVar}, ${uSizeVar} as usize)?;`);
+  lines.push(`${indent}if ${decompVar}.len() != ${uSizeVar} as usize {`);
+  lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidEncoding(format!("decompressed size mismatch for ${nm}: expected {}, got {}", ${uSizeVar}, ${decompVar}.len())));`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}let mut ${innerDecoderVar} = BitStreamDecoder::new(&${decompVar}, BitOrder::${bitOrder});`);
+  lines.push(`${indent}let ${varName} = ${decodeName}::decode_with_decoder(&mut ${innerDecoderVar})?;`);
+  return lines;
+}
+
+/**
  * Generates encoding code for optional field
  */
 function generateEncodeOptional(field: any, fieldName: string, endianness: string, indent: string): string[] {
@@ -6841,6 +6945,10 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
 
     case "optional":
       lines.push(...generateDecodeOptional(field as any, varName, endianness, indent, schema));
+      break;
+
+    case "compressed":
+      lines.push(...generateDecodeCompressed(field, varName, defaultEndianness, indent, schema));
       break;
 
     case "padding": {
@@ -8112,6 +8220,14 @@ function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema, containi
       const backRefNeedsSplit = backRefIsComposite && typeNeedsInputOutputSplit(targetType, schema);
       return backRefNeedsSplit ? `${typeName}Input` : typeName;
     }
+    case "compressed": {
+      // Compressed region: the input is the inner type (Input flavour if split).
+      const vt = (field as any).value_type;
+      const typeName = toRustTypeName(vt);
+      const isComposite = isCompositeType(vt, schema);
+      const needsSplit = isComposite && typeNeedsInputOutputSplit(vt, schema);
+      return needsSplit ? `${typeName}Input` : (isComposite ? typeName : mapPrimitiveToRustType(vt));
+    }
     default: {
       // Type reference - check if composite or type alias
       const typeName = toRustTypeName(field.type);
@@ -8300,6 +8416,18 @@ function mapFieldToRustType(field: Field, schema?: BinarySchema, containingTypeN
         const typeDef = schema.types[targetType];
         const isComposite = typeDef && "sequence" in typeDef;
         const needsSplit = isComposite && typeNeedsInputOutputSplit(targetType, schema);
+        return needsSplit ? `${typeName}Output` : typeName;
+      }
+      return typeName;
+    }
+    case "compressed": {
+      // Compressed region decodes to its inner type (Output flavour if split).
+      const vt = (field as any).value_type;
+      const typeName = toRustTypeName(vt);
+      if (schema) {
+        const typeDef = schema.types[vt];
+        const isComposite = typeDef && "sequence" in typeDef;
+        const needsSplit = isComposite && typeNeedsInputOutputSplit(vt, schema);
         return needsSplit ? `${typeName}Output` : typeName;
       }
       return typeName;

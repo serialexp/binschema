@@ -1074,6 +1074,70 @@ const OptionalFieldSchema = z.object({
 });
 
 /**
+ * Compressed region field schema.
+ *
+ * A `compressed` field is a pure wire transform on a byte region: the inner
+ * type (`value_type`) is encoded to a buffer, run through the named `codec`,
+ * and written as `[uncompressed_size][compressed_length][compressed_bytes]`.
+ * On decode the sizes and blob are consumed framing — the decoded value is just
+ * the inner type, so `value === decoded_value`.
+ *
+ * v1: `value_type` is a named type reference; `store`/`deflate`/`gzip` are
+ * built-in codecs, any other name resolves to a runtime-injected codec.
+ */
+const CompressedFieldSchema = z.object({
+  name: z.string().meta({
+    description: "Field name"
+  }),
+  type: z.literal("compressed").meta({
+    description: "Field type (always 'compressed')"
+  }),
+  codec: z.string().meta({
+    description: "Codec name. Built-in: 'store' (identity passthrough), 'deflate', 'gzip'. Any other name resolves to a user-supplied (de)compress function injected via the encoding context — pluggable, with no forced dependency."
+  }),
+  value_type: z.string().meta({
+    description: "Name of the inner type that is encoded, compressed, then framed. Decodes back to this type; the size fields and compressed bytes are consumed framing, not part of the decoded value."
+  }),
+  size_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional().meta({
+    description: "Width of the uncompressed-size field (default uint32). Lets the decoder pre-allocate the exact output buffer before decompressing."
+  }),
+  length_type: z.enum(["uint8", "uint16", "uint32", "uint64"]).optional().meta({
+    description: "Width of the compressed-length prefix (default uint32)."
+  }),
+  description: z.string().optional().meta({
+    description: "Human-readable description of this field"
+  }),
+}).meta({
+  title: "Compressed",
+  description: "A byte region whose contents are compressed on the wire. The inner type is encoded, compressed with the named codec, and written as [uncompressed_size][compressed_length][compressed_bytes]. Decodes back to the inner type.",
+  use_for: "Compressed payloads: ZIP entries, PNG IDAT, Parquet/Avro blocks, gRPC frames, length-framed compressed protocol batches",
+  wire_format: "[uncompressed_size: size_type][compressed_length: length_type][compressed_bytes]",
+  code_generation: {
+    typescript: {
+      type: "T",
+      notes: ["Decodes to the inner type T (value_type)", "store/deflate/gzip built in; custom codecs via context.codecs"]
+    },
+    go: {
+      type: "T",
+      notes: ["Decodes to the inner type T", "deflate/gzip from compress/flate; custom codecs via context"]
+    },
+    rust: {
+      type: "T",
+      notes: ["Decodes to the inner type T", "deflate/gzip via flate2; custom codecs via context"]
+    }
+  },
+  notes: [
+    "Pure wire transform: the decoded value is the inner type (size fields and blob are consumed framing)",
+    "uncompressed_size lets the decoder pre-allocate the exact output buffer",
+    "store is the identity codec (compressed bytes == inner bytes) — handy for deterministic tests and ZIP method 0"
+  ],
+  examples: [
+    { name: "payload", type: "compressed", codec: "deflate", value_type: "SignalBatch" },
+    { name: "page", type: "compressed", codec: "gzip", value_type: "PageBody", size_type: "uint32", length_type: "uint32" }
+  ]
+});
+
+/**
  * Type reference without name (for array items and type aliases)
  * IMPORTANT: type must start with uppercase letter to avoid matching built-in type names
  * (e.g., "discriminated_union", "back_reference", "array", "string", etc.)
@@ -1960,6 +2024,7 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
     ChoiceFieldSchema,
     BackReferenceFieldSchema,
     PaddingFieldSchema,
+    CompressedFieldSchema,
   ]),
 
   // Third: Fallback to type reference for user-defined types

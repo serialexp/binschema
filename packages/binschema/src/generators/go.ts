@@ -3759,6 +3759,10 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
       lines.push(...generateEncodeBackReferenceImpl(field as any, fieldName, endianness, runtimeEndianness, indent));
       break;
 
+    case "compressed":
+      lines.push(...generateEncodeCompressed(field, fieldName, runtimeEndianness, indent));
+      break;
+
     default:
       // Check if this is a string type alias — inline encoding
       if (schema && isStringTypeAlias(field.type, schema)) {
@@ -4310,6 +4314,136 @@ function generateEncodeNestedStruct(field: Field, fieldName: string, indent: str
 }
 
 /**
+ * Emit a statement writing a length value (lengthExpr is a Go int expression)
+ * using the given size type and endianness.
+ */
+function goWriteSizeStmt(sizeType: string, lengthExpr: string, runtimeEndianness: string, indent: string): string {
+  switch (sizeType) {
+    case "uint8":
+      return `${indent}encoder.WriteUint8(uint8(${lengthExpr}))`;
+    case "uint16":
+      return `${indent}encoder.WriteUint16(uint16(${lengthExpr}), runtime.${runtimeEndianness})`;
+    case "uint64":
+      return `${indent}encoder.WriteUint64(uint64(${lengthExpr}), runtime.${runtimeEndianness})`;
+    case "uint32":
+    default:
+      return `${indent}encoder.WriteUint32(uint32(${lengthExpr}), runtime.${runtimeEndianness})`;
+  }
+}
+
+/**
+ * Emit statements reading a length value into `targetVar` (declared with :=)
+ * using the given size type and endianness, including error handling.
+ */
+function goReadSizeStmts(sizeType: string, targetVar: string, runtimeEndianness: string, indent: string, fieldName: string): string[] {
+  let readExpr: string;
+  switch (sizeType) {
+    case "uint8":
+      readExpr = `decoder.ReadUint8()`;
+      break;
+    case "uint16":
+      readExpr = `decoder.ReadUint16(runtime.${runtimeEndianness})`;
+      break;
+    case "uint64":
+      readExpr = `decoder.ReadUint64(runtime.${runtimeEndianness})`;
+      break;
+    case "uint32":
+    default:
+      readExpr = `decoder.ReadUint32(runtime.${runtimeEndianness})`;
+      break;
+  }
+  return [
+    `${indent}${targetVar}, err := ${readExpr}`,
+    `${indent}if err != nil {`,
+    `${indent}\treturn nil, fmt.Errorf("failed to read compressed framing for ${fieldName}: %w", err)`,
+    `${indent}}`,
+  ];
+}
+
+/**
+ * Generates encoding code for a compressed field. `fieldName` is the access
+ * path (e.g. `m.Payload`).
+ */
+function generateEncodeCompressed(field: Field, fieldName: string, runtimeEndianness: string, indent: string): string[] {
+  const f = field as any;
+  const codec: string = f.codec;
+  const sizeType: string = f.size_type || "uint32";
+  const lengthType: string = f.length_type || "uint32";
+  const clean = fieldName.replace(/^\*/, "").replace(/[^a-zA-Z0-9_]/g, "_");
+  const innerVar = `${clean}_inner`;
+  const codecVar = `${clean}_codec`;
+  const compVar = `${clean}_comp`;
+  const encodeTarget = fieldName.startsWith("*") ? `(${fieldName})` : fieldName;
+
+  const lines: string[] = [];
+  lines.push(`${indent}// Compressed region: encode inner type, compress, frame`);
+  lines.push(`${indent}${innerVar}, err := ${encodeTarget}.Encode()`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, err`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}${codecVar}, err := runtime.ResolveCodec("${codec}")`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, err`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}${compVar}, err := ${codecVar}.Compress(${innerVar})`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, err`);
+  lines.push(`${indent}}`);
+  lines.push(goWriteSizeStmt(sizeType, `len(${innerVar})`, runtimeEndianness, indent));
+  lines.push(goWriteSizeStmt(lengthType, `len(${compVar})`, runtimeEndianness, indent));
+  lines.push(`${indent}encoder.WriteBytes(${compVar})`);
+  return lines;
+}
+
+/**
+ * Generates decoding code for a compressed field. `fieldName` is the PascalCase
+ * struct field; `varName` the camelCase local base.
+ */
+function generateDecodeCompressed(field: Field, fieldName: string, varName: string, runtimeEndianness: string, indent: string): string[] {
+  const f = field as any;
+  const innerType = toGoTypeName(f.value_type);
+  const codec: string = f.codec;
+  const sizeType: string = f.size_type || "uint32";
+  const lengthType: string = f.length_type || "uint32";
+  const uSizeVar = `${varName}USize`;
+  const cLenVar = `${varName}CLen`;
+  const sliceVar = `${varName}Slice`;
+  const codecVar = `${varName}Codec`;
+  const decompVar = `${varName}Decomp`;
+  const decodedVar = `${varName}Decoded`;
+  const nm = field.name || fieldName;
+
+  const lines: string[] = [];
+  lines.push(`${indent}// Compressed region: read framing, decompress, decode inner type`);
+  lines.push(...goReadSizeStmts(sizeType, uSizeVar, runtimeEndianness, indent, nm));
+  lines.push(...goReadSizeStmts(lengthType, cLenVar, runtimeEndianness, indent, nm));
+  lines.push(`${indent}${sliceVar}, err := decoder.ReadBytesSlice(int(${cLenVar}))`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, fmt.Errorf("failed to read compressed bytes for ${nm}: %w", err)`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}${codecVar}, err := runtime.ResolveCodec("${codec}")`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, err`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}${decompVar}, err := ${codecVar}.Decompress(${sliceVar}, int(${uSizeVar}))`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, err`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}if len(${decompVar}) != int(${uSizeVar}) {`);
+  lines.push(`${indent}\treturn nil, runtime.NewErrorf(runtime.ErrorInvalidEncoding, "decompressed size mismatch for ${nm}: expected %d, got %d", ${uSizeVar}, len(${decompVar}))`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}${decodedVar}, err := Decode${innerType}(${decompVar})`);
+  lines.push(`${indent}if err != nil {`);
+  lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode compressed inner ${nm}: %w", err)`);
+  lines.push(`${indent}}`);
+  if (fieldName) {
+    lines.push(`${indent}result.${fieldName} = *${decodedVar}`);
+    lines.push(``);
+  }
+  return lines;
+}
+
+/**
  * Converts conditional expression to Go syntax
  * @param condition - The condition expression (e.g., "version >= 2")
  * @param prefix - The struct variable prefix (e.g., "m" for encoder, "result" for decoder)
@@ -4591,6 +4725,10 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
     case "back_reference":
       lines.push(...generateDecodeBackReference(field as any, fieldName, varName, endianness, runtimeEndianness, indent));
       return lines; // Early return - back reference handling includes assignment
+
+    case "compressed":
+      lines.push(...generateDecodeCompressed(field, fieldName, varName, runtimeEndianness, indent));
+      return lines; // Early return - compressed handling includes assignment
 
     default:
       // Check if this is a string type alias — inline decoding
@@ -5759,6 +5897,9 @@ function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: Binary
     case "discriminated_union":
       // Inline discriminated union - use interface{} to hold any variant
       return "interface{}";
+    case "compressed":
+      // Compressed region decodes to its inner type (framing is consumed).
+      return toGoTypeName((field as any).value_type);
     case "back_reference":
       // Back reference - use the target type
       const targetType = (field as any).target_type;

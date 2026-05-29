@@ -36,6 +36,12 @@ export const TestCaseSchema = z.object({
   // Example: [3, 5, 10] means first chunk 3 bytes, second chunk 5 bytes, etc.
   chunkSizes: z.array(z.number().int().min(1)).optional(),
 
+  // Optional: round-trip only (encode → decode == value), no byte assertion.
+  // Used for runtime-dependent encodings whose exact bytes aren't stable across
+  // implementations (e.g. a real `deflate` codec on a compressed region).
+  // Requires `value` only; `bytes`/`bits` are not needed.
+  round_trip_only: z.boolean().optional(),
+
   // Optional: expect this test to error during decode
   should_error: z.boolean().optional(),
 
@@ -50,6 +56,10 @@ export const TestCaseSchema = z.object({
     if (data.should_error_on_encode) {
       return data.value !== undefined;
     }
+    // Round-trip-only tests need value only (bytes are runtime-dependent)
+    if (data.round_trip_only) {
+      return data.value !== undefined;
+    }
     // Normal test cases need value AND (bytes or bits)
     if (!data.should_error) {
       return data.value !== undefined && (data.bytes !== undefined || data.bits !== undefined);
@@ -58,7 +68,7 @@ export const TestCaseSchema = z.object({
     return data.bytes !== undefined;
   },
   {
-    message: "Normal tests need value + (bytes or bits). Encoding error tests need value only. Decoding error tests need bytes only.",
+    message: "Normal tests need value + (bytes or bits). Encoding error tests need value only. Decoding error tests need bytes only. Round-trip-only tests need value only.",
   }
 ).refine(
   (data) => {

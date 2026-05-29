@@ -29,7 +29,7 @@ const BUILT_IN_TYPES = [
   "bit", "int", "bool", "uint8", "uint16", "uint32", "uint64",
   "int8", "int16", "int32", "int64", "varlength", "float32", "float64",
   "string", "array", "bytes", "optional", "bitfield", "discriminated_union", "back_reference", "choice",
-  "padding"
+  "padding", "compressed"
 ];
 
 /**
@@ -1581,6 +1581,36 @@ function validateField(
   // Check optional fields
   if (fieldType === "optional") {
     validateOptional(field as any, path, schema, errors);
+  }
+
+  // Check compressed fields
+  if (fieldType === "compressed") {
+    const f = field as any;
+    // codec must be a non-empty string
+    if (typeof f.codec !== "string" || f.codec.length === 0) {
+      errors.push({
+        path: `${path} (${field.name || "compressed"})`,
+        message: "compressed field requires a non-empty 'codec' name (built-in: 'store', 'deflate', 'gzip'; or a custom name resolved at runtime)",
+      });
+    }
+    // v1: value_type must be a named type reference (inline inner types are a follow-up)
+    if (typeof f.value_type !== "string") {
+      errors.push({
+        path: `${path} (${field.name || "compressed"})`,
+        message: "compressed value_type must be a named type reference (string) in v1",
+      });
+    } else if (f.value_type === "compressed") {
+      errors.push({
+        path: `${path} (${field.name || "compressed"})`,
+        message: "compressed value_type cannot be another 'compressed' (no nested compression)",
+      });
+    } else if (!BUILT_IN_TYPES.includes(f.value_type) && !schema.types[f.value_type]) {
+      errors.push({
+        path: `${path} (${field.name || "compressed"})`,
+        message: `compressed value_type '${f.value_type}' not found in schema.types`,
+      });
+    }
+    return; // compressed has no further generic-typeref checks
   }
 
   // Check type references exist

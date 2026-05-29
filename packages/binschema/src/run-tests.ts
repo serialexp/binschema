@@ -296,6 +296,11 @@ function setupRuntimeLibrary(): void {
   const streamSource = join(__dirname, 'runtime/stream-decoder.ts');
   const streamDest = join(genDir, 'stream-decoder.ts');
   copyFileSync(streamSource, streamDest);
+
+  // Copy codec runtime (used by `compressed` regions) + vendored fflate
+  copyFileSync(join(__dirname, 'runtime/codecs.ts'), join(genDir, 'codecs.ts'));
+  copyFileSync(join(__dirname, 'runtime/fflate.js'), join(genDir, 'fflate.js'));
+  copyFileSync(join(__dirname, 'runtime/fflate.d.ts'), join(genDir, 'fflate.d.ts'));
 }
 
 async function main() {
