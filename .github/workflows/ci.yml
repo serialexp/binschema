@@ -100,9 +100,40 @@ jobs:
       - name: Run Rust tests
         run: just test-rust
 
+  test-python:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: extractions/setup-just@v3
+
+      - run: pnpm install
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Generate test fixtures
+        run: pnpm test
+
+      - name: Run Python tests
+        run: just test-python
+
   deploy-website:
     runs-on: depot-ubuntu-24.04
-    needs: [test-typescript, test-go, test-rust]
+    needs: [test-typescript, test-go, test-rust, test-python]
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
@@ -143,7 +174,7 @@ jobs:
 
   release:
     runs-on: depot-ubuntu-24.04
-    needs: [test-typescript, test-go, test-rust]
+    needs: [test-typescript, test-go, test-rust, test-python]
     # Only run on main branch, skip if this is already a release commit
     if: github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'release:')
     steps:
