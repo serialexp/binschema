@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 (2026-06-01)
+
+### Documentation
+
+- add Python to landing page, playground, and docs
+- surface compressed regions across the docs site
+
 ## 0.6.0 (2026-05-15)
 
 ### Features
