@@ -1,1 +1,7 @@
+# Files copied in by prepublishOnly (build artifacts, not source)
 README.md
+llms.txt
+ts-runtime/
+go-runtime/
+rust-runtime/
+python-runtime/

@@ -250,7 +250,14 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       if (schemaUsesCompression(schema)) {
         runtimeFiles.push("codecs.ts", "fflate.js", "fflate.d.ts");
       }
-      const runtimeDir = resolve(process.cwd(), "src/runtime");
+      const runtimeDir = findTsRuntimeDir();
+      if (!runtimeDir) {
+        throw new Error(
+          "Could not find TypeScript runtime source files. " +
+          "If running from source, ensure the src/runtime/ directory exists; " +
+          "in a published package, ts-runtime/ should be present."
+        );
+      }
       for (const file of runtimeFiles) {
         const srcPath = join(runtimeDir, file);
         const destPath = join(absoluteOut, file);
@@ -305,6 +312,26 @@ function resolveTypeName(schema: BinarySchema): string | undefined {
   // concrete types, the generators monomorphize them at reference sites.
   const names = Object.keys(schema.types ?? {}).filter((n) => !/<T>$/.test(n));
   return names.length > 0 ? names.sort()[0] : undefined;
+}
+
+/**
+ * Find the TypeScript runtime source files. Searches:
+ * 1. ts-runtime/ next to the package root (published npm package)
+ * 2. src/runtime/ relative to package root (development in monorepo)
+ */
+function findTsRuntimeDir(): string | null {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = resolve(__dirname, "..", "..");
+
+  // Published package: ts-runtime/ in package root
+  const publishedPath = join(packageRoot, "ts-runtime");
+  if (existsSync(publishedPath)) return publishedPath;
+
+  // Development: source lives in src/runtime/
+  const devPath = join(packageRoot, "src", "runtime");
+  if (existsSync(devPath)) return devPath;
+
+  return null;
 }
 
 /**
