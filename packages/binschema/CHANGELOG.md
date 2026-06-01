@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 (2026-06-01)
+
+### Features
+
+- error codes + streaming decoder
+- add signed zigzag and SLEB128 variable-length encodings
+- add packed_count array kind (Thrift collection header)
+- add stateful field_id_delta computed kind
+- add general delta transform slot on arrays
+- add compressed-region wrapper type with pluggable codecs
+
+### Bug Fixes
+
+- rust optional<bytes> + From<Input> for Output; bundle pending runtime/codegen WIP
+- resolve ../ parent refs against incoming context (off-by-one)
+- ship the TS (and Python) runtime in the published package
+
+### Documentation
+
+- add Python to landing page, playground, and docs
+- surface compressed regions across the docs site
+
 ## 0.6.0 (2026-05-15)
 
 ### Features
