@@ -12,7 +12,10 @@ permissions:
 
 jobs:
   publish:
-    runs-on: depot-ubuntu-24.04
+    # Must be a GitHub-hosted runner: npm provenance (--provenance) rejects
+    # self-hosted runners (depot runners report as "self-hosted") with
+    # "Unsupported GitHub Actions runner environment". See npm error E422.
+    runs-on: ubuntu-latest
     if: startsWith(github.event.head_commit.message, 'release:')
     permissions:
       contents: write
