@@ -47,6 +47,9 @@ export type { RustGeneratorOptions, GeneratedRustCode } from './generators/rust.
 export { generatePython } from './generators/python.js';
 export type { PythonGeneratorOptions, GeneratedPythonCode } from './generators/python.js';
 
+export { generateZig } from './generators/zig/index.js';
+export type { ZigGeneratorOptions, GeneratedZigCode } from './generators/zig/index.js';
+
 // =============================================================================
 // Schema Types & Validation
 // =============================================================================

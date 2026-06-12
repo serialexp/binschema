@@ -71,6 +71,22 @@ test-python filter="" report="":
 test-python-debug filter="" report="":
     cd python && DEBUG_GENERATED=1 PYTHON_TEST_FILTER="{{filter}}" PYTHON_TEST_REPORT="{{report}}" uv run python test/run_tests.py
 
+# Run Zig tests with batched compilation
+# Examples:
+#   just test-zig
+#   just test-zig primitives
+#   just test-zig primitives summary
+test-zig filter="" report="":
+    ZIG_TEST_FILTER="{{filter}}" ZIG_TEST_REPORT="{{report}}" bun zig/test/run_tests.ts
+
+# Run Zig tests with debug output (keeps generated code in zig/tmp-zig-debug/)
+test-zig-debug filter="" report="":
+    DEBUG_GENERATED=tmp-zig-debug ZIG_TEST_FILTER="{{filter}}" ZIG_TEST_REPORT="{{report}}" bun zig/test/run_tests.ts
+
+# Run the Zig runtime's own unit tests (bitstream/context/codecs/errors)
+test-zig-runtime:
+    cd zig && zig test runtime/binschema.zig
+
 # ========== Website ==========
 
 # Regenerate website example code from the demo sensor schema
@@ -82,7 +98,7 @@ regen-website-examples:
     SCHEMA="$ROOT/website/src/examples/demo-sensor.schema.json"
     OUT_DIR="$ROOT/website/src/examples"
     CLI="$ROOT/packages/binschema/dist/cli/index.js"
-    mkdir -p "$ROOT/tmp/gen-ts" "$ROOT/tmp/gen-go" "$ROOT/tmp/gen-rust" "$ROOT/tmp/gen-python"
+    mkdir -p "$ROOT/tmp/gen-ts" "$ROOT/tmp/gen-go" "$ROOT/tmp/gen-rust" "$ROOT/tmp/gen-python" "$ROOT/tmp/gen-zig"
     # TypeScript generator needs to run from packages/binschema to find runtime files
     cd "$ROOT/packages/binschema"
     node "$CLI" generate --language ts --schema "$SCHEMA" --out "$ROOT/tmp/gen-ts"
@@ -90,10 +106,12 @@ regen-website-examples:
     node "$CLI" generate --language go --schema "$SCHEMA" --out "$ROOT/tmp/gen-go"
     node "$CLI" generate --language rust --schema "$SCHEMA" --out "$ROOT/tmp/gen-rust"
     node "$CLI" generate --language python --schema "$SCHEMA" --out "$ROOT/tmp/gen-python"
+    node "$CLI" generate --language zig --schema "$SCHEMA" --out "$ROOT/tmp/gen-zig"
     cp "$ROOT/tmp/gen-ts/generated.ts" "$OUT_DIR/demo-sensor.generated.ts"
     cp "$ROOT/tmp/gen-go/generated.go" "$OUT_DIR/demo-sensor.generated.go"
     cp "$ROOT/tmp/gen-rust/generated.rs" "$OUT_DIR/demo-sensor.generated.rs"
     cp "$ROOT/tmp/gen-python/generated.py" "$OUT_DIR/demo-sensor.generated.py"
+    cp "$ROOT/tmp/gen-zig/generated.zig" "$OUT_DIR/demo-sensor.generated.zig"
     echo "Regenerated website example code in $OUT_DIR"
 
 # Build website

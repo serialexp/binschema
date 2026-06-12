@@ -1,95 +1,56 @@
-# Python Generator: Remaining Work
+# Zig Generator — Phases 1 & 2 complete
+
+Adding Zig as a fifth code-gen target (after TS/Go/Rust/Python). Plan:
+`~/.claude/plans/piped-finding-jellyfish.md`. Bart's two hard directives:
+**(1)** build the two-pass + context-threading machinery FIRST (even before
+features use it — every prior generator got rewritten twice for skipping this);
+**(2)** SPLIT the generator into multiple files. Both satisfied. Template:
+Python generator structure + Go-style batched test harness.
 
 ## Status
-**730 / 785 tests passing** (55 failing). Up from 717 at start of last session, originally ~514 several sessions ago.
 
-Recent commits:
-- `845f7bc` length_of with target struct trial-encode, nested from_after_field recursion, hyphen names
-- `306ff0d` threaded parentFields through choice inliner, alias chain resolution → all kerberos pass
-- `0a2e458` (docs) CLAUDE.md rule: two-pass + context threading from day one for new generators
-- `6604661` inline DU length_of, sum_of_type_sizes, length_of first/last selectors
+- **Zig harness: 363 suites — 125 generated, 238 codegen-skipped (later phases), 0 errored. 346 cases emitted, 346 passed, 0 failed.** No partially-emitted suites (run `ZIG_TEST_REPORT=coverage`).
+- Runtime unit tests: 14/14 (`just test-zig-runtime`).
+- TS reference suite: 1187/1187 (spec unchanged; fixed a Phase-1 command-parser test that still asserted the old `<ts|go|rust|python>` language list).
 
-## What's left (55 failures)
+## Commands
 
-All remaining failures fall into one of five categories, all blocked on the **same missing infrastructure**: encode-time context threading + byte-offset tracking + back-patch via context lookup.
+- `just test-zig` / `just test-zig <filter>` / `just test-zig '' summary`
+- `ZIG_TEST_REPORT=coverage bun zig/test/run_tests.ts` — lists generated suites that emit fewer cases than they hold (value-construction gaps)
+- `DEBUG_GENERATED=tmp-zig-debug just test-zig <filter>` — keep generated `.zig`
+- `just test-zig-runtime` — runtime's own unit tests
 
-### Category 1: `position_of` with `first<T>` / `last<T>` selectors
-Tests: `context_first_selector`, `context_last_selector`, `first_element_position`, `last_element_position`, `length_of_first_selector` (already partially works — only the position_of half fails), `length_of_last_selector`, `crc32_of_first_selector`, `crc32_of_last_selector`.
+## Phase 1 (done): runtime + skeleton + wiring + harness
 
-**What's needed:** Parent encoder records `(byte_offset, item)` per array element while encoding. That info travels to the sibling struct's encoder so its `position_of` placeholder can be back-patched with `offsets[arr][first<T>]`.
+- `zig/runtime/`: `bitstream.zig` (two-pass encoder w/ `placeholderU*`/`patch*`; decoder w/ `readBytesSlice` zero-copy, `readUntilByte`, `hasMore`, seek/push/pop), `context.zig` (`EncodeContext`: parents/positions/iterations/deferred_patches), `errors.zig` (cross-lang `ErrorCode`), `codecs.zig`, `binschema.zig` (root re-export).
+- `packages/binschema/src/generators/zig/` — 8 files: `index.ts` (entry + per-type dispatch), `naming.ts`, `types.ts`, `context.ts` (centralized ctx/root threading — no emitter can forget it), `encode.ts`, `decode.ts`, `computed.ts` (stubs), `compression.ts` (stubs).
+- CLI (`--language zig`), `index.ts` export, justfile recipes, package.json bundling, `json5-load.ts`.
+- Batched harness `zig/test/run_tests.ts`: one `gen_<i>.zig` per suite imported under alias `s<i>`; file-imports resolve the root module's `binschema` dep, so NO type-name prefixing needed (unlike Go/Rust).
 
-### Category 2: `corresponding<T>` correlations
-Tests: `corresponding_correlation`, `empty_array_correlation`, `context_corresponding_single_array`, `context_multiple_variants_corresponding`, `context_inner_references_outer_array`, `context_sibling_array_cross_reference`, `zip_style_correlation`.
+## Phase 2 (done): primitives, structs, strings, byte-aligned arrays
 
-**What's needed:** Same-array type-occurrence index tracked at encode time (`typeIndices[T]++` as each T encodes). When a computed field hits `arr[corresponding<T>]`, look up the Nth T (where N is the current iteration's occurrence count). See TS `computed-fields.ts:835-925` for the full algorithm — it distinguishes same-array (use type occurrence) vs cross-array (use index).
+Generator now handles (with full ctx/root threading everywhere):
+- **Nested struct type refs**: `try value.encodeInto(enc, ctx)` / `Field.decodeWith(allocator, dec, root)`.
+- **Strings** (`[]const u8`, decoded zero-copy as sub-slices of input): kinds fixed (trailing-null trim on decode), length_prefixed (uint8/16/32/64), null_terminated, field_referenced. Encodings ascii + utf8 only. utf16/latin1 → ZigNotImplemented.
+- **Bytes** (`[]const u8`): fixed / length_prefixed / field_referenced.
+- **Byte-aligned arrays** (`[]const T`, heap-allocated on decode via threaded allocator): fixed / length_prefixed / field_referenced / eof_terminated. Items: primitives, nested structs, strings.
+- **Top-level string/bytes/array alias types**: emitted as free `encode<Name>`/`decode<Name>` (+ `*Into`/`*With`) functions so they work as standalone entry points (e.g. a DNS `Label`). Harness uses this path when `test_type` isn't a struct.
 
-### Category 3: Multi-level / cross-array parent references
-Tests: `nested_parent_references`, `parent_reference_position`, `parent_reference_crc32`, `context_deep_nesting_cross_reference`, `context_multi_level_parent_reference`, `context_extension_array`, `context_extension_chaining`, `context_extension_parent_stack_across_arrays`, `context_extension_sibling_arrays`, `conditional_nested_parent` (1 case).
+Key design decisions:
+- Slice fields declared `[]const T` so const value-literals (`&[_]T{...}`) coerce and decode's `alloc` (`[]T`) coerces on assign.
+- Decode uses an **arena** in the harness so array allocations are freed wholesale; strings/bytes are zero-copy (borrow input), no deinit needed.
+- `discardsFor()` emits `_ = param;` only for threaded params a given body doesn't reference — avoids both unused-param and pointless-discard errors as the feature mix varies.
 
-**What's needed:** `_parent_value` only goes one level. `../../foo` needs a `parents: list[dict]` stack threaded through every nested encode call so the child can walk arbitrarily far up.
+Cleanly deferred via `ZigNotImplemented` (so harness records honest per-suite gaps, never miscomputes): array `transform` (delta), computed fields, `from_after_field`, `position_of`, selectors, `../` parent refs, discriminated_union/choice/optional/bitfield/enum, `instances` (random access), varlength length-prefixes, back_reference/compression, utf16/latin1.
 
-### Category 4: Aggregate / sum computed fields at encode time
-Tests: `aggregate_size_with_position`, `array_element_type_size`, `sum_of_field_sizes`, `zip_style_aggregate_size`, `context_sum_of_type_sizes_zip_style`.
+## Next: Phase 3 — computed fields + from_after_field + selectors
 
-**What's needed:** Some of these are variants of sum_of_type_sizes that need offset awareness (e.g. `aggregate_size_with_position` writes the position of where the aggregate starts). Others are sum_of_field_sizes against sibling arrays — works similarly to sum_of_type_sizes but the current impl doesn't traverse the parent ref correctly.
+Per CLAUDE.md, the FIRST Phase-3 feature suite must include ≥1 `from_after_field`, ≥1 `position_of` to a later field, and ≥1 `../` parent ref — if those three don't pass early, the architecture is wrong. The runtime placeholder/patch + EncodeContext machinery for this already exists (built in Phase 1); Phase 3 wires the generator to use it.
 
-### Category 5: Real protocols (DNS / ZIP / PCF)
-Tests: `dns_compression_pointer`, `dns_compression_in_answers`, `dns_compression_mixed`, `dns_compression_edge_cases`, `minimal_zip_single_file`, `multi_file_zip`, `multi_file_utf8_filenames`, `pcf_full`.
+## Uncommitted tree note
 
-**What's needed:** DNS uses `back_reference` (forward pointers to earlier-encoded labels). ZIP uses `position_of` to later fields (central directory headers reference the local-header positions). PCF has all of: position_of, sum_of_type_sizes against sibling array, deeply nested parent refs. These are integration tests — they pass when all of categories 1-4 work.
-
-## Proposed infrastructure (the actual retrofit)
-
-This is the work CLAUDE.md now mandates for any **new** generator, but Python was written without it and needs the retrofit. The TS reference (`packages/binschema/src/generators/typescript/`) already does all of this — copy the structure.
-
-### 1. Encoder signature change
-```python
-def encode(self, value, _parent_value=None, _ctx=None) -> bytes:
-    if _ctx is None:
-        _ctx = {
-            "parents": [],
-            "array_offsets": {},     # {arrname: [(offset, item), ...]}
-            "array_iterations": {},  # {arrname: {"index": int, "typeIndices": {T: int}}}
-        }
-    _ctx["parents"].append(value)
-    try:
-        # ... existing encode body ...
-    finally:
-        _ctx["parents"].pop()
-```
-
-All nested encoder invocations (DU sub-encoder, choice sub-encoder, type-ref sub-encoder, array item encoder, `sum_of_type_sizes` trial encoders) must pass `_ctx` through.
-
-### 2. Array iteration tracking
-In every array encode loop, before encoding each item:
-```python
-_ctx["array_offsets"]["<arrname>"].append((encoder.byte_offset, _item))
-_ctx["array_iterations"]["<arrname>"]["index"] = i
-_ctx["array_iterations"]["<arrname>"]["typeIndices"].setdefault(_item.get("type"), 0)
-_ctx["array_iterations"]["<arrname>"]["typeIndices"][_item["type"]] += 1
-```
-
-Only emit this tracking code for arrays that are actually targets of `position_of`/`corresponding<>`/`first<>`/`last<>` in any computed field in the schema (otherwise it's noise). Use `detectFirstLastTracking`/`detectCorrespondingTracking` ports of the TS helpers in `typescript/computed-fields.ts:480-534`.
-
-### 3. position_of back-patch via context lookup
-Currently `generateStructCode` does back-patching for `position_of target=fieldname` (same-struct). Extend the back-patch logic to handle:
-- `target = "../arr[first<T>]"` → look up `_ctx["array_offsets"]["arr"]`, find first item with `type == T`, write its offset
-- `target = "../arr[last<T>]"` → ditto, reverse iteration
-- `target = "../arr[corresponding<T>]"` → use current array iteration state to look up the corresponding peer
-
-### 4. crc32_of with selectors
-Same lookup as position_of selector to find the item, then trial-encode it (or look up its bytes via offset range in the buffer) and CRC32.
-
-### 5. Multi-level parent refs
-Replace single-level `_parent_value["foo"]` resolution with walking `_ctx["parents"]` from the back:
-- `../foo` → `_ctx["parents"][-2]["foo"]`
-- `../../foo` → `_ctx["parents"][-3]["foo"]`
-- Or scan from innermost outward to find the closest parent that has `foo`.
-
-## Why not in this session
-Each piece is straightforward in isolation, but the retrofit touches every encoder/decoder generator path: DU encode, choice encode/inline, type-ref encode, array item encode, optional encode, computed field handlers, struct encode entry, and every nested invocation site. Estimating ~3-5h of careful work plus verification across the full test suite. Better done as a focused PR than crammed into a tail-end session where context budget is constrained.
-
-## Next steps
-1. Implement the ctx threading retrofit (categories 1-3) — biggest unlock, ~30-40 of the 55 remaining failures.
-2. Implement back_reference for DNS compression (category 5, ~6 failures).
-3. Re-evaluate remaining failures — likely a small set of bespoke cases.
+Phases 1 & 2 are all uncommitted. The tree ALSO contains changes I did not make
+(`examples/parquet.schema.json`, `website/public/examples/parquet.schema.json`,
+`TODO.md`, `bun.lock`, `website/public/docs/README.md`, deleted
+`NEXT_TASK_RUST_INTO_OUTPUT.md`) — left untouched, awaiting Bart's direction on
+how to stage/commit.

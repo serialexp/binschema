@@ -1,0 +1,4 @@
+.zig-cache/
+zig-out/
+test/tmp-zig/
+tmp-zig-debug/

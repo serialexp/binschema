@@ -24,11 +24,12 @@
     "ts-runtime",
     "go-runtime",
     "rust-runtime",
-    "python-runtime"
+    "python-runtime",
+    "zig-runtime"
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "cp ../../README.md . && cp ../../llms.txt . && rm -rf ts-runtime && mkdir -p ts-runtime && cp -r src/runtime/. ts-runtime/ && mkdir -p go-runtime && cp ../../go/runtime/*.go go-runtime/ && mkdir -p rust-runtime && cp ../../rust/src/lib.rs ../../rust/src/bitstream.rs ../../rust/src/context.rs ../../rust/src/codecs.rs rust-runtime/ && mkdir -p python-runtime && cp ../../python/runtime/*.py python-runtime/",
+    "prepublishOnly": "cp ../../README.md . && cp ../../llms.txt . && rm -rf ts-runtime && mkdir -p ts-runtime && cp -r src/runtime/. ts-runtime/ && mkdir -p go-runtime && cp ../../go/runtime/*.go go-runtime/ && mkdir -p rust-runtime && cp ../../rust/src/lib.rs ../../rust/src/bitstream.rs ../../rust/src/context.rs ../../rust/src/codecs.rs rust-runtime/ && mkdir -p python-runtime && cp ../../python/runtime/*.py python-runtime/ && mkdir -p zig-runtime && cp ../../zig/runtime/*.zig zig-runtime/",
     "test": "bun run src/run-tests.ts",
     "test:filter": "bun run src/run-tests.ts --filter",
     "watch": "tsc --watch",

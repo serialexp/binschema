@@ -295,6 +295,19 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
       console.log(`Generated Python sources → ${join(absoluteOut, "generated.py")}`);
       break;
     }
+    case "zig": {
+      const typeName = resolveTypeName(schema);
+      if (!typeName) {
+        throw new Error("Schema does not define any types; cannot generate Zig code.");
+      }
+      await runZigGenerator({
+        schema,
+        typeName,
+        outputDir: absoluteOut,
+      });
+      console.log(`Generated Zig sources → ${join(absoluteOut, "generated.zig")}`);
+      break;
+    }
     default:
       console.error(`Unsupported language: ${command.language}`);
       process.exitCode = 1;
@@ -570,6 +583,56 @@ async function runPythonGenerator(opts: { schema: BinarySchema; typeName: string
   writeFileSync(outputPath, result.code);
 
   console.log(`Copied Python runtime files → ${runtimeDestDir}/`);
+}
+
+/**
+ * Find the Zig runtime source files. Searches:
+ * 1. zig-runtime/ next to the package root (published npm package)
+ * 2. ../../zig/runtime/ relative to package root (development in monorepo)
+ */
+function findZigRuntimeDir(): string | null {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = resolve(__dirname, "..", "..");
+
+  const publishedPath = join(packageRoot, "zig-runtime");
+  if (existsSync(publishedPath)) return publishedPath;
+
+  const devPath = resolve(packageRoot, "..", "..", "zig", "runtime");
+  if (existsSync(devPath)) return devPath;
+
+  return null;
+}
+
+async function runZigGenerator(opts: { schema: BinarySchema; typeName: string; outputDir: string }): Promise<void> {
+  mkdirSync(opts.outputDir, { recursive: true });
+
+  // Copy runtime files to outputDir/binschema/ — the generated code imports the
+  // "binschema" module (root file binschema.zig); the consumer's build.zig wires
+  // that module to <out>/binschema/binschema.zig.
+  const runtimeSrcDir = findZigRuntimeDir();
+  if (!runtimeSrcDir) {
+    throw new Error(
+      "Could not find Zig runtime source files. " +
+      "If running from source, ensure the zig/runtime/ directory exists."
+    );
+  }
+
+  const runtimeDestDir = join(opts.outputDir, "binschema");
+  mkdirSync(runtimeDestDir, { recursive: true });
+
+  const runtimeFiles = readdirSync(runtimeSrcDir).filter(f => f.endsWith(".zig"));
+  for (const file of runtimeFiles) {
+    const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
+    writeFileSync(join(runtimeDestDir, file), content, "utf-8");
+  }
+
+  const { generateZig } = await import("../generators/zig/index.js");
+  const result = generateZig(opts.schema, opts.typeName);
+
+  const outputPath = join(opts.outputDir, "generated.zig");
+  writeFileSync(outputPath, result.code);
+
+  console.log(`Copied Zig runtime files → ${runtimeDestDir}/`);
 }
 
 function execCommand(cmd: string, args: string[], options: { cwd: string }): Promise<void> {
