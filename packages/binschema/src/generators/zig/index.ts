@@ -22,9 +22,10 @@ import {
   decodeArgs,
 } from "./context.js";
 import { resetVarCounter, zigFieldName, zigTypeName } from "./naming.js";
-import { zigBitOrder, zigDeclaredType } from "./types.js";
+import { zigBitOrder, zigDeclaredType, zigPrimitiveType } from "./types.js";
 import { generateFieldEncode, emitEncodeValue, ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { generateFieldDecode, emitDecodeValue } from "./decode.js";
+import { computedTargets, emitComputedBackpatch, fieldOffVar, fieldEndVar } from "./computed.js";
 
 export interface GeneratedZigCode {
   code: string;
@@ -109,10 +110,13 @@ function generateStructCode(
   const lines: string[] = [];
   lines.push(`pub const ${typeNameZ} = struct {`);
 
-  // Field declarations.
+  // Field declarations. Computed and const fields are omitted by callers (the
+  // value is supplied by the wire / computed on encode), so they get a default
+  // so the struct can be constructed without them.
   for (const field of fields) {
     const ftype = structFieldType(field, schema);
-    lines.push(`    ${zigFieldName(field.name)}: ${ftype},`);
+    const def = fieldDefault(field);
+    lines.push(`    ${zigFieldName(field.name)}: ${ftype}${def},`);
   }
   lines.push(``);
 
@@ -132,10 +136,19 @@ function generateStructCode(
   // particular struct's body doesn't reference, so the generated Zig compiles
   // without "unused parameter" errors regardless of feature mix.
   lines.push(`    pub fn encodeInto(self: ${typeNameZ}, ${encodeParams()}) ${ERR}!void {`);
+  const { posTargets, crcTargets } = computedTargets(fields);
   const encBody: string[] = [];
   for (const field of fields) {
+    const tracked = field.name && (posTargets.has(field.name) || crcTargets.has(field.name));
+    if (tracked) {
+      encBody.push(`        const ${fieldOffVar(field.name)} = ${ENC}.byteOffset();`);
+    }
     encBody.push(...generateFieldEncode(field, emit));
+    if (field.name && crcTargets.has(field.name)) {
+      encBody.push(`        const ${fieldEndVar(field.name)} = ${ENC}.byteOffset();`);
+    }
   }
+  encBody.push(...emitComputedBackpatch(fields, emit, "        "));
   lines.push(...discardsFor(encBody, [["self", "self"], [CTX, CTX]]));
   lines.push(...encBody);
   lines.push(`    }`);
@@ -181,6 +194,23 @@ function discardsFor(body: string[], params: [string, string][], indent = "     
 /** Declared Zig type for a struct field. */
 function structFieldType(field: any, schema: BinarySchema): string {
   return zigDeclaredType(field, schema);
+}
+
+/**
+ * Default initializer (`= ...`) for a struct field declaration, or "" for none.
+ * Computed and const fields are not provided by callers (they come from the wire
+ * / are computed on encode), so they need a default so the Zig struct can be
+ * built without them.
+ */
+function fieldDefault(field: any): string {
+  if (!field.computed && field.const === undefined) return "";
+  if (field.type === "bool") return " = false";
+  const prim = zigPrimitiveType(field);
+  if (prim === null) {
+    throw new ZigNotImplemented(`default for computed/const non-primitive field '${field.name}'`);
+  }
+  // Integer / float / bit storage: 0 is a safe placeholder (always overwritten).
+  return " = 0";
 }
 
 /**

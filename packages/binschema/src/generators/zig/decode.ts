@@ -24,8 +24,8 @@ export function generateFieldDecode(
   indent = "        ",
 ): string[] {
   if (field.conditional || field.if) throw new ZigNotImplemented("conditional fields");
-  if (field.computed) throw new ZigNotImplemented("computed fields");
-  if (field.const !== undefined) throw new ZigNotImplemented("const fields");
+  // Computed and const fields are present on the wire (they were written during
+  // encode), so they decode exactly like their declared primitive type.
   const fname = zigFieldName(field.name);
   return emitDecodeValue(field, ctx, `${target}.${fname}`, target, indent);
 }
@@ -266,12 +266,19 @@ function emitLengthPrefixDecode(prefixType: string, varName: string, ctx: EmitCt
   }
 }
 
-/** Reference to a sibling field already decoded into the struct result var. */
+/**
+ * Reference to a field already decoded into the struct result var. Plain names
+ * (`len`) and dotted sibling-nested paths (`header.uncompressed_length`,
+ * `middle.deep_header.payload_length`) resolve against the local struct value.
+ * Cross-struct `../parent` and `_root.` refs need parent/root threading and are
+ * handled in a later Phase-3 layer.
+ */
 function siblingRef(fieldRef: string, structVar: string): string {
-  if (fieldRef.includes("../") || fieldRef.includes(".")) {
-    throw new ZigNotImplemented(`parent/nested field reference '${fieldRef}' (Phase 3)`);
+  if (fieldRef.startsWith("../") || fieldRef.startsWith("_root")) {
+    throw new ZigNotImplemented(`parent/root field reference '${fieldRef}' (cross-struct)`);
   }
-  return `${structVar}.${zigFieldName(fieldRef)}`;
+  const segs = fieldRef.split(".").map((s) => zigFieldName(s));
+  return `${structVar}.${segs.join(".")}`;
 }
 
 function cap(t: string): string {

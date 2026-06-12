@@ -443,6 +443,24 @@ function report(results: SuiteResult[], output: string, exitCode: number) {
     return;
   }
 
+  if (REPORT === "skips") {
+    // Bucket codegen-skipped suites by their ZigNotImplemented reason so the
+    // remaining feature gaps are visible at a glance during phased work.
+    const buckets = new Map<string, string[]>();
+    for (const r of skipped) {
+      const m = /Zig generator: (.*?) not implemented/.exec(r.reason ?? "");
+      const key = (m ? m[1] : (r.reason ?? "")).replace(/'[^']*'/g, "'X'");
+      (buckets.get(key) ?? buckets.set(key, []).get(key)!).push(r.name);
+    }
+    console.log(`\n--- Codegen-skipped suites by reason (${skipped.length} total) ---`);
+    for (const [key, names] of [...buckets.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      console.log(`  [${names.length}] ${key}`);
+      for (const n of names.slice(0, 4)) console.log(`        ${n}`);
+      if (names.length > 4) console.log(`        … +${names.length - 4} more`);
+    }
+    return;
+  }
+
   if (REPORT === "summary") return;
 
   if (!compiled && exitCode !== 0) {

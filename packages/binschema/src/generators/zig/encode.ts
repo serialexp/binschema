@@ -9,6 +9,7 @@ import {
   resolveAlias,
   classifyTypeDef,
 } from "./types.js";
+import { emitComputedEncode } from "./computed.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -32,11 +33,24 @@ export interface EmitCtx {
  */
 export function generateFieldEncode(field: any, ctx: EmitCtx, indent = "        "): string[] {
   if (field.conditional || field.if) throw new ZigNotImplemented("conditional fields");
-  if (field.computed) throw new ZigNotImplemented("computed fields");
-  if (field.const !== undefined) throw new ZigNotImplemented("const fields");
+  if (field.computed) return emitComputedEncode(field, ctx, indent);
+  if (field.const !== undefined) return emitConstEncode(field, ctx, indent);
   const fname = zigFieldName(field.name);
   const value = `${ctx.selfPath}.${fname}`;
   return emitEncodeValue(field, value, ctx, indent);
+}
+
+/**
+ * A `const` field is not supplied by the caller — its fixed value is written on
+ * encode and read (into the struct field) on decode. Phase 3 supports const on
+ * primitive scalar fields, which covers tag/magic bytes.
+ */
+function emitConstEncode(field: any, ctx: EmitCtx, indent: string): string[] {
+  const prim = zigPrimitiveType(field);
+  if (prim === null) throw new ZigNotImplemented(`const non-primitive field '${field.name}'`);
+  const e = zigEndianness(field.endianness, ctx.endianness);
+  const lit = field.type === "bool" ? (field.const ? "true" : "false") : String(field.const);
+  return emitPrimitiveEncode(field, lit, e, indent);
 }
 
 /**
