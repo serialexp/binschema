@@ -228,7 +228,9 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
     case "fixed":
     case "field_referenced":
     case "eof_terminated":
-      // No length prefix on the wire — count is fixed / external / implicit.
+    case "computed_count":
+      // No length prefix on the wire — count is fixed / external / implicit /
+      // recomputed on decode from an expression.
       break;
     case "length_prefixed":
       lines.push(...emitLengthPrefixEncode(field.length_type || "uint8", `${value}.len`, ctx, indent));

@@ -237,6 +237,8 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     countExpr = `@as(usize, ${lenVar})`;
   } else if (kind === "field_referenced" && (field.length_field || field.count_field)) {
     countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar)}))`;
+  } else if (kind === "computed_count" && field.count_expr) {
+    countExpr = translateCountExpr(field.count_expr, structVar);
   } else {
     throw new ZigNotImplemented(`array kind '${kind}'`);
   }
@@ -277,6 +279,27 @@ function emitLengthPrefixDecode(prefixType: string, varName: string, ctx: EmitCt
  * Cross-struct `../parent` and `_root.` refs need parent/root threading and are
  * handled in a later Phase-3 layer.
  */
+/**
+ * Translate a `computed_count` arithmetic expression (e.g. `max - min + 1` or
+ * `(max_byte2 - min_byte2 + 1) * (max_byte1 - min_byte1 + 1)`) into a Zig usize
+ * expression. Bare identifiers resolve to already-decoded sibling fields; each
+ * is widened to `usize` so intermediate products don't overflow the field's
+ * narrow storage type. Operators, numbers and parentheses pass through (Zig
+ * shares C's +/-/* precedence). The schema guarantees non-negative results.
+ */
+function translateCountExpr(expr: string, structVar: string): string {
+  // Reject anything beyond arithmetic on identifiers/numbers so we never emit
+  // an unintended construct.
+  if (!/^[A-Za-z0-9_+\-*/%()\s]+$/.test(expr)) {
+    throw new ZigNotImplemented(`computed_count expression '${expr}' (unsupported syntax)`);
+  }
+  const translated = expr.replace(
+    /[A-Za-z_][A-Za-z0-9_]*/g,
+    (id) => `@as(usize, @intCast(${structVar}.${zigFieldName(id)}))`,
+  );
+  return `@as(usize, ${translated})`;
+}
+
 function siblingRef(fieldRef: string, structVar: string): string {
   if (fieldRef.startsWith("../") || fieldRef.startsWith("_root")) {
     throw new ZigNotImplemented(`parent/root field reference '${fieldRef}' (cross-struct)`);
