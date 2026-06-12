@@ -71,9 +71,116 @@ export function isParentRef(target: string | undefined): boolean {
   return !!target && (target.startsWith("../") || target.startsWith("_root"));
 }
 
-/** Does this target use a first/last/corresponding selector (Phase 3d)? */
+/** Does this target use a first/last/corresponding selector (Phase 3e)? */
 export function isSelector(target: string | undefined): boolean {
   return !!target && (target.includes("[first<") || target.includes("[last<") || target.includes("[corresponding<"));
+}
+
+export interface SelectorTarget {
+  /** Bare array field name the selector indexes into (e.g. "chunks"). */
+  arrayName: string;
+  /** Type filter inside the angle brackets (e.g. "DataChunk"). */
+  filterType: string;
+  selector: "first" | "last" | "corresponding";
+  /** Dotted sub-path after the selector, if any (e.g. "payload"); "" when none. */
+  subPath: string;
+}
+
+/**
+ * Parse a `first<T>` / `last<T>` / `corresponding<T>` selector target. Mirrors
+ * the reference parsers (parseFirstLastTarget / parseCorrespondingTarget in
+ * src/generators/typescript/computed-fields.ts). Any number of leading `../`
+ * segments are stripped — selector resolution is keyed on the bare array name in
+ * the global position map, not on frame depth. Returns null for non-selectors.
+ */
+export function parseSelectorTarget(target: string | undefined): SelectorTarget | null {
+  if (!target) return null;
+  const m = target.match(/(?:\.\.\/)*([^[]+)\[(first|last|corresponding)<(\w+)>\](?:\.(.+))?$/);
+  if (!m) return null;
+  return {
+    arrayName: m[1],
+    selector: m[2] as "first" | "last" | "corresponding",
+    filterType: m[3],
+    subPath: m[4] ?? "",
+  };
+}
+
+/** Does any computed target in the schema use a first/last/corresponding selector? */
+export function schemaHasSelectors(schema: any): boolean {
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any).sequence;
+    if (!Array.isArray(seq)) continue;
+    for (const f of seq) {
+      if (isSelector(f?.computed?.target)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Does the array field named `arrayName` need per-element position tracking,
+ * because some computed field selects into it with first/last/corresponding?
+ * (Reference equivalent: detectFirstLastTracking / detectCorrespondingTracking.)
+ */
+export function arrayNeedsSelectorTracking(arrayName: string | undefined, schema: any): boolean {
+  if (!arrayName) return false;
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any).sequence;
+    if (!Array.isArray(seq)) continue;
+    for (const f of seq) {
+      const sel = parseSelectorTarget(f?.computed?.target);
+      if (sel && sel.arrayName === arrayName) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The struct type name to record for each element of a homogeneous selector
+ * array (so `first<T>` can filter by it). Returns null when the items aren't a
+ * named struct type (e.g. a `choice` array — handled by Phase 4 — or a primitive
+ * array, which no selector targets).
+ */
+export function selectorItemTypeName(field: any, schema: any): string | null {
+  const items = field.items;
+  const itemTypeName = typeof items === "string" ? items : items?.type;
+  if (!itemTypeName || typeof itemTypeName !== "string") return null;
+  if (zigPrimitiveType({ type: itemTypeName }) !== null) return null;
+  const resolved = resolveAlias(schema, itemTypeName);
+  if (classifyTypeDef(resolved) !== "struct") return null;
+  return itemTypeName;
+}
+
+/**
+ * Emit the per-element position recording for a selector-target array. Wraps the
+ * caller's item-encode lines: capture each element's absolute start offset and
+ * record it (with the element's struct type name) before the element is encoded,
+ * then mark the array done so first/last selectors can resolve. `itemEncodeLines`
+ * are the already-generated encode statements for one element.
+ */
+export function emitSelectorArrayRecording(
+  arrayName: string,
+  typeName: string | null,
+  value: string,
+  itemVar: string,
+  itemEncodeLines: string[],
+  indent: string,
+): string[] {
+  const typeArg = typeName === null ? "null" : `"${typeName}"`;
+  const offVar = `${itemVar}_seloff`;
+  const markVar = `${itemVar}_selmark`;
+  const lines: string[] = [];
+  lines.push(`${indent}for (${value}) |${itemVar}| {`);
+  lines.push(`${indent}    const ${offVar} = ${ENC}.byteOffset();`);
+  // Mark the frame history before the element encodes so we can capture the
+  // element's own top frame afterwards (it records its sub-field ranges/lengths,
+  // which length_of/crc32_of selectors over `[sel].subfield` read back).
+  lines.push(`${indent}    const ${markVar} = ${CTX}.frameMark();`);
+  lines.push(...itemEncodeLines);
+  lines.push(`${indent}    try ${CTX}.recordPosition("${arrayName}", ${typeArg}, ${offVar}, ${CTX}.frameAt(${markVar}));`);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}try ${CTX}.markArrayDone("${arrayName}");`);
+  return lines;
 }
 
 /** Local var holding a position/crc placeholder handle for field `name`. */
@@ -195,8 +302,19 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       throw new ZigNotImplemented("length_of from_after_field (Phase 3c)");
     }
     if (!target) throw new ZigNotImplemented(`${t} without target`);
-    if (isSelector(target)) {
-      throw new ZigNotImplemented(`${t} target '${target}' (selector, Phase 3d)`);
+    const sel = parseSelectorTarget(target);
+    if (sel) {
+      // `length_of arr[first<T>|…].subfield`: the selected element's logical
+      // sub-field length isn't known here (the element encodes later), so reserve
+      // a slot now and defer a selector_length patch. The resolver reads the
+      // chosen element's frame (`subfield.length`) once the tree is encoded.
+      if (!sel.subPath) {
+        throw new ZigNotImplemented(`${t} selector without a sub-field (element byte size — sum_of_type_sizes, Phase 4)`);
+      }
+      if (sel.subPath.includes(".")) {
+        throw new ZigNotImplemented(`${t} selector nested sub-path '.${sel.subPath}'`);
+      }
+      return emitSelectorFramePatch(field, intType, sel, e, "selector_length", indent);
     }
     const parent = parsePlainParentRef(target);
     if (parent) {
@@ -224,8 +342,19 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       // once the whole tree is encoded and the parent has recorded the range.
       return emitParentDeferredPatch(field, intType, parent, e, "parent_position", indent, computed.alignment || 1);
     }
-    if (isSelector(target) || isParentRef(target)) {
-      throw new ZigNotImplemented(`position_of target '${target}' (selector/dotted parent ref, later phase)`);
+    const sel = parseSelectorTarget(target);
+    if (sel) {
+      // `position_of arr[first<T>|last<T>|corresponding<T>]`: reserve a slot now
+      // and defer a selector_position patch. The parent records each element's
+      // offset+type during the array encode (emitSelectorArrayRecording); the
+      // resolver picks the matching element once the whole tree is encoded.
+      if (sel.subPath) {
+        throw new ZigNotImplemented(`position_of selector with sub-path '.${sel.subPath}' (only the element offset is a position)`);
+      }
+      return emitSelectorPositionPatch(field, intType, sel, e, indent, computed.alignment || 1);
+    }
+    if (isParentRef(target)) {
+      throw new ZigNotImplemented(`position_of target '${target}' (dotted/_root parent ref, later phase)`);
     }
     // Same-struct: reserve a slot now; the back-patch fills in the target's
     // start offset once it has been encoded.
@@ -237,8 +366,21 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
     if (parent) {
       return emitParentDeferredPatch(field, intType, parent, e, "parent_crc32", indent, 1);
     }
-    if (isSelector(target) || isParentRef(target)) {
-      throw new ZigNotImplemented(`crc32_of target '${target}' (selector/dotted parent ref, later phase)`);
+    const sel = parseSelectorTarget(target);
+    if (sel) {
+      // `crc32_of arr[first<T>|…].subfield`: defer a selector_crc32 patch that
+      // CRCs the chosen element's sub-field encoded byte range (read from its
+      // frame) once the whole tree is encoded.
+      if (!sel.subPath) {
+        throw new ZigNotImplemented(`crc32_of selector without a sub-field (element byte range — Phase 4)`);
+      }
+      if (sel.subPath.includes(".")) {
+        throw new ZigNotImplemented(`crc32_of selector nested sub-path '.${sel.subPath}'`);
+      }
+      return emitSelectorFramePatch(field, intType, sel, e, "selector_crc32", indent);
+    }
+    if (isParentRef(target)) {
+      throw new ZigNotImplemented(`crc32_of target '${target}' (dotted/_root parent ref, later phase)`);
     }
     return [`${indent}const ${placeholderVar(field.name)} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`];
   }
@@ -281,6 +423,58 @@ function emitParentDeferredPatch(
     );
   }
   return lines;
+}
+
+/**
+ * Emit a placeholder + a deferred `selector_position` patch for
+ * `position_of arr[first<T>|last<T>|corresponding<T>]`. The resolver matches the
+ * recorded element positions (see emitSelectorArrayRecording) by `filter_type`
+ * and `selector`, returning 0xFFFFFFFF when nothing matches (e.g. empty array).
+ */
+function emitSelectorPositionPatch(
+  field: any,
+  intType: string,
+  sel: SelectorTarget,
+  e: string,
+  indent: string,
+  alignment: number,
+): string[] {
+  const ph = placeholderVar(field.name);
+  const width = PATCH_WIDTH[intType];
+  return [
+    `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+    `${indent}try ${CTX}.addDeferredPatch(.{ .selector_position = .{ ` +
+      `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
+      `.array_name = "${sel.arrayName}", .selector = .${sel.selector}, ` +
+      `.filter_type = "${sel.filterType}", .alignment = ${alignment} } });`,
+  ];
+}
+
+/**
+ * Emit a placeholder + a deferred `selector_length` / `selector_crc32` patch for
+ * `length_of`/`crc32_of arr[first<T>|last<T>|corresponding<T>].subfield`. The
+ * resolver finds the matching element (see emitSelectorArrayRecording — each
+ * element records its top frame), then reads the named sub-field from that
+ * frame: its logical length (selector_length) or its encoded byte range, CRC'd
+ * (selector_crc32). Both stay deferred until the whole tree is encoded.
+ */
+function emitSelectorFramePatch(
+  field: any,
+  intType: string,
+  sel: SelectorTarget,
+  e: string,
+  op: "selector_length" | "selector_crc32",
+  indent: string,
+): string[] {
+  const ph = placeholderVar(field.name);
+  const width = PATCH_WIDTH[intType];
+  return [
+    `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+    `${indent}try ${CTX}.addDeferredPatch(.{ .${op} = .{ ` +
+      `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
+      `.array_name = "${sel.arrayName}", .selector = .${sel.selector}, ` +
+      `.filter_type = "${sel.filterType}", .sub_field = "${sel.subPath}" } });`,
+  ];
 }
 
 /** Field names that are same-struct position_of / crc32_of targets. */

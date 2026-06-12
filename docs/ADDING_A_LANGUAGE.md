@@ -184,14 +184,17 @@ survive pop (3b); `from_after_field` content-first + `varlength` int fields (3c)
 `from_after_field`, `position_of`-to-a-later-field, and `../` parent ref all green.
 Single shared encoder ⇒ absolute placeholder offsets ⇒ no rebasing.
 
-**Phase 3e — IN PROGRESS.** Selectors over homogeneous arrays. Existing corpus
-suites `last_element_position` and `empty_array_correlation` (plain `[]struct`,
-`position_of first/last<T>`) currently skip *only* on the selector path —
-runtime is ready. The one coverage gap (`length_of`/`crc32_of first/last<T>`
-selectors were DU-flavored only) is now closed by
-`cross-struct/homogeneous-selectors.test.ts` (2 suites). Next: wire homogeneous
-selector codegen so these + the two position_of suites go green. DU/choice
-selectors deferred to Phase 4 (#24).
+**Phase 3e — DONE.** Selectors over homogeneous arrays, end-to-end in Zig.
+`position_of first/last/corresponding<T>` over a plain `[]struct`
+(`last_element_position`, `empty_array_correlation`) plus `length_of`/`crc32_of`
+of a *selected element's sub-field* (`../chunks[first<DataChunk>].payload`),
+covered by `cross-struct/homogeneous-selectors.test.ts` (2 suites). The runtime
+extension that made the sub-field variants work: an append-only `all_frames`
+history (`frameMark()`/`frameAt(mark)`) lets the array-encode loop capture each
+element's top frame nesting-safely; `recordPosition` carries that frame, and
+`selector_length`/`selector_crc32` deferred patches read the chosen element's
+`subfield.length` / `subfield.range` from it. DU/choice selectors + element-size
+selectors (no sub-field, `sum_of_type_sizes`) remain Phase 4 (#24).
 
 > **Cross-language finding from the new homogeneous suites** (a textbook payoff
 > of the tests-first mandate): `homogeneous-selectors.test.ts` passes on TS and
@@ -211,6 +214,6 @@ selectors deferred to Phase 4 (#24).
 **Phase 5 — PENDING.** Remaining varlength, compression/back-reference,
 utf16/latin1, array transforms, `instances`, parity sweep.
 
-**Latest harness numbers:** 174/363 suites generate, 403/403 cases pass, 0
-errored; runtime unit tests 15/15; TS reference 1187/1187 unchanged. Update on
+**Latest harness numbers:** 178/365 suites generate, 407/407 cases pass, 0
+errored; runtime unit tests 17/17; TS reference 1189/1189 unchanged. Update on
 each landing.

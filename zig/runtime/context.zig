@@ -59,6 +59,10 @@ pub const Frame = struct {
 const PositionEntry = struct {
     offset: usize,
     type_name: ?[]const u8,
+    /// The element's own encode frame (sub-field lengths/ranges), captured when
+    /// the element is a struct encoded under a frame. Null for frame-less
+    /// elements. Used to resolve `arr[first<T>].subfield` length_of / crc32_of.
+    frame: ?*Frame = null,
 };
 
 const IterState = struct {
@@ -100,11 +104,38 @@ pub const Patch = union(enum) {
         filter_type: ?[]const u8,
         alignment: usize = 1,
     },
+    /// `length_of(array[first<T>|last<T>|corresponding<T>].subfield)` — logical
+    /// length of a sub-field on the selected element (read from its frame).
+    selector_length: struct {
+        local_offset: usize,
+        width: PatchWidth,
+        endianness: Endianness,
+        array_name: []const u8,
+        selector: SelectorKind,
+        filter_type: ?[]const u8,
+        sub_field: []const u8,
+    },
+    /// `crc32_of(array[first<T>|last<T>|corresponding<T>].subfield)` — CRC32 over
+    /// the encoded byte range of a sub-field on the selected element.
+    selector_crc32: struct {
+        local_offset: usize,
+        width: PatchWidth,
+        endianness: Endianness,
+        array_name: []const u8,
+        selector: SelectorKind,
+        filter_type: ?[]const u8,
+        sub_field: []const u8,
+    },
 };
 
 pub const EncodeContext = struct {
     arena: std.heap.ArenaAllocator,
     frames: std.ArrayListUnmanaged(*Frame) = .empty,
+    /// Append-only history of every frame ever pushed, in push order. Never
+    /// popped, so a selector array loop can capture an element's top frame by
+    /// the mark it took before the element encoded (nesting-safe — nested frames
+    /// land at later indices). `frames` is the active stack; this is the log.
+    all_frames: std.ArrayListUnmanaged(*Frame) = .empty,
     positions: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(PositionEntry)) = .empty,
     array_iterations: std.StringHashMapUnmanaged(IterState) = .empty,
     deferred_patches: std.ArrayListUnmanaged(Patch) = .empty,
@@ -131,11 +162,25 @@ pub const EncodeContext = struct {
         const f = try a.create(Frame);
         f.* = .{};
         try self.frames.append(a, f);
+        try self.all_frames.append(a, f);
         return f;
     }
 
     pub fn popParent(self: *EncodeContext) void {
         if (self.frames.items.len > 0) _ = self.frames.pop();
+    }
+
+    /// Mark the current frame-history length. Take this before encoding a struct;
+    /// `frameAt(mark)` afterwards returns that struct's top (first-pushed) frame.
+    pub fn frameMark(self: *EncodeContext) usize {
+        return self.all_frames.items.len;
+    }
+
+    /// The frame recorded at history position `mark` (the first frame pushed
+    /// after the mark was taken), or null if nothing was pushed since.
+    pub fn frameAt(self: *EncodeContext, mark: usize) ?*Frame {
+        if (mark >= self.all_frames.items.len) return null;
+        return self.all_frames.items[mark];
     }
 
     /// Frame `levels_up` above the top of the stack (0 = current/top frame,
@@ -172,11 +217,12 @@ pub const EncodeContext = struct {
         array_name: []const u8,
         type_name: ?[]const u8,
         offset: usize,
+        frame: ?*Frame,
     ) Error!void {
         const a = self.alloc();
         const gop = try self.positions.getOrPut(a, array_name);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(a, .{ .offset = offset, .type_name = type_name });
+        try gop.value_ptr.append(a, .{ .offset = offset, .type_name = type_name, .frame = frame });
     }
 
     pub fn getPosition(
@@ -286,6 +332,20 @@ pub const EncodeContext = struct {
                         },
                     }
                 },
+                .selector_length => |sp| blk: {
+                    const e = self.selectorEntry(sp.array_name, sp.filter_type, sp.selector) orelse break :blk null;
+                    const fr = e.frame orelse break :blk null;
+                    const info = fr.fields.get(sp.sub_field) orelse break :blk null;
+                    break :blk (info.length orelse break :blk null);
+                },
+                .selector_crc32 => |sp| blk: {
+                    const e = self.selectorEntry(sp.array_name, sp.filter_type, sp.selector) orelse break :blk null;
+                    const fr = e.frame orelse break :blk null;
+                    const info = fr.fields.get(sp.sub_field) orelse break :blk null;
+                    const r = info.range orelse break :blk null;
+                    if (r.end <= r.start) break :blk @as(u64, bitstream.computeCrc32(""));
+                    break :blk @as(u64, bitstream.computeCrc32(enc.bytes.items[r.start..r.end]));
+                },
             };
 
             if (resolved) |value| {
@@ -303,41 +363,64 @@ pub const EncodeContext = struct {
             .parent_position => |x| .{ x.local_offset, x.width, x.endianness },
             .parent_crc32 => |x| .{ x.local_offset, x.width, x.endianness },
             .selector_position => |x| .{ x.local_offset, x.width, x.endianness },
+            .selector_length => |x| .{ x.local_offset, x.width, x.endianness },
+            .selector_crc32 => |x| .{ x.local_offset, x.width, x.endianness },
         };
     }
 
-    fn resolveSelectorFirstLast(self: *EncodeContext, sp: anytype, first: bool) u64 {
-        const entries = (self.positions.get(sp.array_name) orelse return 0xFFFFFFFF).items;
-        if (first) {
-            for (entries) |e| {
-                if (matchType(e.type_name, sp.filter_type)) return applyAlignment(e.offset, sp.alignment);
-            }
-        } else {
-            var i = entries.len;
-            while (i > 0) {
-                i -= 1;
-                if (matchType(entries[i].type_name, sp.filter_type)) return applyAlignment(entries[i].offset, sp.alignment);
-            }
+    /// The position entry selected by `selector` (first/last/corresponding) over
+    /// `array_name`, filtered by `filter_type`. Shared by the offset (position_of)
+    /// and frame-reading (length_of/crc32_of) selector patches.
+    fn selectorEntry(
+        self: *EncodeContext,
+        array_name: []const u8,
+        filter_type: ?[]const u8,
+        selector: SelectorKind,
+    ) ?PositionEntry {
+        const entries = (self.positions.get(array_name) orelse return null).items;
+        switch (selector) {
+            .first => {
+                for (entries) |e| {
+                    if (matchType(e.type_name, filter_type)) return e;
+                }
+            },
+            .last => {
+                var i = entries.len;
+                while (i > 0) {
+                    i -= 1;
+                    if (matchType(entries[i].type_name, filter_type)) return entries[i];
+                }
+            },
+            .corresponding => {
+                var target_idx: usize = 0;
+                const st = self.array_iterations.get(array_name);
+                if (filter_type) |ft| {
+                    if (st) |s| {
+                        if (s.type_indices.get(ft)) |c| target_idx = c -| 1;
+                    }
+                }
+                var count: usize = 0;
+                for (entries) |e| {
+                    if (matchType(e.type_name, filter_type)) {
+                        if (count == target_idx) return e;
+                        count += 1;
+                    }
+                }
+            },
         }
-        return 0xFFFFFFFF;
+        return null;
+    }
+
+    fn resolveSelectorFirstLast(self: *EncodeContext, sp: anytype, first: bool) u64 {
+        const sel: SelectorKind = if (first) .first else .last;
+        const e = self.selectorEntry(sp.array_name, sp.filter_type, sel) orelse return 0xFFFFFFFF;
+        return applyAlignment(e.offset, sp.alignment);
     }
 
     fn resolveSelectorCorresponding(self: *EncodeContext, sp: anytype, st: ?IterState) u64 {
-        const entries = (self.positions.get(sp.array_name) orelse return 0xFFFFFFFF).items;
-        var target_idx: usize = 0;
-        if (sp.filter_type) |ft| {
-            if (st) |s| {
-                if (s.type_indices.get(ft)) |c| target_idx = c -| 1;
-            }
-        }
-        var count: usize = 0;
-        for (entries) |e| {
-            if (matchType(e.type_name, sp.filter_type)) {
-                if (count == target_idx) return applyAlignment(e.offset, sp.alignment);
-                count += 1;
-            }
-        }
-        return 0xFFFFFFFF;
+        _ = st;
+        const e = self.selectorEntry(sp.array_name, sp.filter_type, .corresponding) orelse return 0xFFFFFFFF;
+        return applyAlignment(e.offset, sp.alignment);
     }
 
     fn matchType(entry_type: ?[]const u8, filter_type: ?[]const u8) bool {
@@ -437,12 +520,90 @@ test "deferred parent_crc32 patch resolves over field range" {
 test "position tracking and selector resolution" {
     var ctx = EncodeContext.init(testing.allocator);
     defer ctx.deinit();
-    try ctx.recordPosition("items", "Label", 12);
-    try ctx.recordPosition("items", "Pointer", 20);
-    try ctx.recordPosition("items", "Label", 24);
+    try ctx.recordPosition("items", "Label", 12, null);
+    try ctx.recordPosition("items", "Pointer", 20, null);
+    try ctx.recordPosition("items", "Label", 24, null);
     try ctx.markArrayDone("items");
 
     try testing.expectEqual(@as(usize, 12), ctx.getPosition("items", "Label", 0).?);
     try testing.expectEqual(@as(usize, 24), ctx.getPosition("items", "Label", 1).?);
     try testing.expectEqual(@as(usize, 20), ctx.getPosition("items", "Pointer", 0).?);
+}
+
+test "frame history captures an element's top frame by mark, nesting-safe" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Simulate encoding an array element that itself pushes a nested frame.
+    const mark = ctx.frameMark();
+    const elem = try ctx.pushParent(); // element's top frame
+    const nested = try ctx.pushParent(); // a nested struct inside the element
+    try ctx.setLength(nested, "x", 1);
+    ctx.popParent();
+    ctx.popParent();
+
+    // frameAt(mark) must be the element's TOP frame, not the nested one.
+    try testing.expect(ctx.frameAt(mark).? == elem);
+    try testing.expect(ctx.frameAt(mark).? != nested);
+}
+
+test "selector_length / selector_crc32 resolve a sub-field on the selected element" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
+    defer enc.deinit();
+
+    // Two placeholders the child wrote: a length and a CRC of `last<Chunk>.payload`.
+    const ph_len = try enc.placeholderU16();
+    const ph_crc = try enc.placeholderU32();
+
+    // Encode two Chunk elements; record each element's offset + frame. Chunk[1]'s
+    // payload is "123456789" (CRC32 == 0xCBF43926), 9 bytes long.
+    const f0 = try ctx.pushParent();
+    const p0_start = enc.byteOffset();
+    try enc.writeBytes("AB");
+    try ctx.setLength(f0, "payload", 2);
+    try ctx.setRange(f0, "payload", p0_start, enc.byteOffset());
+    ctx.popParent();
+    try ctx.recordPosition("chunks", "Chunk", p0_start, f0);
+
+    const f1 = try ctx.pushParent();
+    const p1_start = enc.byteOffset();
+    try enc.writeBytes("123456789");
+    try ctx.setLength(f1, "payload", 9);
+    try ctx.setRange(f1, "payload", p1_start, enc.byteOffset());
+    ctx.popParent();
+    try ctx.recordPosition("chunks", "Chunk", p1_start, f1);
+    try ctx.markArrayDone("chunks");
+
+    try ctx.addDeferredPatch(.{ .selector_length = .{
+        .local_offset = ph_len.offset,
+        .width = .u16,
+        .endianness = .big_endian,
+        .array_name = "chunks",
+        .selector = .last,
+        .filter_type = "Chunk",
+        .sub_field = "payload",
+    } });
+    try ctx.addDeferredPatch(.{ .selector_crc32 = .{
+        .local_offset = ph_crc.offset,
+        .width = .u32,
+        .endianness = .big_endian,
+        .array_name = "chunks",
+        .selector = .last,
+        .filter_type = "Chunk",
+        .sub_field = "payload",
+    } });
+    try ctx.resolveDeferredPatches(&enc);
+
+    const out = try enc.finish();
+    defer testing.allocator.free(out);
+    // last<Chunk>.payload length == 9 (big-endian u16).
+    try testing.expectEqual(@as(u8, 0x00), out[0]);
+    try testing.expectEqual(@as(u8, 0x09), out[1]);
+    // CRC32("123456789") == 0xCBF43926, big-endian.
+    try testing.expectEqual(@as(u8, 0xCB), out[2]);
+    try testing.expectEqual(@as(u8, 0xF4), out[3]);
+    try testing.expectEqual(@as(u8, 0x39), out[4]);
+    try testing.expectEqual(@as(u8, 0x26), out[5]);
 }

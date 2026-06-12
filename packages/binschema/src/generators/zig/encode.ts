@@ -10,7 +10,12 @@ import {
   classifyTypeDef,
   varlengthWriteMethod,
 } from "./types.js";
-import { emitComputedEncode } from "./computed.js";
+import {
+  emitComputedEncode,
+  arrayNeedsSelectorTracking,
+  selectorItemTypeName,
+  emitSelectorArrayRecording,
+} from "./computed.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -242,8 +247,19 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
   const itemVar = uniqueVar("_item");
   const itemField = typeof items === "string" ? { type: items } : { ...items };
   delete (itemField as any).name;
+  const itemEncode = emitEncodeValue(itemField, itemVar, ctx, indent + "    ");
+
+  // If a computed field selects into this array (first/last/corresponding), the
+  // parent records each element's absolute start offset + type as it encodes,
+  // so a deferred selector_position patch can resolve the matching element.
+  if (field.name && arrayNeedsSelectorTracking(field.name, ctx.schema)) {
+    const typeName = selectorItemTypeName(field, ctx.schema);
+    lines.push(...emitSelectorArrayRecording(field.name, typeName, value, itemVar, itemEncode, indent));
+    return lines;
+  }
+
   lines.push(`${indent}for (${value}) |${itemVar}| {`);
-  lines.push(...emitEncodeValue(itemField, itemVar, ctx, indent + "    "));
+  lines.push(...itemEncode);
   lines.push(`${indent}}`);
   return lines;
 }

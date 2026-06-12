@@ -32,6 +32,7 @@ import {
   fieldEndVar,
   frameStartVar,
   schemaHasParentRefs,
+  schemaHasSelectors,
   emitFrameLengthRegistration,
 } from "./computed.js";
 
@@ -119,6 +120,10 @@ function generateStructCode(
   // fields can resolve cross-struct references. Schemas with no such ref keep
   // the lean Phase-2 path (no frames emitted at all).
   const framesOn = schemaHasParentRefs(schema) && fields.length > 0;
+  // Selectors (first/last/corresponding) register deferred selector_position
+  // patches that must be resolved after the whole tree is encoded — even when
+  // the schema has no `../` parent ref to turn frames on.
+  const needsResolve = framesOn || schemaHasSelectors(schema);
 
   const lines: string[] = [];
   lines.push(`pub const ${typeNameZ} = struct {`);
@@ -140,9 +145,10 @@ function generateStructCode(
   lines.push(`        var ${CTX} = ${RT}.EncodeContext.init(${ALLOC});`);
   lines.push(`        defer ${CTX}.deinit();`);
   lines.push(`        try self.encodeInto(&${ENC}, &${CTX});`);
-  if (framesOn) {
-    // Forward references (position_of/crc32_of ../field) were written as
-    // placeholders; resolve them now that the whole tree is encoded.
+  if (needsResolve) {
+    // Forward references (position_of/crc32_of ../field) and selector_position
+    // patches were written as placeholders; resolve them now that the whole tree
+    // is encoded.
     lines.push(`        try ${CTX}.resolveDeferredPatches(&${ENC});`);
   }
   lines.push(`        return ${ENC}.finish();`);
@@ -331,7 +337,7 @@ function generateAliasFunctions(
   lines.push(`    var ${CTX} = ${RT}.EncodeContext.init(${ALLOC});`);
   lines.push(`    defer ${CTX}.deinit();`);
   lines.push(`    try encode${pascal}Into(value, &${ENC}, &${CTX});`);
-  if (schemaHasParentRefs(schema)) {
+  if (schemaHasParentRefs(schema) || schemaHasSelectors(schema)) {
     lines.push(`    try ${CTX}.resolveDeferredPatches(&${ENC});`);
   }
   lines.push(`    return ${ENC}.finish();`);
