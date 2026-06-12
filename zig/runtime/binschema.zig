@@ -22,7 +22,9 @@ pub const computeCrc32 = bitstream.computeCrc32;
 
 // ---- context ----
 pub const EncodeContext = context.EncodeContext;
-pub const FieldValue = context.FieldValue;
+pub const Frame = context.Frame;
+pub const FieldInfo = context.FieldInfo;
+pub const ByteRange = context.ByteRange;
 pub const Patch = context.Patch;
 pub const PatchWidth = context.PatchWidth;
 pub const SelectorKind = context.SelectorKind;

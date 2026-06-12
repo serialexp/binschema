@@ -25,7 +25,15 @@ import { resetVarCounter, zigFieldName, zigTypeName } from "./naming.js";
 import { zigBitOrder, zigDeclaredType, zigPrimitiveType } from "./types.js";
 import { generateFieldEncode, emitEncodeValue, ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { generateFieldDecode, emitDecodeValue } from "./decode.js";
-import { computedTargets, emitComputedBackpatch, fieldOffVar, fieldEndVar } from "./computed.js";
+import {
+  computedTargets,
+  emitComputedBackpatch,
+  fieldOffVar,
+  fieldEndVar,
+  frameStartVar,
+  schemaHasParentRefs,
+  emitFrameLengthRegistration,
+} from "./computed.js";
 
 export interface GeneratedZigCode {
   code: string;
@@ -106,6 +114,11 @@ function generateStructCode(
   const bo = zigBitOrder(bitOrder, "msb_first");
 
   const emit: EmitCtx = { schema, endianness, bitOrder, selfPath: "self" };
+  // When the schema uses any `../` parent reference, every struct pushes a
+  // parent frame and records its fields' lengths/ranges so descendant computed
+  // fields can resolve cross-struct references. Schemas with no such ref keep
+  // the lean Phase-2 path (no frames emitted at all).
+  const framesOn = schemaHasParentRefs(schema) && fields.length > 0;
 
   const lines: string[] = [];
   lines.push(`pub const ${typeNameZ} = struct {`);
@@ -127,6 +140,11 @@ function generateStructCode(
   lines.push(`        var ${CTX} = ${RT}.EncodeContext.init(${ALLOC});`);
   lines.push(`        defer ${CTX}.deinit();`);
   lines.push(`        try self.encodeInto(&${ENC}, &${CTX});`);
+  if (framesOn) {
+    // Forward references (position_of/crc32_of ../field) were written as
+    // placeholders; resolve them now that the whole tree is encoded.
+    lines.push(`        try ${CTX}.resolveDeferredPatches(&${ENC});`);
+  }
   lines.push(`        return ${ENC}.finish();`);
   lines.push(`    }`);
   lines.push(``);
@@ -138,14 +156,31 @@ function generateStructCode(
   lines.push(`    pub fn encodeInto(self: ${typeNameZ}, ${encodeParams()}) ${ERR}!void {`);
   const { posTargets, crcTargets } = computedTargets(fields);
   const encBody: string[] = [];
+  if (framesOn) {
+    encBody.push(`        const _frame = try ${CTX}.pushParent();`);
+    encBody.push(`        defer ${CTX}.popParent();`);
+    // Register fields' length_of values up front so a child's `length_of
+    // ../field` (encoded before the field itself) resolves synchronously.
+    encBody.push(...emitFrameLengthRegistration(fields, emit, "_frame", "        "));
+  }
   for (const field of fields) {
     const tracked = field.name && (posTargets.has(field.name) || crcTargets.has(field.name));
     if (tracked) {
       encBody.push(`        const ${fieldOffVar(field.name)} = ${ENC}.byteOffset();`);
     }
+    if (framesOn && field.name) {
+      encBody.push(`        const ${frameStartVar(field.name)} = ${ENC}.byteOffset();`);
+    }
     encBody.push(...generateFieldEncode(field, emit));
     if (field.name && crcTargets.has(field.name)) {
       encBody.push(`        const ${fieldEndVar(field.name)} = ${ENC}.byteOffset();`);
+    }
+    if (framesOn && field.name) {
+      // Record the field's encoded byte range so descendants' position_of /
+      // crc32_of `../field` patches can resolve against it.
+      encBody.push(
+        `        try ${CTX}.setRange(_frame, "${field.name}", ${frameStartVar(field.name)}, ${ENC}.byteOffset());`,
+      );
     }
   }
   encBody.push(...emitComputedBackpatch(fields, emit, "        "));
@@ -242,6 +277,9 @@ function generateAliasFunctions(
   lines.push(`    var ${CTX} = ${RT}.EncodeContext.init(${ALLOC});`);
   lines.push(`    defer ${CTX}.deinit();`);
   lines.push(`    try encode${pascal}Into(value, &${ENC}, &${CTX});`);
+  if (schemaHasParentRefs(schema)) {
+    lines.push(`    try ${CTX}.resolveDeferredPatches(&${ENC});`);
+  }
   lines.push(`    return ${ENC}.finish();`);
   lines.push(`}`);
   lines.push(``);

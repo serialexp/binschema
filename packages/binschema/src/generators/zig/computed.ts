@@ -20,10 +20,15 @@
 // and `from_after_field` targets throw ZigNotImplemented here and are handled in
 // later Phase-3 layers (they need the threaded EncodeContext, not local vars).
 
-import { RT, ENC } from "./context.js";
+import { RT, ENC, CTX, ERR } from "./context.js";
 import { zigFieldName } from "./naming.js";
-import { zigEndianness } from "./types.js";
+import { zigEndianness, zigPrimitiveType, resolveAlias, classifyTypeDef } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
+
+const INT_FIELD_TYPES = new Set([
+  "uint8", "uint16", "uint32", "uint64",
+  "int8", "int16", "int32", "int64",
+]);
 
 /** Map a computed field's integer storage type to its placeholder method suffix. */
 const PLACEHOLDER_SUFFIX: Record<string, "U8" | "U16" | "U32" | "U64"> = {
@@ -32,6 +37,34 @@ const PLACEHOLDER_SUFFIX: Record<string, "U8" | "U16" | "U32" | "U64"> = {
   uint32: "U32",
   uint64: "U64",
 };
+
+/** Map a computed field's integer storage type to its runtime PatchWidth tag. */
+const PATCH_WIDTH: Record<string, "u8" | "u16" | "u32" | "u64"> = {
+  uint8: "u8",
+  uint16: "u16",
+  uint32: "u32",
+  uint64: "u64",
+};
+
+/**
+ * A plain `../field` parent reference (any number of `../`, then a single bare
+ * identifier — no dotted path, no `[selector]`). Returns `{ levels, name }`
+ * where `levels` is the number of `../` segments (1 = direct parent, matching
+ * the runtime's `frameAtLevel`/`parentLength` level convention), or null if the
+ * target isn't a plain parent ref (a selector, a `_root.` ref, or a dotted path).
+ */
+export function parsePlainParentRef(target: string | undefined): { levels: number; name: string } | null {
+  if (!target || !target.startsWith("../")) return null;
+  let rem = target;
+  let levels = 0;
+  while (rem.startsWith("../")) {
+    levels++;
+    rem = rem.slice(3);
+  }
+  // A bare identifier only — dotted paths and selectors aren't plain refs.
+  if (rem.length === 0 || rem.includes(".") || rem.includes("[")) return null;
+  return { levels, name: rem };
+}
 
 /** Is this target a cross-struct parent / root reference (handled in Phase 3b)? */
 export function isParentRef(target: string | undefined): boolean {
@@ -51,6 +84,74 @@ export function placeholderVar(name: string): string {
 /** Local var holding the start byte offset of a tracked target field. */
 export function fieldOffVar(name: string): string {
   return `_field_off_${zigFieldName(name)}`;
+}
+
+/** Local var holding the start byte offset of a field, for parent-frame range recording. */
+export function frameStartVar(name: string): string {
+  return `_s_${zigFieldName(name)}`;
+}
+
+/**
+ * Does any type in the schema use a cross-struct parent reference (`../field`
+ * or `_root.…`) in a computed target? When true, every struct's encode pushes a
+ * parent frame and records its fields' lengths/ranges so children can resolve
+ * those references. Schemas without any such ref keep the lean Phase-2 path.
+ */
+export function schemaHasParentRefs(schema: any): boolean {
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any).sequence;
+    if (!Array.isArray(seq)) continue;
+    for (const f of seq) {
+      const target: string | undefined = f?.computed?.target;
+      if (target && (target.startsWith("../") || target.startsWith("_root"))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The `length_of` value a parent should register for a field so a child's
+ * `length_of ../field` resolves synchronously: array/string/bytes -> `.len`
+ * (element/byte count), integer scalar -> the value itself (matching the
+ * reference generator's "int target → use the value" rule). Returns null for
+ * fields that can't be a plain synchronous length target (structs, bool/float,
+ * sub-byte) — a child referencing one will fault at runtime rather than silently
+ * miscompute.
+ */
+function frameLengthExpr(field: any, schema: any, selfPath: string): string | null {
+  if (!field.name || field.computed || field.const !== undefined) return null;
+  const access = `${selfPath}.${zigFieldName(field.name)}`;
+  if (INT_FIELD_TYPES.has(field.type)) return `@intCast(${access})`;
+  if (field.type === "string" || field.type === "bytes" || field.type === "array") {
+    return `@intCast(${access}.len)`;
+  }
+  // Type reference resolving to a string/bytes/array alias also has a `.len`.
+  if (typeof field.type === "string" && !zigPrimitiveType(field)) {
+    const resolved = resolveAlias(schema, field.type);
+    const cls = classifyTypeDef(resolved);
+    if (cls === "string" || cls === "bytes" || cls === "array") return `@intCast(${access}.len)`;
+  }
+  return null;
+}
+
+/**
+ * Emit the eager parent-frame length registrations, run at the top of a struct's
+ * encode (before any child is encoded) so `length_of ../field` children can read
+ * the value synchronously.
+ */
+export function emitFrameLengthRegistration(
+  fields: any[],
+  ctx: EmitCtx,
+  frameVar: string,
+  indent: string,
+): string[] {
+  const lines: string[] = [];
+  for (const f of fields) {
+    const expr = frameLengthExpr(f, ctx.schema, ctx.selfPath);
+    if (expr === null) continue;
+    lines.push(`${indent}try ${CTX}.setLength(${frameVar}, "${f.name}", ${expr});`);
+  }
+  return lines;
 }
 
 /** Local var holding the end byte offset of a crc32 target field. */
@@ -94,17 +195,37 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       throw new ZigNotImplemented("length_of from_after_field (Phase 3c)");
     }
     if (!target) throw new ZigNotImplemented(`${t} without target`);
-    if (isParentRef(target) || isSelector(target)) {
-      throw new ZigNotImplemented(`${t} target '${target}' (cross-struct/selector, Phase 3b/3d)`);
+    if (isSelector(target)) {
+      throw new ZigNotImplemented(`${t} target '${target}' (selector, Phase 3d)`);
     }
-    // length_of: string/bytes -> byte length; array -> element count. Both map
+    const parent = parsePlainParentRef(target);
+    if (parent) {
+      // Cross-struct `../field`: the parent eagerly registers the field's
+      // length_of value into its frame before encoding children (array/string
+      // element-or-byte count, or a scalar's value), so it is available
+      // synchronously here. See `emitFrameLengthRegistration`.
+      const read = `(${CTX}.parentLength(${parent.levels}, "${parent.name}") orelse return ${ERR}.SchemaMismatch)`;
+      return emitIntWrite(intType, read, e, indent);
+    }
+    if (isParentRef(target)) {
+      throw new ZigNotImplemented(`${t} target '${target}' (dotted/_root parent ref, later phase)`);
+    }
+    // Same-struct: string/bytes -> byte length; array -> element count. Both map
     // to the Zig slice `.len`, and the value is known from the input directly.
     return emitIntWrite(intType, `${ctx.selfPath}.${zigFieldName(target)}.len`, e, indent);
   }
 
   if (t === "position_of") {
-    if (isParentRef(target) || isSelector(target)) {
-      throw new ZigNotImplemented(`position_of target '${target}' (cross-struct/selector, Phase 3b/3d)`);
+    const parent = parsePlainParentRef(target);
+    if (parent) {
+      // Cross-struct `position_of ../field`: the field's offset isn't known yet
+      // (it is encoded later by the parent), so reserve a slot now and register
+      // a deferred patch capturing the parent's frame. The resolver fills it in
+      // once the whole tree is encoded and the parent has recorded the range.
+      return emitParentDeferredPatch(field, intType, parent, e, "parent_position", indent, computed.alignment || 1);
+    }
+    if (isSelector(target) || isParentRef(target)) {
+      throw new ZigNotImplemented(`position_of target '${target}' (selector/dotted parent ref, later phase)`);
     }
     // Same-struct: reserve a slot now; the back-patch fills in the target's
     // start offset once it has been encoded.
@@ -112,13 +233,54 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
   }
 
   if (t === "crc32_of") {
-    if (isParentRef(target) || isSelector(target)) {
-      throw new ZigNotImplemented(`crc32_of target '${target}' (cross-struct/selector, Phase 3b/3d)`);
+    const parent = parsePlainParentRef(target);
+    if (parent) {
+      return emitParentDeferredPatch(field, intType, parent, e, "parent_crc32", indent, 1);
+    }
+    if (isSelector(target) || isParentRef(target)) {
+      throw new ZigNotImplemented(`crc32_of target '${target}' (selector/dotted parent ref, later phase)`);
     }
     return [`${indent}const ${placeholderVar(field.name)} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`];
   }
 
   throw new ZigNotImplemented(`computed type '${t}'`);
+}
+
+/**
+ * Emit a placeholder + a deferred `parent_position` / `parent_crc32` patch that
+ * captures the ancestor frame `levels` up. The runtime resolves it after the
+ * whole tree is encoded (the parent records the target field's byte range when
+ * it encodes it).
+ */
+function emitParentDeferredPatch(
+  field: any,
+  intType: string,
+  parent: { levels: number; name: string },
+  e: string,
+  op: "parent_position" | "parent_crc32",
+  indent: string,
+  alignment: number,
+): string[] {
+  const ph = placeholderVar(field.name);
+  const width = PATCH_WIDTH[intType];
+  const frame = `(${CTX}.frameAtLevel(${parent.levels}) orelse return ${ERR}.SchemaMismatch)`;
+  const lines = [
+    `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+  ];
+  if (op === "parent_position") {
+    lines.push(
+      `${indent}try ${CTX}.addDeferredPatch(.{ .parent_position = .{ ` +
+        `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
+        `.frame = ${frame}, .field_name = "${parent.name}", .alignment = ${alignment} } });`,
+    );
+  } else {
+    lines.push(
+      `${indent}try ${CTX}.addDeferredPatch(.{ .parent_crc32 = .{ ` +
+        `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
+        `.frame = ${frame}, .field_name = "${parent.name}" } });`,
+    );
+  }
+  return lines;
 }
 
 /** Field names that are same-struct position_of / crc32_of targets. */

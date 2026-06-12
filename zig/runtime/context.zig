@@ -5,26 +5,34 @@
 //! and had to be rewritten the moment a real protocol needed a forward
 //! reference (`length_of` + `from_after_field`, `position_of` to a later
 //! field, `../` parent refs). The fix is to thread one `*EncodeContext`
-//! through every generated encode/decode call from day one — even while the
-//! early phases don't read from it yet.
+//! through every generated encode call from day one.
 //!
-//! Design (mirrors `python/runtime` ctx dict + `go/runtime/context.go`, typed):
-//!   - parents:          stack of field maps for `../field` resolution at depth
-//!   - positions:        per-array byte offsets for first/last/corresponding
-//!   - array_iterations: per-array iteration state (done flag, type counters)
-//!   - deferred_patches: selector/parent patches resolved at an outer scope
-//!   - compression_dict: encoded-bytes -> offset, for DNS-style back references
+//! ## Parent frames (`../field` resolution)
 //!
-//! Memory: the context owns an internal arena; every allocation it makes goes
-//! through that arena, so `deinit()` frees the whole graph at once. The parent
-//! stack is push/pop on the single threaded instance (no per-level cloning),
-//! because shared state (positions, iterations, patches, dict) must be visible
-//! across the whole encode.
+//! Each struct's `encodeInto` pushes a *frame* before encoding its fields and
+//! pops it after. A frame records, per field, its logical length (array element
+//! count / string-bytes count, known from the input value) and its encoded byte
+//! range `[start, end)` in the shared encoder buffer. Children resolve
+//! `../field` against an ancestor frame:
+//!   - `length_of ../field`  — read synchronously from the ancestor frame's
+//!     pre-registered length (the parent registers lengths before encoding
+//!     children, so the value is available when the child encodes).
+//!   - `position_of ../field` / `crc32_of ../field` — the field's offset/bytes
+//!     are not known when the child encodes (the field comes later in the
+//!     parent), so the child writes a fixed-width placeholder and registers a
+//!     *deferred patch* capturing the ancestor frame pointer. Once the whole
+//!     tree is encoded, `resolveDeferredPatches` fills every patch in.
 //!
-//! Phase 1 scope: the struct, parent stack, position tracking, iteration
-//! tracking, and the deferred-patch list with a resolver covering parent-field
-//! position/crc32 and first/last/corresponding selectors. `sum_of_sizes` and
-//! any further patch shapes are co-designed with the generator in Phase 3.
+//! Because every nested struct encodes into the *same* encoder, placeholder
+//! offsets are absolute in one buffer — no per-struct sub-encoder rebasing is
+//! needed (unlike the Python runtime).
+//!
+//! ## Memory
+//!
+//! The context owns an arena. Frames are arena-allocated and referenced by
+//! pointer, so a frame pointer captured in a deferred patch stays valid even
+//! after the frame is popped (pop only removes it from the active stack; the
+//! arena keeps the storage until `deinit`). `deinit()` frees the whole graph.
 
 const std = @import("std");
 const bitstream = @import("bitstream.zig");
@@ -33,36 +41,19 @@ const Error = err.Error;
 const Endianness = bitstream.Endianness;
 const BitStreamEncoder = bitstream.BitStreamEncoder;
 
-/// A heterogeneous value captured from a parent field so a child encoder can
-/// resolve `../field` references. `range` records a [start, end) byte span in
-/// the owning encoder's buffer (for length_of / crc32_of over that field).
-pub const FieldValue = union(enum) {
-    u: u64,
-    i: i64,
-    f: f64,
-    boolean: bool,
-    bytes: []const u8,
-    /// Byte span [start, end) in the owning encoder buffer.
-    range: struct { start: usize, end: usize },
+pub const ByteRange = struct { start: usize, end: usize };
 
-    pub fn asU64(self: FieldValue) ?u64 {
-        return switch (self) {
-            .u => |v| v,
-            .i => |v| @bitCast(v),
-            .boolean => |b| @intFromBool(b),
-            .range => |r| r.start,
-            else => null,
-        };
-    }
+/// Per-field info captured in a parent frame. `length` is the logical length
+/// (array element count / string byte count); `range` is the encoded byte span.
+pub const FieldInfo = struct {
+    length: ?u64 = null,
+    range: ?ByteRange = null,
+};
 
-    /// Length of the value: byte length for bytes/range, else 0.
-    pub fn lengthOf(self: FieldValue) usize {
-        return switch (self) {
-            .bytes => |b| b.len,
-            .range => |r| if (r.end > r.start) r.end - r.start else 0,
-            else => 0,
-        };
-    }
+/// One struct-encode scope. Field name -> info. Arena-allocated; referenced by
+/// pointer so captures survive the frame being popped.
+pub const Frame = struct {
+    fields: std.StringHashMapUnmanaged(FieldInfo) = .empty,
 };
 
 const PositionEntry = struct {
@@ -80,23 +71,23 @@ pub const PatchWidth = enum(u8) { u8 = 1, u16 = 2, u32 = 4, u64 = 8 };
 pub const SelectorKind = enum { first, last, corresponding };
 
 /// A patch whose target value isn't known when the slot is written, resolved
-/// against ctx state at an outer scope. Tagged by what it computes.
+/// against ctx state once the whole tree is encoded.
 pub const Patch = union(enum) {
-    /// `position_of(../field)` — byte offset where a parent field starts.
+    /// `position_of(../field)` — byte offset where an ancestor field starts.
     parent_position: struct {
         local_offset: usize,
         width: PatchWidth,
         endianness: Endianness,
-        parent_level: usize,
+        frame: *Frame,
         field_name: []const u8,
         alignment: usize = 1,
     },
-    /// `crc32_of(../field)` — CRC32 over the parent field's byte span.
+    /// `crc32_of(../field)` — CRC32 over an ancestor field's byte span.
     parent_crc32: struct {
         local_offset: usize,
         width: PatchWidth,
         endianness: Endianness,
-        parent_level: usize,
+        frame: *Frame,
         field_name: []const u8,
     },
     /// `position_of(array[first<T>|last<T>|corresponding<T>])`.
@@ -113,7 +104,7 @@ pub const Patch = union(enum) {
 
 pub const EncodeContext = struct {
     arena: std.heap.ArenaAllocator,
-    parents: std.ArrayListUnmanaged(std.StringHashMapUnmanaged(FieldValue)) = .empty,
+    frames: std.ArrayListUnmanaged(*Frame) = .empty,
     positions: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(PositionEntry)) = .empty,
     array_iterations: std.StringHashMapUnmanaged(IterState) = .empty,
     deferred_patches: std.ArrayListUnmanaged(Patch) = .empty,
@@ -125,7 +116,6 @@ pub const EncodeContext = struct {
     }
 
     pub fn deinit(self: *EncodeContext) void {
-        // Everything was allocated from the arena, so a single reset frees it.
         self.arena.deinit();
     }
 
@@ -133,35 +123,46 @@ pub const EncodeContext = struct {
         return self.arena.allocator();
     }
 
-    // ---- Parent stack (`../field` resolution) ----
+    // ---- Parent frames (`../field` resolution) ----
 
-    /// Push an empty parent field map and return a pointer to it so the caller
-    /// can populate fields as they are encoded.
-    pub fn pushParent(self: *EncodeContext) Error!*std.StringHashMapUnmanaged(FieldValue) {
-        try self.parents.append(self.alloc(), .empty);
-        return &self.parents.items[self.parents.items.len - 1];
+    /// Push a fresh frame and return a stable pointer to it.
+    pub fn pushParent(self: *EncodeContext) Error!*Frame {
+        const a = self.alloc();
+        const f = try a.create(Frame);
+        f.* = .{};
+        try self.frames.append(a, f);
+        return f;
     }
 
     pub fn popParent(self: *EncodeContext) void {
-        if (self.parents.items.len > 0) _ = self.parents.pop();
+        if (self.frames.items.len > 0) _ = self.frames.pop();
     }
 
-    pub fn setParentField(
-        self: *EncodeContext,
-        map: *std.StringHashMapUnmanaged(FieldValue),
-        name: []const u8,
-        value: FieldValue,
-    ) Error!void {
-        try map.put(self.alloc(), name, value);
-    }
-
-    /// Resolve `../field` `levels_up` frames above the top of the parent stack
-    /// (0 = immediate parent). Returns null if missing.
-    pub fn getParentField(self: *EncodeContext, levels_up: usize, name: []const u8) ?FieldValue {
-        const n = self.parents.items.len;
+    /// Frame `levels_up` above the top of the stack (0 = current/top frame,
+    /// 1 = direct parent, matching one `../`). Null if out of range.
+    pub fn frameAtLevel(self: *EncodeContext, levels_up: usize) ?*Frame {
+        const n = self.frames.items.len;
         if (levels_up >= n) return null;
-        const idx = n - 1 - levels_up;
-        return self.parents.items[idx].get(name);
+        return self.frames.items[n - 1 - levels_up];
+    }
+
+    pub fn setLength(self: *EncodeContext, frame: *Frame, name: []const u8, length: u64) Error!void {
+        const gop = try frame.fields.getOrPut(self.alloc(), name);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.length = length;
+    }
+
+    pub fn setRange(self: *EncodeContext, frame: *Frame, name: []const u8, start: usize, end: usize) Error!void {
+        const gop = try frame.fields.getOrPut(self.alloc(), name);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.range = .{ .start = start, .end = end };
+    }
+
+    /// Logical length of `../field` `levels_up` frames up (for length_of/count_of).
+    pub fn parentLength(self: *EncodeContext, levels_up: usize, name: []const u8) ?u64 {
+        const f = self.frameAtLevel(levels_up) orelse return null;
+        const info = f.fields.get(name) orelse return null;
+        return info.length;
     }
 
     // ---- Array position tracking (selectors) ----
@@ -226,7 +227,6 @@ pub const EncodeContext = struct {
 
     pub fn compressionInsert(self: *EncodeContext, key: []const u8, offset: usize) Error!void {
         const a = self.alloc();
-        // Own a copy of the key so it outlives the caller's buffer.
         const owned = try a.dupe(u8, key);
         try self.compression_dict.put(a, owned, offset);
     }
@@ -252,29 +252,22 @@ pub const EncodeContext = struct {
         }
     }
 
-    /// Try to resolve every deferred patch against current ctx state, writing
-    /// resolved ones into `enc`. Patches that can't yet resolve (target array
-    /// not fully encoded) are retained for an outer scope to retry. Mirrors
-    /// Python's `_resolve_deferred_patches`.
+    /// Resolve every deferred patch against current ctx state, writing resolved
+    /// ones into `enc`. Patches that still can't resolve are retained.
     pub fn resolveDeferredPatches(self: *EncodeContext, enc: *BitStreamEncoder) Error!void {
         var remaining: std.ArrayListUnmanaged(Patch) = .empty;
         for (self.deferred_patches.items) |p| {
             const resolved: ?u64 = switch (p) {
                 .parent_position => |pp| blk: {
-                    const fv = self.getParentField(pp.parent_level, pp.field_name) orelse break :blk null;
-                    const start = fv.asU64() orelse break :blk null;
-                    break :blk @as(u64, applyAlignment(@intCast(start), pp.alignment));
+                    const info = pp.frame.fields.get(pp.field_name) orelse break :blk null;
+                    const r = info.range orelse break :blk null;
+                    break :blk @as(u64, applyAlignment(r.start, pp.alignment));
                 },
                 .parent_crc32 => |pc| blk: {
-                    const fv = self.getParentField(pc.parent_level, pc.field_name) orelse break :blk null;
-                    switch (fv) {
-                        .range => |r| {
-                            if (r.end <= r.start) break :blk null;
-                            break :blk bitstream.computeCrc32(enc.bytes.items[r.start..r.end]);
-                        },
-                        .bytes => |b| break :blk bitstream.computeCrc32(b),
-                        else => break :blk null,
-                    }
+                    const info = pc.frame.fields.get(pc.field_name) orelse break :blk null;
+                    const r = info.range orelse break :blk null;
+                    if (r.end <= r.start) break :blk @as(u64, bitstream.computeCrc32(""));
+                    break :blk bitstream.computeCrc32(enc.bytes.items[r.start..r.end]);
                 },
                 .selector_position => |sp| blk: {
                     const st = self.array_iterations.get(sp.array_name);
@@ -297,8 +290,7 @@ pub const EncodeContext = struct {
 
             if (resolved) |value| {
                 const off, const width, const e = patchTarget(p);
-                const aligned = if (value == 0xFFFFFFFF) value else value; // sentinel passthrough
-                writePatch(enc, off, width, aligned, e);
+                writePatch(enc, off, width, value, e);
             } else {
                 try remaining.append(self.alloc(), p);
             }
@@ -361,21 +353,85 @@ pub const EncodeContext = struct {
 
 const testing = std.testing;
 
-test "parent stack resolves ../field at depth" {
+test "parent frames resolve ../field length at depth" {
     var ctx = EncodeContext.init(testing.allocator);
     defer ctx.deinit();
 
-    const p0 = try ctx.pushParent();
-    try ctx.setParentField(p0, "outer", .{ .u = 100 });
-    const p1 = try ctx.pushParent();
-    try ctx.setParentField(p1, "inner", .{ .u = 7 });
+    const outer = try ctx.pushParent();
+    try ctx.setLength(outer, "payload", 100);
+    const inner = try ctx.pushParent();
+    try ctx.setLength(inner, "blob", 7);
 
-    try testing.expectEqual(@as(u64, 7), ctx.getParentField(0, "inner").?.asU64().?);
-    try testing.expectEqual(@as(u64, 100), ctx.getParentField(1, "outer").?.asU64().?);
-    try testing.expect(ctx.getParentField(0, "missing") == null);
+    try testing.expectEqual(@as(u64, 7), ctx.parentLength(0, "blob").?);
+    try testing.expectEqual(@as(u64, 100), ctx.parentLength(1, "payload").?);
+    try testing.expect(ctx.parentLength(0, "missing") == null);
 
     ctx.popParent();
-    try testing.expect(ctx.getParentField(0, "inner") == null);
+    // Popped frame storage survives in the arena, but it leaves the active stack.
+    try testing.expect(ctx.parentLength(0, "blob") == null);
+    try testing.expectEqual(@as(u64, 100), ctx.parentLength(0, "payload").?);
+}
+
+test "deferred parent_position patch resolves against captured frame after pop" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
+    defer enc.deinit();
+
+    const parent = try ctx.pushParent();
+    // Child writes a placeholder for position_of(../data) before data exists.
+    const ph = try enc.placeholderU32();
+    // ... child returns; parent later encodes `data` at offset 8 and records it.
+    try enc.writeBytes(&[_]u8{ 0, 0, 0, 0 }); // pad to offset 8
+    const start = enc.byteOffset();
+    try enc.writeBytes(&[_]u8{ 0xAA, 0xBB, 0xCC });
+    try ctx.setRange(parent, "data", start, enc.byteOffset());
+
+    try ctx.addDeferredPatch(.{ .parent_position = .{
+        .local_offset = ph.offset,
+        .width = .u32,
+        .endianness = .big_endian,
+        .frame = parent,
+        .field_name = "data",
+    } });
+    ctx.popParent(); // frame survives in arena
+    try ctx.resolveDeferredPatches(&enc);
+
+    const out = try enc.finish();
+    defer testing.allocator.free(out);
+    try testing.expectEqual(@as(u8, 0x00), out[0]);
+    try testing.expectEqual(@as(u8, 0x00), out[1]);
+    try testing.expectEqual(@as(u8, 0x00), out[2]);
+    try testing.expectEqual(@as(u8, 0x08), out[3]); // position of data == 8
+}
+
+test "deferred parent_crc32 patch resolves over field range" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
+    defer enc.deinit();
+
+    const parent = try ctx.pushParent();
+    const ph = try enc.placeholderU32();
+    const start = enc.byteOffset();
+    try enc.writeBytes("123456789");
+    try ctx.setRange(parent, "data", start, enc.byteOffset());
+    try ctx.addDeferredPatch(.{ .parent_crc32 = .{
+        .local_offset = ph.offset,
+        .width = .u32,
+        .endianness = .big_endian,
+        .frame = parent,
+        .field_name = "data",
+    } });
+    try ctx.resolveDeferredPatches(&enc);
+
+    const out = try enc.finish();
+    defer testing.allocator.free(out);
+    // CRC32("123456789") == 0xCBF43926, big-endian.
+    try testing.expectEqual(@as(u8, 0xCB), out[0]);
+    try testing.expectEqual(@as(u8, 0xF4), out[1]);
+    try testing.expectEqual(@as(u8, 0x39), out[2]);
+    try testing.expectEqual(@as(u8, 0x26), out[3]);
 }
 
 test "position tracking and selector resolution" {
@@ -389,32 +445,4 @@ test "position tracking and selector resolution" {
     try testing.expectEqual(@as(usize, 12), ctx.getPosition("items", "Label", 0).?);
     try testing.expectEqual(@as(usize, 24), ctx.getPosition("items", "Label", 1).?);
     try testing.expectEqual(@as(usize, 20), ctx.getPosition("items", "Pointer", 0).?);
-}
-
-test "deferred selector_position patch resolves to first matching offset" {
-    var ctx = EncodeContext.init(testing.allocator);
-    defer ctx.deinit();
-    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
-    defer enc.deinit();
-
-    // Reserve a u16 slot, then encode some content, then record positions.
-    const ph = try enc.placeholderU16();
-    try enc.writeBytes(&[_]u8{ 0, 0, 0, 0, 0, 0 });
-    try ctx.recordPosition("arr", "T", 5);
-    try ctx.markArrayDone("arr");
-
-    try ctx.addDeferredPatch(.{ .selector_position = .{
-        .local_offset = ph.offset,
-        .width = .u16,
-        .endianness = .big_endian,
-        .array_name = "arr",
-        .selector = .first,
-        .filter_type = "T",
-    } });
-    try ctx.resolveDeferredPatches(&enc);
-
-    const out = try enc.finish();
-    defer testing.allocator.free(out);
-    try testing.expectEqual(@as(u8, 0x00), out[0]);
-    try testing.expectEqual(@as(u8, 0x05), out[1]);
 }
