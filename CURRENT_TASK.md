@@ -1,3 +1,48 @@
+# Zig Generator — Phase 3 (implementable bulk) complete
+
+> **Latest:** Phase 3 a/b/c + computed_count landed (commits `2ab6ff7`, `fe19083`,
+> `26b040c`, + computed_count). **Mandated trio passes** (from_after_field,
+> position_of-to-a-later-field, `../` parent ref). Zig harness now **174/363
+> suites generate, 403/403 cases pass, 0 errored**; runtime unit tests 15/15.
+>
+> **Key finding — selectors are gated on Phase 4.** Every corpus suite using a
+> `first<T>`/`last<T>`/`corresponding<T>` selector also uses
+> `discriminated_union`/`choice` (selectors filter array elements *by type*,
+> i.e. polymorphic arrays). The selector *runtime* machinery is already built
+> (`context.zig`: `recordPosition`/`bumpTypeIndex`/`selector_position` patches +
+> `resolveDeferredPatches`), but selector *codegen* can't be verified end-to-end
+> until DU/choice exist. So the sound order is **Phase 4 (DU/choice/optional/
+> bitfield/enum) next, then selectors ride on top** — rather than landing
+> unverifiable selector codegen now (violates the tests-first mandate).
+>
+> ### What Phase 3 delivered (all committed, each its own commit)
+> - **3a** same-struct `length_of`/`count_of`/`position_of`/`crc32_of` + `const`
+>   fields (local placeholders + struct-level back-patch via `_field_off_*`).
+> - **3b** cross-struct `../field` refs. Runtime rebuilt to pointer-stable,
+>   arena-allocated `Frame`s (`{length, range}` per field); deferred patches
+>   capture the ancestor frame *pointer* directly (survives pop). Nested Zig
+>   structs share ONE encoder ⇒ offsets are absolute ⇒ no rebasing. `length_of
+>   ../f` resolves synchronously from eagerly-registered frame lengths;
+>   `position_of`/`crc32_of ../f` defer. Gated on `schemaHasParentRefs` so
+>   parent-free schemas keep the lean Phase-2 path.
+> - **3c** `from_after_field` (content-first: temp encoder → measure → varlength
+>   length + splice) + `varlength` field encode/decode (DER/LEB128/EBML/VLQ → u64).
+>   Reference only supports from_after_field on varlength, so fixed-width is a
+>   clean skip.
+> - **computed_count** arrays: no wire prefix; decode recomputes count from
+>   `count_expr` (identifiers→`@as(usize, result.f)`, +/-/* pass through).
+>
+> ### Remaining Phase-3 (deferred behind Phase 4)
+> - Selectors `first<T>`/`last<T>`/`corresponding<T>` (length_of/position_of/
+>   crc32_of). Runtime ready; needs DU/choice arrays to test.
+> - `sum_of_type_sizes` (also DU-array-shaped).
+> - `instances` (random access) — actually Phase 5 per plan; throw message still
+>   says "Phase 3", harmless cosmetic.
+>
+> Everything below documents Phases 1 & 2 (still accurate).
+
+---
+
 # Zig Generator — Phases 1 & 2 complete
 
 Adding Zig as a fifth code-gen target (after TS/Go/Rust/Python). Plan:
