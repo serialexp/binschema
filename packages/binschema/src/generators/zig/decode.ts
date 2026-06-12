@@ -9,6 +9,7 @@ import {
   zigItemType,
   resolveAlias,
   classifyTypeDef,
+  varlengthReadMethod,
 } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 
@@ -51,6 +52,9 @@ export function emitDecodeValue(
     case "string": return emitStringDecode(field, ctx, lhs, structVar, indent);
     case "bytes": return emitBytesDecode(field, ctx, lhs, structVar, indent);
     case "array": return emitArrayDecode(field, ctx, lhs, structVar, indent);
+    case "varlength":
+      // On the wire the varlength prefix is a real field; decode it to u64.
+      return [`${indent}${lhs} = try ${DEC}.${varlengthReadMethod(field)}();`];
     case "optional": throw new ZigNotImplemented("optional fields");
     case "bitfield": throw new ZigNotImplemented("bitfield fields");
     case "discriminated_union": throw new ZigNotImplemented("discriminated_union fields");

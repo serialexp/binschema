@@ -22,7 +22,7 @@ import {
   decodeArgs,
 } from "./context.js";
 import { resetVarCounter, zigFieldName, zigTypeName } from "./naming.js";
-import { zigBitOrder, zigDeclaredType, zigPrimitiveType } from "./types.js";
+import { zigBitOrder, zigDeclaredType, zigPrimitiveType, varlengthWriteMethod } from "./types.js";
 import { generateFieldEncode, emitEncodeValue, ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { generateFieldDecode, emitDecodeValue } from "./decode.js";
 import {
@@ -156,34 +156,47 @@ function generateStructCode(
   lines.push(`    pub fn encodeInto(self: ${typeNameZ}, ${encodeParams()}) ${ERR}!void {`);
   const { posTargets, crcTargets } = computedTargets(fields);
   const encBody: string[] = [];
-  if (framesOn) {
-    encBody.push(`        const _frame = try ${CTX}.pushParent();`);
-    encBody.push(`        defer ${CTX}.popParent();`);
-    // Register fields' length_of values up front so a child's `length_of
-    // ../field` (encoded before the field itself) resolves synchronously.
-    encBody.push(...emitFrameLengthRegistration(fields, emit, "_frame", "        "));
+  const faIdx = fields.findIndex((f: any) => f.computed?.from_after_field);
+  if (faIdx >= 0) {
+    // A `from_after_field` length prefix needs content-first encoding: write the
+    // trailing content to a temp encoder, measure it, then write the varlength
+    // length + the content. Keep this path simple — it can't currently combine
+    // with parent frames or same-struct position/crc targets.
+    if (framesOn || posTargets.size > 0 || crcTargets.size > 0) {
+      throw new ZigNotImplemented("from_after_field combined with parent refs / position / crc");
+    }
+    for (let i = 0; i < faIdx; i++) encBody.push(...generateFieldEncode(fields[i], emit));
+    encBody.push(...emitFromAfterFieldEncode(fields[faIdx], fields.slice(faIdx + 1), emit));
+  } else {
+    if (framesOn) {
+      encBody.push(`        const _frame = try ${CTX}.pushParent();`);
+      encBody.push(`        defer ${CTX}.popParent();`);
+      // Register fields' length_of values up front so a child's `length_of
+      // ../field` (encoded before the field itself) resolves synchronously.
+      encBody.push(...emitFrameLengthRegistration(fields, emit, "_frame", "        "));
+    }
+    for (const field of fields) {
+      const tracked = field.name && (posTargets.has(field.name) || crcTargets.has(field.name));
+      if (tracked) {
+        encBody.push(`        const ${fieldOffVar(field.name)} = ${ENC}.byteOffset();`);
+      }
+      if (framesOn && field.name) {
+        encBody.push(`        const ${frameStartVar(field.name)} = ${ENC}.byteOffset();`);
+      }
+      encBody.push(...generateFieldEncode(field, emit));
+      if (field.name && crcTargets.has(field.name)) {
+        encBody.push(`        const ${fieldEndVar(field.name)} = ${ENC}.byteOffset();`);
+      }
+      if (framesOn && field.name) {
+        // Record the field's encoded byte range so descendants' position_of /
+        // crc32_of `../field` patches can resolve against it.
+        encBody.push(
+          `        try ${CTX}.setRange(_frame, "${field.name}", ${frameStartVar(field.name)}, ${ENC}.byteOffset());`,
+        );
+      }
+    }
+    encBody.push(...emitComputedBackpatch(fields, emit, "        "));
   }
-  for (const field of fields) {
-    const tracked = field.name && (posTargets.has(field.name) || crcTargets.has(field.name));
-    if (tracked) {
-      encBody.push(`        const ${fieldOffVar(field.name)} = ${ENC}.byteOffset();`);
-    }
-    if (framesOn && field.name) {
-      encBody.push(`        const ${frameStartVar(field.name)} = ${ENC}.byteOffset();`);
-    }
-    encBody.push(...generateFieldEncode(field, emit));
-    if (field.name && crcTargets.has(field.name)) {
-      encBody.push(`        const ${fieldEndVar(field.name)} = ${ENC}.byteOffset();`);
-    }
-    if (framesOn && field.name) {
-      // Record the field's encoded byte range so descendants' position_of /
-      // crc32_of `../field` patches can resolve against it.
-      encBody.push(
-        `        try ${CTX}.setRange(_frame, "${field.name}", ${frameStartVar(field.name)}, ${ENC}.byteOffset());`,
-      );
-    }
-  }
-  encBody.push(...emitComputedBackpatch(fields, emit, "        "));
   lines.push(...discardsFor(encBody, [["self", "self"], [CTX, CTX]]));
   lines.push(...encBody);
   lines.push(`    }`);
@@ -209,6 +222,46 @@ function generateStructCode(
   lines.push(`    }`);
 
   lines.push(`};`);
+  return lines;
+}
+
+/**
+ * Content-first encode for a `from_after_field` length prefix. The length field
+ * sits at this position in the wire, but its value is the byte count of all
+ * fields that follow it. We encode that trailing content into a temporary
+ * encoder (borrowing the outer encoder's allocator + bit order), measure it,
+ * then write the varlength length and splice the content into the outer stream.
+ *
+ * Trailing fields must be plain (non-computed): a computed trailing field would
+ * register placeholders/patches against the temp encoder whose offsets don't map
+ * to the outer buffer. Such shapes throw ZigNotImplemented (clean skip).
+ */
+function emitFromAfterFieldEncode(lengthField: any, trailing: any[], emit: EmitCtx, indent = "        "): string[] {
+  if (lengthField.type !== "varlength") {
+    // The reference generator only supports `from_after_field` on varlength
+    // prefixes (content-first sizing). Anything else is an invalid shape.
+    throw new ZigNotImplemented(`from_after_field on non-varlength field '${lengthField.name}'`);
+  }
+  for (const tf of trailing) {
+    if (tf.computed || tf.const !== undefined) {
+      throw new ZigNotImplemented(`from_after_field with computed/const trailing field '${tf.name}'`);
+    }
+  }
+  const tmp = `_fa_enc_${zigFieldName(lengthField.name)}`;
+  const bytesVar = `_fa_bytes_${zigFieldName(lengthField.name)}`;
+  const lines: string[] = [];
+  lines.push(`${indent}var ${tmp} = ${RT}.BitStreamEncoder.init(${ENC}.allocator, ${ENC}.bit_order);`);
+  lines.push(`${indent}defer ${tmp}.deinit();`);
+  for (const tf of trailing) {
+    // Generated trailing-field encode targets the `enc` identifier; redirect it
+    // to the temp encoder. (Trailing fields read their values from `self`.)
+    for (const l of generateFieldEncode(tf, emit, indent)) {
+      lines.push(l.replace(new RegExp(`\\b${ENC}\\b`, "g"), tmp));
+    }
+  }
+  lines.push(`${indent}const ${bytesVar} = ${tmp}.view();`);
+  lines.push(`${indent}try ${ENC}.${varlengthWriteMethod(lengthField)}(@intCast(${bytesVar}.len));`);
+  lines.push(`${indent}try ${ENC}.writeBytes(${bytesVar});`);
   return lines;
 }
 
@@ -240,6 +293,7 @@ function structFieldType(field: any, schema: BinarySchema): string {
 function fieldDefault(field: any): string {
   if (!field.computed && field.const === undefined) return "";
   if (field.type === "bool") return " = false";
+  if (field.type === "varlength") return " = 0";
   const prim = zigPrimitiveType(field);
   if (prim === null) {
     throw new ZigNotImplemented(`default for computed/const non-primitive field '${field.name}'`);

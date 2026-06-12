@@ -127,6 +127,10 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
       return "[]const u8";
     case "array":
       return `[]const ${zigItemType(field.items, schema)}`;
+    case "varlength":
+      // Variable-length integer (DER/LEB128/EBML/VLQ). Stored as u64; the wire
+      // width is determined by the encoding at encode/decode time.
+      return "u64";
     case "optional":
       throw new ZigNotImplemented("optional fields (Phase 4)");
     case "bitfield":
@@ -164,6 +168,40 @@ export function zigItemType(items: any, schema: BinarySchema): string {
   if (items == null) throw new ZigNotImplemented("array without items");
   const field = typeof items === "string" ? { type: items } : items;
   return zigDeclaredType(field, schema);
+}
+
+// ---------------------------------------------------------------------------
+// Variable-length integers (DER / LEB128 / EBML / VLQ)
+// ---------------------------------------------------------------------------
+
+const VARLENGTH_WRITE: Record<string, string> = {
+  der: "writeVarlengthDer",
+  leb128: "writeVarlengthLeb128",
+  ebml: "writeVarlengthEbml",
+  vlq: "writeVarlengthVlq",
+};
+
+const VARLENGTH_READ: Record<string, string> = {
+  der: "readVarlengthDer",
+  leb128: "readVarlengthLeb128",
+  ebml: "readVarlengthEbml",
+  vlq: "readVarlengthVlq",
+};
+
+/** Encoder method for an unsigned varlength field (default DER). */
+export function varlengthWriteMethod(field: any): string {
+  const enc = field.encoding || "der";
+  const m = VARLENGTH_WRITE[enc];
+  if (!m) throw new ZigNotImplemented(`varlength encoding '${enc}' (signed/unknown)`);
+  return m;
+}
+
+/** Decoder method for an unsigned varlength field (default DER). */
+export function varlengthReadMethod(field: any): string {
+  const enc = field.encoding || "der";
+  const m = VARLENGTH_READ[enc];
+  if (!m) throw new ZigNotImplemented(`varlength encoding '${enc}' (signed/unknown)`);
+  return m;
 }
 
 export type { Endianness };

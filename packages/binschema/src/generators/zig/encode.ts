@@ -8,6 +8,7 @@ import {
   zigPrimitiveType,
   resolveAlias,
   classifyTypeDef,
+  varlengthWriteMethod,
 } from "./types.js";
 import { emitComputedEncode } from "./computed.js";
 
@@ -68,6 +69,8 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "string": return emitStringEncode(field, value, ctx, indent);
     case "bytes": return emitBytesEncode(field, value, ctx, indent);
     case "array": return emitArrayEncode(field, value, ctx, indent);
+    case "varlength":
+      return [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${value}));`];
     case "optional": throw new ZigNotImplemented("optional fields");
     case "bitfield": throw new ZigNotImplemented("bitfield fields");
     case "discriminated_union": throw new ZigNotImplemented("discriminated_union fields");
