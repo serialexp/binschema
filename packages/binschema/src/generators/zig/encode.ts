@@ -179,6 +179,10 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
 
   // Type reference: resolve alias chains and dispatch on the concrete shape.
   const resolved = resolveAlias(ctx.schema, field.type);
+  // Bare alias to a primitive (e.g. `Uint8 -> uint8`): encode as that primitive,
+  // carrying the referencing field's endianness.
+  const primAlias = zigPrimitiveType(resolved);
+  if (primAlias !== null) return emitPrimitiveEncode(resolved, value, e, indent);
   const cls = classifyTypeDef(resolved);
   switch (cls) {
     case "struct":

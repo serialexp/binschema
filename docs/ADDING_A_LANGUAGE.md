@@ -304,13 +304,16 @@ type — e.g. a DNS payload struct (`DnsQuery`) whose `questions` array is
 `length_field: "qdcount"`, where `qdcount` lives in the outer `DnsFrame` header —
 is resolved on decode through the same threaded `root` pointer that `_root.` uses
 (`schemaHasAncestorFieldRefs` turns root threading on; `siblingRef` casts the
-pointer to the entry type). This closed `dns_protocol_query`/`_response`. Still
-pending: `pcf_full` (an unresolved field type) and `optional_builtin_bit` (1
-suite, a documented bit/byte-overlap runtime quirk the byte-oriented Zig runtime
-does not replicate).
+pointer to the entry type). This closed `dns_protocol_query`/`_response`. The
+`pcf_full` PCF-font suite now lands too: a bare alias to a *primitive*
+(`Uint8 -> uint8`, not to another named type) is resolved at every site
+(`zigDeclaredType`, encode/decode type-ref dispatch, and the harness value
+builder) by checking `zigPrimitiveType` on the resolved def. Only
+`optional_builtin_bit` remains (1 suite, a documented bit/byte-overlap runtime
+quirk the byte-oriented Zig runtime does not replicate).
 
-**Latest harness numbers:** 352/354 codegen suites generate (+12 validation-only,
-not codegen targets), 822/822 cases pass, 0 errored, 0 failed; runtime unit tests
+**Latest harness numbers:** 353/354 codegen suites generate (+12 validation-only,
+not codegen targets), 832/832 cases pass, 0 errored, 0 failed; runtime unit tests
 28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---

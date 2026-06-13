@@ -200,6 +200,10 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
 
   // Type reference: resolve through alias chains.
   const resolved = resolveAlias(schema, field.type);
+  // Bare alias to a primitive (e.g. `Uint8 -> uint8`): its declared type is the
+  // primitive's Zig type.
+  const primAlias = zigPrimitiveType(resolved);
+  if (primAlias !== null) return primAlias;
   const cls = classifyTypeDef(resolved);
   switch (cls) {
     case "struct":

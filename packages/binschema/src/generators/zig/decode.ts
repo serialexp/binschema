@@ -151,6 +151,10 @@ export function emitDecodeValue(
   }
 
   const resolved = resolveAlias(ctx.schema, field.type);
+  // Bare alias to a primitive (e.g. `Uint8 -> uint8`): decode as that primitive,
+  // carrying the referencing field's endianness.
+  const primAlias = zigPrimitiveType(resolved);
+  if (primAlias !== null) return emitPrimitiveDecode(resolved, lhs, e, indent);
   const cls = classifyTypeDef(resolved);
   switch (cls) {
     case "struct":

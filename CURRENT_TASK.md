@@ -1,6 +1,14 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** eighteen slices landed. Most recent —
+> **Latest (Phase 5, in progress):** nineteen slices landed. Most recent —
+> **primitive-alias resolution** (closed `pcf_full`). A bare alias whose terminal
+> type is a *primitive* (`Uint8 -> uint8`, not another named struct/enum) is now
+> resolved at every site: `zigDeclaredType`, the encode/decode type-ref dispatch,
+> and the harness value builder all check `zigPrimitiveType(resolveAlias(...))` and
+> emit the primitive directly instead of throwing "unresolved field type". Harness
+> **353/354 · 832/832**, 0 errored/0 failed, TS 1192. Only `optional_builtin_bit`
+> remains (a bit/byte-overlap quirk the byte-oriented Zig runtime does not
+> replicate). Before that —
 > **bare ancestor-scope field refs** (closed `dns_protocol_query`/`_response`).
 > A non-local `length_field`/`count_field` that names a field of the entry (root)
 > type — DNS `DnsQuery.questions` is `length_field: "qdcount"`, where `qdcount`

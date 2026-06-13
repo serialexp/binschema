@@ -17,6 +17,7 @@
 //   ZIG_TEST_FILTER  substring filter on suite name
 //   ZIG_TEST_REPORT  "" | summary | failing-tests | json
 //   DEBUG_GENERATED  dir to keep generated sources (else tmp-zig is reused/cleaned)
+//   DEBUG_CONSTRUCT  log why a test value was not constructible (construct-skip)
 
 import { readdirSync, statSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -246,6 +247,8 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
 
   // Type reference.
   const resolved = resolveAlias(schema, field.type);
+  // Bare alias to a primitive (e.g. `Uint8 -> uint8`): build the primitive value.
+  if (zigPrimitiveType(resolved) !== null) return valueExpr(resolved, value, schema, alias);
   const cls = classifyTypeDef(resolved);
   switch (cls) {
     case "string": return stringValue(value);
@@ -454,7 +457,8 @@ function main() {
         let expectedExpr: string;
         try {
           expectedExpr = structValueExpr(alias, suite, tc.decoded_value ?? tc.value);
-        } catch {
+        } catch (e:any) {
+          if (process.env.DEBUG_CONSTRUCT) console.error(`CONSTRUCT-SKIP(inst) ${suite.name}#${ci}: ${e?.message}\n${e?.stack?.split("\n").slice(1,5).join("\n")}`);
           constructSkips++;
           continue;
         }
@@ -491,7 +495,8 @@ function main() {
           decodeCall = `${alias}.decode${tn}(arena.allocator(), bytes)`;
           reencodeCall = `${alias}.encode${tn}(decoded, a)`;
         }
-      } catch {
+      } catch (e:any) {
+        if (process.env.DEBUG_CONSTRUCT) console.error(`CONSTRUCT-SKIP ${suite.name}#${ci}: ${e?.message}\n${e?.stack?.split("\n").slice(1,4).join("\n")}`);
         constructSkips++;
         continue; // value shape not yet constructible by the harness
       }
