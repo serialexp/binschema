@@ -140,9 +140,10 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
     case "array":
       return `[]const ${zigItemType(field.items, schema)}`;
     case "varlength":
-      // Variable-length integer (DER/LEB128/EBML/VLQ). Stored as u64; the wire
-      // width is determined by the encoding at encode/decode time.
-      return "u64";
+      // Variable-length integer. Unsigned encodings (DER/LEB128/EBML/VLQ) store
+      // u64; signed encodings (zigzag/SLEB128) store i64. The wire width is
+      // determined by the encoding at encode/decode time.
+      return varlengthIsSigned(field) ? "i64" : "u64";
     case "optional":
       return zigOptionalType(field, schema);
     case "bitfield":
@@ -286,6 +287,8 @@ const VARLENGTH_WRITE: Record<string, string> = {
   leb128: "writeVarlengthLeb128",
   ebml: "writeVarlengthEbml",
   vlq: "writeVarlengthVlq",
+  zigzag: "writeVarlengthZigzag",
+  leb128_signed: "writeVarlengthSleb128",
 };
 
 const VARLENGTH_READ: Record<string, string> = {
@@ -293,21 +296,31 @@ const VARLENGTH_READ: Record<string, string> = {
   leb128: "readVarlengthLeb128",
   ebml: "readVarlengthEbml",
   vlq: "readVarlengthVlq",
+  zigzag: "readVarlengthZigzag",
+  leb128_signed: "readVarlengthSleb128",
 };
 
-/** Encoder method for an unsigned varlength field (default DER). */
+/** Signed varlength encodings store/return i64; unsigned ones store/return u64. */
+const VARLENGTH_SIGNED = new Set(["zigzag", "leb128_signed"]);
+
+/** Whether a varlength field uses a signed encoding (zigzag / SLEB128). */
+export function varlengthIsSigned(field: any): boolean {
+  return VARLENGTH_SIGNED.has(field.encoding);
+}
+
+/** Encoder method for a varlength field (default DER). */
 export function varlengthWriteMethod(field: any): string {
   const enc = field.encoding || "der";
   const m = VARLENGTH_WRITE[enc];
-  if (!m) throw new ZigNotImplemented(`varlength encoding '${enc}' (signed/unknown)`);
+  if (!m) throw new ZigNotImplemented(`varlength encoding '${enc}' (unknown)`);
   return m;
 }
 
-/** Decoder method for an unsigned varlength field (default DER). */
+/** Decoder method for a varlength field (default DER). */
 export function varlengthReadMethod(field: any): string {
   const enc = field.encoding || "der";
   const m = VARLENGTH_READ[enc];
-  if (!m) throw new ZigNotImplemented(`varlength encoding '${enc}' (signed/unknown)`);
+  if (!m) throw new ZigNotImplemented(`varlength encoding '${enc}' (unknown)`);
   return m;
 }
 

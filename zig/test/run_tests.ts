@@ -31,6 +31,7 @@ import {
   zigPrimitiveType,
   resolveAlias,
   classifyTypeDef,
+  varlengthIsSigned,
 } from "../../packages/binschema/src/generators/zig/types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -157,6 +158,7 @@ function zigValueType(field: any, schema: any, alias: string): string {
     case "array": return `[]const ${zigValueType(itemField(field.items), schema, alias)}`;
     case "bitfield": return bitfieldType(field);
     case "optional": return `?${zigValueType(optionalInner(field), schema, alias)}`;
+    case "varlength": return varlengthIsSigned(field) ? "i64" : "u64";
     case "choice": case "discriminated_union": return `${alias}.${unionTypeName(field)}`;
   }
   const resolved = resolveAlias(schema, field.type);
@@ -212,6 +214,9 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
   if (field.type === "bytes") return bytesValue(value);
   if (field.type === "array") return arrayValue(field.items, value, schema, alias);
   if (field.type === "bitfield") return bitfieldValue(field, value);
+  // varlength: a plain integer (signed for zigzag/SLEB128, else unsigned). The
+  // literal coerces to the declared i64/u64 field type.
+  if (field.type === "varlength") return intLiteral(value);
   if (field.type === "optional") {
     if (value == null) return "null";
     return valueExpr(optionalInner(field), value, schema, alias);
