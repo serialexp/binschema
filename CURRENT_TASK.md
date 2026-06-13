@@ -1,6 +1,24 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** fifteen slices landed. Most recent —
+> **Latest (Phase 5, in progress):** sixteen slices landed. Most recent —
+> **DNS label compression** (`back_reference` + non-struct DU variants). A union
+> arm may now be a `string`/`bytes` or a `back_reference` (carried as
+> `[]const u8`), not just a struct — `union.ts` classifies each variant and
+> dispatches per-arm encode/decode. `compression.ts` gained real
+> `emitBackReferenceEncode`/`Decode`: encode looks up the label text in the
+> runtime `compression_dict` and emits a `topBits | (offset & mask)` pointer when
+> present, else registers `absolute_byte_offset + enc.byteOffset()` and writes a
+> literal; decode masks the offset, `pushPosition`/`seek`/decode-target/`popPosition`.
+> Literal labels in a union that has a pointer variant register their own offset
+> first. `encode.ts`/`decode.ts` gained `null_terminated` + `terminal_variants`
+> array framing (terminal arm ends the chain with no trailing 0). Also fixed
+> `translateWhen` to quote-check the author's raw `when` (not the discExpr-
+> substituted form — a keyword field like `type` escapes to `@"type"`, whose
+> quotes were falsely tripping the string-literal guard). All 13 DNS-compression
+> suites generate; harness **343/354 · 805/805**, 0 errored/0 failed, TS 1192.
+> A cross-struct guard in `decode.ts siblingRef` cleanly skips a bare ancestor-
+> scope ref (`dns_protocol_query`/`_response`'s `qdcount`) — that's the deferred
+> parent-stack bucket, not compression. Before that —
 > **`_root.` cross-struct decode refs** (`computed.ts` `schemaUsesRootDecode` +
 > `context.ts`/`index.ts`/`decode.ts`: when any `length_field`/`count_field`
 > reads `_root.a.b`, every `decodeWith` seeds a `root: ?*const anyopaque` —
@@ -21,14 +39,16 @@
 > `_root.` slice above then unblocked the remaining elf/zip suites.
 >
 > **Phase 5 still pending — large structural buckets** (pick via
-> `ZIG_TEST_REPORT=skips`, run from project root): DU variants that aren't structs
-> + `back_reference` for DNS label pointers (needs a runtime compression
-> dictionary, ~13 suites), `../` parent-stack decode references (distinct from the
-> `_root.` mechanism — walks up N parent scopes; needed for the kerberos bucket),
-> kerberos SEQUENCE types (varlength measure-then-patch + `from_after_field` with
-> parent refs, ~7), `pcf_full` (unresolved field type, 1), `optional_builtin_bit`
-> (1 suite — a documented bit/byte-overlap runtime quirk the byte-oriented Zig
-> runtime does not replicate).
+> `ZIG_TEST_REPORT=skips`, run from project root): `../` parent-stack decode
+> references + bare ancestor-scope field refs (distinct from the `_root.`
+> mechanism — walks up N parent scopes; surfaces in `dns_protocol_query`/`_response`
+> where a payload array's length references the outer header's `qdcount`, and in
+> the kerberos bucket — 2 dns + needed for kerberos), kerberos SEQUENCE types
+> (varlength measure-then-patch + `from_after_field` with parent refs, ~7),
+> `pcf_full` (unresolved field type, 1), `optional_builtin_bit` (1 suite — a
+> documented bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not
+> replicate). DNS label compression (`back_reference` + non-struct DU variants,
+> 13 suites) is **DONE** — see the latest slice above.
 >
 > ---
 >

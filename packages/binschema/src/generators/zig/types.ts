@@ -62,6 +62,7 @@ export type TypeClass =
   | "enum"
   | "discriminated_union"
   | "choice"
+  | "back_reference"
   | "unknown";
 
 /**
@@ -104,6 +105,7 @@ export function classifyTypeDef(typeDef: any): TypeClass {
     case "array": return "array";
     case "discriminated_union": return "discriminated_union";
     case "choice": return "choice";
+    case "back_reference": return "back_reference";
   }
   if (Array.isArray(typeDef.values) || typeDef.repr) return "enum";
   return "unknown";
@@ -158,6 +160,11 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
       const inner = typeof vt === "object" ? vt : { type: vt };
       return zigDeclaredType(inner, schema);
     }
+    case "back_reference":
+      // A back_reference (DNS-style pointer) is transparent: its logical value is
+      // whatever the referenced `target_type` decodes to. The pointer framing is
+      // consumed, not stored.
+      return zigDeclaredType({ type: field.target_type }, schema);
   }
 
   // Type reference: resolve through alias chains.
@@ -179,6 +186,9 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
       // Named DU/choice types are resolved inline to an anonymous union at each
       // field site (they have no standalone Zig representation).
       return zigUnionType(resolved, schema);
+    case "back_reference":
+      // Transparent pointer: declared type is the referenced target_type's.
+      return zigDeclaredType({ type: resolved.target_type }, schema);
     default:
       throw new ZigNotImplemented(`unresolved field type '${field.type}'`);
   }

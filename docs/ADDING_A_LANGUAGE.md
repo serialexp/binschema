@@ -279,18 +279,25 @@ struct's `decodeWith` seeds a `root: ?*const anyopaque` — `root_in orelse
 to nested decoders; a descendant resolves `_root.a.b` by casting the pointer back
 to the entry type `@as(*const Root, @ptrCast(@alignCast(root.?))).a.b`. Schemas
 without any `_root` ref keep the lean param-named-`root` path untouched. This
-unblocked the 3 elf/zip instance suites). Still pending (all large structural
-buckets): compression/back-reference for DNS label pointers (`back_reference`
-type + a runtime compression dictionary; gates DU variants that aren't structs,
-~13 suites), `../` parent-stack decode references (a different mechanism from
-`_root.` — walks up N parent scopes; none currently in the skip set but needed
-for the kerberos bucket), kerberos SEQUENCE types (varlength measure-then-patch +
-`from_after_field` with parent refs, ~7 suites), and `optional_builtin_bit`
-(1 suite, a documented bit/byte-overlap runtime quirk the byte-oriented Zig
-runtime does not replicate).
+unblocked the 3 elf/zip instance suites). DNS label compression now lands too:
+`back_reference` pointers (encode emits a pointer to a label's recorded offset
+via the runtime `compression_dict`, or registers + writes a literal on first
+sight; decode masks the offset, `seek`s, decodes the target, restores position),
+non-struct DU variants (a union arm may be a `string`/`bytes` or a
+`back_reference`, carried as `[]const u8`, not just a struct), and the
+`null_terminated` + `terminal_variants` array framing (a terminal arm ends the
+chain with no trailing 0 byte). All 13 DNS-compression suites generate. Still
+pending (all large structural buckets): `../` parent-stack decode references and
+bare ancestor-scope field refs (a different mechanism from `_root.` — walks up N
+parent scopes; surfaces in `dns_protocol_query`/`_response`, where a payload
+struct's array length references the outer header's `qdcount`, and in the
+kerberos bucket), kerberos SEQUENCE types (varlength measure-then-patch +
+`from_after_field` with parent refs, ~7 suites), `pcf_full` (an unresolved field
+type), and `optional_builtin_bit` (1 suite, a documented bit/byte-overlap runtime
+quirk the byte-oriented Zig runtime does not replicate).
 
-**Latest harness numbers:** 332/354 codegen suites generate (+12 validation-only,
-not codegen targets), 789/789 cases pass, 0 errored, 0 failed; runtime unit tests
+**Latest harness numbers:** 343/354 codegen suites generate (+12 validation-only,
+not codegen targets), 805/805 cases pass, 0 errored, 0 failed; runtime unit tests
 28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---

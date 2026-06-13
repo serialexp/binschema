@@ -1,11 +1,12 @@
 // ABOUTME: `compressed` wire-transform region emission for Zig (store/deflate/gzip).
-// ABOUTME: Back-reference / DNS-style label compression is still a later Phase-5 home.
+// ABOUTME: Plus back_reference / DNS-style label compression pointers (encode + decode).
 
 import type { BinarySchema } from "../../schema/binary-schema.js";
-import { RT, ENC, DEC, ALLOC, ERR } from "./context.js";
+import { RT, ENC, CTX, DEC, ALLOC, ERR } from "./context.js";
 import { zigTypeName, uniqueVar } from "./naming.js";
 import { zigEndianness, resolveAlias, classifyTypeDef } from "./types.js";
-import { ZigNotImplemented, type EmitCtx } from "./encode.js";
+import { ZigNotImplemented, emitEncodeValue, type EmitCtx } from "./encode.js";
+import { emitDecodeValue } from "./decode.js";
 
 export function schemaUsesCompression(schema: any): boolean {
   // Mirrors python.ts schemaUsesCompression: scan for compressed/back_reference shapes.
@@ -124,10 +125,85 @@ export function emitCompressedDecode(field: any, ctx: EmitCtx, lhs: string, inde
   ];
 }
 
-export function generateCompressedEncode(_field: any, _ctx: any): string[] {
-  throw new ZigNotImplemented("back_reference encode (Phase 5)");
+// ---------------------------------------------------------------------------
+// Back-references (DNS-style label compression pointers)
+// ---------------------------------------------------------------------------
+
+interface BackRef {
+  storage: string; // "uint16"
+  endianness?: string;
+  mask: number; // low bits that hold the offset, e.g. 0x3FFF
+  topBits: number; // the marker bits the offset is OR'd under, e.g. 0xC000
+  offsetFrom: string; // "message_start"
+  targetType: string; // the type a pointer dereferences to (a string/bytes)
 }
 
-export function generateCompressedDecode(_field: any, _ctx: any): string[] {
-  throw new ZigNotImplemented("back_reference decode (Phase 5)");
+/**
+ * Parse a `back_reference` typeDef into the concrete framing a DNS-style pointer
+ * needs. Scope: a fixed-width unsigned `storage` int, an `offset_mask` (the low
+ * bits that carry the offset, the complement being the marker bits), an absolute
+ * `message_start` offset, and a string/bytes `target_type`. Anything outside that
+ * throws a clean `ZigNotImplemented` so the gap stays visible.
+ */
+function parseBackRef(def: any): BackRef {
+  const storage = def.storage || "uint16";
+  const storageBits: Record<string, number> = { uint8: 8, uint16: 16, uint32: 32 };
+  const bits = storageBits[storage];
+  if (!bits) throw new ZigNotImplemented(`back_reference storage '${storage}'`);
+  const full = bits === 32 ? 0xffffffff : (1 << bits) - 1;
+  const mask = typeof def.offset_mask === "string"
+    ? parseInt(def.offset_mask, 16)
+    : (def.offset_mask ?? full);
+  const topBits = full & ~mask;
+  const offsetFrom = def.offset_from || "message_start";
+  if (offsetFrom !== "message_start") {
+    throw new ZigNotImplemented(`back_reference offset_from '${offsetFrom}' (message_start only)`);
+  }
+  if (typeof def.target_type !== "string") {
+    throw new ZigNotImplemented("back_reference inline target_type (named type only)");
+  }
+  return { storage, endianness: def.endianness, mask, topBits, offsetFrom, targetType: def.target_type };
+}
+
+/**
+ * Encode a back_reference value (the target's logical value, e.g. a label's
+ * text). If that value was already encoded somewhere earlier in this message,
+ * emit a pointer (`topBits | (offset & mask)`) to its recorded offset. Otherwise
+ * register the current offset under it and encode the target inline as a literal
+ * — the standard DNS "first occurrence is literal, later ones compress" rule.
+ */
+export function emitBackReferenceEncode(def: any, value: string, ctx: EmitCtx, indent: string): string[] {
+  const br = parseBackRef(def);
+  const e = zigEndianness(br.endianness, ctx.endianness);
+  const off = uniqueVar("_bref_off");
+  return [
+    `${indent}if (${CTX}.compressionLookup(${value})) |${off}| {`,
+    sizeWrite(br.storage, `(${br.topBits} | (${off} & ${br.mask}))`, e, indent + "    "),
+    `${indent}} else {`,
+    `${indent}    try ${CTX}.compressionInsert(${value}, ${CTX}.absolute_byte_offset + ${ENC}.byteOffset());`,
+    ...emitEncodeValue({ type: br.targetType }, value, ctx, indent + "    "),
+    `${indent}}`,
+  ];
+}
+
+/**
+ * Decode a back_reference: read the pointer, mask off the marker bits to get the
+ * absolute offset, seek there (saving/restoring the read position), and decode
+ * the `target_type` over the pointed-at bytes into `lhs`.
+ */
+export function emitBackReferenceDecode(
+  def: any, ctx: EmitCtx, lhs: string, structVar: string, indent: string,
+): string[] {
+  const br = parseBackRef(def);
+  const e = zigEndianness(br.endianness, ctx.endianness);
+  const raw = uniqueVar("_bref_raw");
+  const off = uniqueVar("_bref_off");
+  return [
+    sizeRead(br.storage, raw, e, indent),
+    `${indent}const ${off}: usize = @as(usize, ${raw}) & ${br.mask};`,
+    `${indent}try ${DEC}.pushPosition();`,
+    `${indent}try ${DEC}.seek(${off});`,
+    ...emitDecodeValue({ type: br.targetType }, ctx, lhs, structVar, indent),
+    `${indent}try ${DEC}.popPosition();`,
+  ];
 }

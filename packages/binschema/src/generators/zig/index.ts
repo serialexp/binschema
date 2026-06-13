@@ -123,7 +123,9 @@ export function generateZig(
       // top-level entry point (e.g. a DNS Label encoded on its own).
       lines.push(...generateAliasFunctions(name, typeDef as any, schema, defaultEndianness, defaultBitOrder));
     } else if ((typeDef as any).type === "back_reference") {
-      throw new ZigNotImplemented(`back_reference type '${name}' (Phase 5)`);
+      // A named back_reference (e.g. DNS `LabelPointer`) has no standalone Zig
+      // type: it is only ever referenced as a discriminated_union variant, where
+      // its pointer encode/decode is inlined (see union.ts + compression.ts).
     }
     lines.push(``);
   }

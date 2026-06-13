@@ -241,11 +241,11 @@ function emitStringDecode(field: any, ctx: EmitCtx, lhs: string, structVar: stri
     return lines;
   }
   if (kind === "field_referenced" && field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
     return lines;
   }
   if (field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
     return lines;
   }
   // Greedy: consume the rest of the buffer.
@@ -331,7 +331,7 @@ function emitTranscodedStringDecode(
 
   if (field.length_field) {
     const raw = uniqueVar("_raw");
-    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
+    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
     lines.push(transcode(raw));
     return lines;
   }
@@ -364,7 +364,7 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
   if (kind === "field_referenced" && field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
     return lines;
   }
   if (field.length !== undefined) {
@@ -372,7 +372,7 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
   if (field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
     return lines;
   }
   const rem = uniqueVar("_rem");
@@ -457,11 +457,13 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
   }
 
   // null_terminated: read items until a terminator byte is peeked (and consumed).
+  // With `terminal_variants` (DNS label pointers), a decoded item whose active
+  // tag is terminal also ends the chain — but with no trailing terminator byte
+  // (the pointer is itself the end). The leading peek still guards against
+  // mis-decoding a 0x00 terminator as a zero-length item.
   if (kind === "null_terminated") {
-    if (field.terminal_variants?.length) {
-      throw new ZigNotImplemented("null_terminated array with terminal_variants");
-    }
     const term = field.terminator !== undefined ? field.terminator : 0;
+    const terminals: string[] = field.terminal_variants || [];
     lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
     lines.push(`${indent}while (true) {`);
     lines.push(`${indent}    if (!${DEC}.hasMore()) break;`);
@@ -472,6 +474,12 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     lines.push(`${indent}    var ${item}: ${itemType} = undefined;`);
     lines.push(...emitDecodeValue(itemField, ctx, item, structVar, indent + "    "));
     lines.push(`${indent}    try ${list}.append(${ALLOC}, ${item});`);
+    if (terminals.length > 0) {
+      lines.push(`${indent}    switch (${item}) {`);
+      for (const t of terminals) lines.push(`${indent}        .${zigTypeName(t)} => break,`);
+      lines.push(`${indent}        else => {},`);
+      lines.push(`${indent}    }`);
+    }
     lines.push(`${indent}}`);
     lines.push(`${indent}${lhs} = try ${list}.toOwnedSlice(${ALLOC});`);
     return lines;
@@ -549,7 +557,7 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
     countExpr = `@as(usize, ${lenVar})`;
   } else if (kind === "field_referenced" && (field.length_field || field.count_field)) {
-    countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar, ctx.rootTypeName)}))`;
+    countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar, ctx.rootTypeName, ctx.fields)}))`;
   } else if (kind === "computed_count" && field.count_expr) {
     countExpr = translateCountExpr(field.count_expr, structVar);
   } else {
@@ -631,7 +639,7 @@ function translateCountExpr(expr: string, structVar: string): string {
   return `@as(usize, ${translated})`;
 }
 
-function siblingRef(fieldRef: string, structVar: string, rootTypeName?: string): string {
+function siblingRef(fieldRef: string, structVar: string, rootTypeName?: string, localFields?: any[]): string {
   if (fieldRef.startsWith("_root")) {
     // `_root.a.b` → read field `a.b` on the decoded entry struct. The threaded
     // `root` pointer is `?*const anyopaque`; cast it back to the entry type. The
@@ -649,6 +657,19 @@ function siblingRef(fieldRef: string, structVar: string, rootTypeName?: string):
     throw new ZigNotImplemented(`parent field reference '${fieldRef}' (cross-struct)`);
   }
   const segs = fieldRef.split(".").map((s) => zigFieldName(s));
+  // Cross-struct guard: a bare reference whose first segment is not a field of the
+  // struct being decoded resolves against an ancestor scope (a header field in an
+  // outer message, e.g. DNS `qdcount`). That needs the parent-stack feature, which
+  // is deferred — skip the suite cleanly rather than emit a reference to a missing
+  // field (which would fail to compile and break the whole batch).
+  if (localFields && localFields.length > 0) {
+    const have = new Set(
+      localFields.filter((f: any) => f && f.name).map((f: any) => zigFieldName(f.name)),
+    );
+    if (!have.has(segs[0])) {
+      throw new ZigNotImplemented(`cross-struct field reference '${fieldRef}' (ancestor scope)`);
+    }
+  }
   return `${structVar}.${segs.join(".")}`;
 }
 

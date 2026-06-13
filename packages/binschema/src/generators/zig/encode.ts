@@ -2,7 +2,7 @@
 // ABOUTME: Phase 2: primitives, bit fields, strings, bytes, byte-aligned arrays, struct refs.
 
 import { RT, ENC, CTX } from "./context.js";
-import { zigFieldName, uniqueVar } from "./naming.js";
+import { zigFieldName, zigTypeName, uniqueVar } from "./naming.js";
 import {
   zigEndianness,
   zigPrimitiveType,
@@ -168,7 +168,7 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
       return [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${value}));`];
     case "optional": return emitOptionalEncode(field, value, ctx, indent, emitEncodeValue);
     case "bitfield": return emitBitfieldEncode(field, value, indent);
-    case "discriminated_union": return emitDuEncode(field, value, indent);
+    case "discriminated_union": return emitDuEncode(field, value, ctx, indent);
     case "choice": return emitChoiceEncode(field, value, indent);
     case "compressed": return emitCompressedEncode(field, value, ctx, indent);
   }
@@ -188,7 +188,7 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "enum":
       return emitEnumEncode(resolved, value, field.endianness, ctx.endianness, indent);
     case "discriminated_union":
-      return emitDuEncode(resolved, value, indent);
+      return emitDuEncode(resolved, value, ctx, indent);
     case "choice":
       return emitChoiceEncode(resolved, value, indent);
     default:
@@ -427,18 +427,26 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
 
   const itemEncode = emitEncodeValue(itemField, itemVar, ctx, indent + "    ");
 
-  // null_terminated: write every item, then a terminator byte. (`terminal_variants`
-  // — where the chain ends implicitly on a terminal union arm, e.g. DNS label
-  // pointers — needs union arrays and is handled with that bucket.)
+  // null_terminated: write every item, then a terminator byte. With
+  // `terminal_variants` (DNS label pointers), the chain may instead end
+  // implicitly on a terminal union arm: write the terminator ONLY when the array
+  // is empty or its last element's active tag is not a terminal variant.
   if (kind === "null_terminated") {
-    if (field.terminal_variants?.length) {
-      throw new ZigNotImplemented("null_terminated array with terminal_variants");
-    }
     const term = field.terminator !== undefined ? field.terminator : 0;
+    const terminals: string[] = field.terminal_variants || [];
     lines.push(`${indent}for (${value}) |${itemVar}| {`);
     lines.push(...itemEncode);
     lines.push(`${indent}}`);
-    lines.push(`${indent}try ${ENC}.writeUint8(${term});`);
+    if (terminals.length === 0) {
+      lines.push(`${indent}try ${ENC}.writeUint8(${term});`);
+    } else {
+      lines.push(`${indent}if (${value}.len == 0) {`);
+      lines.push(`${indent}    try ${ENC}.writeUint8(${term});`);
+      lines.push(`${indent}} else switch (${value}[${value}.len - 1]) {`);
+      for (const t of terminals) lines.push(`${indent}    .${zigTypeName(t)} => {},`);
+      lines.push(`${indent}    else => try ${ENC}.writeUint8(${term}),`);
+      lines.push(`${indent}}`);
+    }
     return lines;
   }
 

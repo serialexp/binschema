@@ -7,7 +7,9 @@
 import { RT, ENC, DEC, CTX, ALLOC, ROOT } from "./context.js";
 import { zigTypeName, zigFieldName, uniqueVar } from "./naming.js";
 import { zigEndianness, resolveAlias, classifyTypeDef } from "./types.js";
-import { ZigNotImplemented, type EmitCtx } from "./encode.js";
+import { ZigNotImplemented, emitEncodeValue, type EmitCtx } from "./encode.js";
+import { emitDecodeValue } from "./decode.js";
+import { emitBackReferenceEncode, emitBackReferenceDecode } from "./compression.js";
 
 // ---------------------------------------------------------------------------
 // Shared: union type + variant resolution
@@ -19,13 +21,48 @@ function variantTypeNames(field: any): string[] {
   return (field.variants || []).map((v: any) => v.type);
 }
 
-/** Require every variant to resolve to a struct; return its Pascal Zig type. */
-function variantArmType(variantType: string, schema: any): string {
+type VariantKind = "struct" | "string" | "back_reference";
+
+interface VariantInfo {
+  kind: VariantKind;
+  /** The Zig payload type carried by this arm. */
+  armType: string;
+  /** The resolved typeDef (struct/string/bytes def, or the back_reference def). */
+  def: any;
+}
+
+/**
+ * Classify a union variant by its resolved shape. Most variants are structs
+ * (their own `encodeInto`/`decodeWith`), but DNS-style compression introduces
+ * two non-struct shapes used as union arms: a `string`/`bytes` (carried as
+ * `[]const u8`) and a `back_reference` pointer (transparent — its payload is its
+ * `target_type`'s value, also `[]const u8` for the DNS corpus). Non-string
+ * back_reference targets are out of scope for now (clean throw).
+ */
+function classifyVariant(variantType: string, schema: any): VariantInfo {
   const resolved = resolveAlias(schema, variantType);
-  if (classifyTypeDef(resolved) !== "struct") {
-    throw new ZigNotImplemented(`union variant '${variantType}' is not a struct`);
+  const cls = classifyTypeDef(resolved);
+  if (cls === "struct") return { kind: "struct", armType: zigTypeName(variantType), def: resolved };
+  if (cls === "string" || cls === "bytes") return { kind: "string", armType: "[]const u8", def: resolved };
+  if (cls === "back_reference") {
+    const target = resolved.target_type;
+    const tCls = classifyTypeDef(resolveAlias(schema, target));
+    if (tCls !== "string" && tCls !== "bytes") {
+      throw new ZigNotImplemented(`back_reference target '${target}' (string/bytes only)`);
+    }
+    return { kind: "back_reference", armType: "[]const u8", def: resolved };
   }
-  return zigTypeName(variantType);
+  throw new ZigNotImplemented(`union variant '${variantType}' is not a struct/string/back_reference`);
+}
+
+/** The Zig payload type for a union variant. */
+function variantArmType(variantType: string, schema: any): string {
+  return classifyVariant(variantType, schema).armType;
+}
+
+/** True if any variant of this union is a back_reference (enables label dict). */
+function hasBackRefVariant(field: any, schema: any): boolean {
+  return variantTypeNames(field).some((n) => classifyVariant(n, schema).kind === "back_reference");
 }
 
 /**
@@ -209,16 +246,35 @@ export function emitChoiceDecode(field: any, ctx: EmitCtx, lhs: string, indent: 
 // discriminated_union
 // ---------------------------------------------------------------------------
 
-export function emitDuEncode(field: any, value: string, indent: string): string[] {
+export function emitDuEncode(field: any, value: string, ctx: EmitCtx, indent: string): string[] {
   // The DU never writes its own discriminator under current schemas (the
   // discriminator is either a sibling field written by the parent, or part of
   // the variant's own bytes for peek-based). Encode = encode the active variant.
   const names = variantTypeNames(field);
+  const hasBackRef = hasBackRefVariant(field, ctx.schema);
   const lines: string[] = [];
   lines.push(`${indent}switch (${value}) {`);
   for (const n of names) {
+    const info = classifyVariant(n, ctx.schema);
     const v = uniqueVar("_uv");
-    lines.push(`${indent}    .${zigTypeName(n)} => |${v}| try ${v}.encodeInto(${ENC}, ${CTX}),`);
+    if (info.kind === "struct") {
+      lines.push(`${indent}    .${zigTypeName(n)} => |${v}| try ${v}.encodeInto(${ENC}, ${CTX}),`);
+    } else if (info.kind === "string") {
+      // A literal label. When this union also has a pointer variant, register the
+      // label's offset (the byte where its length prefix lands) so a later pointer
+      // can compress to it, then encode the string with its normal framing.
+      lines.push(`${indent}    .${zigTypeName(n)} => |${v}| {`);
+      if (hasBackRef) {
+        lines.push(`${indent}        try ${CTX}.compressionInsert(${v}, ${CTX}.absolute_byte_offset + ${ENC}.byteOffset());`);
+      }
+      lines.push(...emitEncodeValue(info.def, v, ctx, indent + "        "));
+      lines.push(`${indent}    },`);
+    } else {
+      // back_reference: emit a pointer (or a registered literal on first sight).
+      lines.push(`${indent}    .${zigTypeName(n)} => |${v}| {`);
+      lines.push(...emitBackReferenceEncode(info.def, v, ctx, indent + "        "));
+      lines.push(`${indent}    },`);
+    }
   }
   lines.push(`${indent}}`);
   return lines;
@@ -276,8 +332,30 @@ export function emitDuDecode(field: any, ctx: EmitCtx, lhs: string, structVar: s
     }
   }
 
-  const decodeLine = (variant: any) =>
-    `${indent}    ${lhs} = .{ .${zigTypeName(variant.type)} = try ${zigTypeName(variant.type)}.decodeWith(${ALLOC}, ${vdecRef}, ${ROOT}) };`;
+  const decodeLine = (variant: any): string[] => {
+    const info = classifyVariant(variant.type, ctx.schema);
+    if (info.kind === "struct") {
+      return [
+        `${indent}    ${lhs} = .{ .${zigTypeName(variant.type)} = try ${zigTypeName(variant.type)}.decodeWith(${ALLOC}, ${vdecRef}, ${ROOT}) };`,
+      ];
+    }
+    // Non-struct arms (string / back_reference) decode the leaf value into a temp
+    // `[]const u8`, then wrap it in the active tag. They read from the primary
+    // decoder, so they don't compose with byte_budget sub-decoding (no schema
+    // pairs the two — guarded below).
+    if (budget) {
+      throw new ZigNotImplemented(`byte_budget union with non-struct variant '${variant.type}'`);
+    }
+    const tmp = uniqueVar("_uval");
+    const leaf = info.kind === "string"
+      ? emitDecodeValue(info.def, ctx, tmp, structVar, indent + "    ")
+      : emitBackReferenceDecode(info.def, ctx, tmp, structVar, indent + "    ");
+    return [
+      `${indent}    var ${tmp}: []const u8 = undefined;`,
+      ...leaf,
+      `${indent}    ${lhs} = .{ .${zigTypeName(variant.type)} = ${tmp} };`,
+    ];
+  };
 
   for (let i = 0; i < conditioned.length; i++) {
     const variant = conditioned[i];
@@ -286,12 +364,12 @@ export function emitDuDecode(field: any, ctx: EmitCtx, lhs: string, structVar: s
       ? translateWhen(variant.when, discExpr)
       : `${discExpr} == ${variant.value !== undefined ? variant.value : i}`;
     lines.push(`${indent}${cond} (${test}) {`);
-    lines.push(decodeLine(variant));
+    lines.push(...decodeLine(variant));
     lines.push(`${indent}}`);
   }
   lines.push(`${indent}else {`);
   if (catchAll) {
-    lines.push(decodeLine(catchAll));
+    lines.push(...decodeLine(catchAll));
   } else {
     lines.push(`${indent}    return error.InvalidVariant;`);
   }
@@ -324,14 +402,19 @@ function translateWhen(when: string, discExpr: string): string {
     const eql = `std.mem.eql(u8, ${discExpr}, "${strEq[2]}")`;
     return strEq[1] === "==" ? eql : `!${eql}`;
   }
+  // Reject string literals in the AUTHOR's expression — we only translate numeric
+  // comparisons here (string equality is the strEq path above). The check must run
+  // on the raw `when`, not the substituted result: `discExpr` may legitimately
+  // contain quotes when a discriminator field name is a Zig keyword and gets
+  // escaped as `@"type"`, which must not be mistaken for a string literal.
+  if (/['"]/.test(when)) {
+    throw new ZigNotImplemented(`discriminated_union 'when' expression '${when}'`);
+  }
   const z = when
     .replace(/\bvalue\b/g, discExpr)
     .replace(/===/g, "==")
     .replace(/!==/g, "!=")
     .replace(/&&/g, " and ")
     .replace(/\|\|/g, " or ");
-  if (/['"]/.test(z)) {
-    throw new ZigNotImplemented(`discriminated_union 'when' expression '${when}'`);
-  }
   return z;
 }

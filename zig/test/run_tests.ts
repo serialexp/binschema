@@ -280,8 +280,17 @@ function duValue(field: any, value: any, schema: any, alias: string): string {
   }
   const variantType = value.type;
   const def = resolveAlias(schema, variantType);
-  if (!def || !def.sequence) throw new UnsupportedValue(`DU variant '${variantType}' not a struct`);
-  const payload = structValue(variantType, def, value.value ?? {}, schema, alias);
+  if (def && def.sequence) {
+    const payload = structValue(variantType, def, value.value ?? {}, schema, alias);
+    return `.{ .${zigTypeName(variantType)} = ${payload} }`;
+  }
+  // Non-struct variant (DNS compression): a string/bytes label, or a
+  // back_reference pointer whose logical payload is its target label's text.
+  const cls = classifyTypeDef(def);
+  let payload: string;
+  if (cls === "string" || cls === "back_reference") payload = stringValue(value.value);
+  else if (cls === "bytes") payload = bytesValue(value.value);
+  else throw new UnsupportedValue(`DU variant '${variantType}' not a struct/string/back_reference`);
   return `.{ .${zigTypeName(variantType)} = ${payload} }`;
 }
 
