@@ -461,7 +461,9 @@ export class BitStreamEncoder {
    * Debug logging: Log field start position
    */
   logFieldStart(fieldName: string, indent: string = ""): void {
-    if (process.env.DEBUG_ENCODE) {
+    // Read `process` via globalThis so this stays browser/strict-tsc safe
+    // (no `@types/node` required, no bare `process` reference).
+    if ((globalThis as any).process?.env?.DEBUG_ENCODE) {
       console.log(`${indent}[${this.byteOffset}] ${fieldName}:`);
     }
   }
@@ -470,7 +472,7 @@ export class BitStreamEncoder {
    * Debug logging: Log field end position with bytes written
    */
   logFieldEnd(fieldName: string, startPos: number, indent: string = ""): void {
-    if (process.env.DEBUG_ENCODE) {
+    if ((globalThis as any).process?.env?.DEBUG_ENCODE) {
       const endPos = this.byteOffset;
       const size = endPos - startPos;
       const bytesWritten = this.bytes.slice(startPos, endPos);
@@ -516,7 +518,11 @@ export class BitStreamEncoder {
 export class BitStreamDecoder {
   protected _bytes: Uint8Array;
   private _dataView: DataView;
-  private byteOffset: number = 0;
+  // Public so generated sub-decoders can read/advance it across the class
+  // hierarchy and across sibling decoder instances (e.g.
+  // `this.byteOffset += childDecoder.byteOffset`). Mirrors the encoder, which
+  // also exposes a public `byteOffset`.
+  public byteOffset: number = 0;
   private bitOffset: number = 0; // Bits read from current byte (0-7)
   private bitOrder: BitOrder;
   private savedPositions: number[] = []; // Stack for push/popPosition

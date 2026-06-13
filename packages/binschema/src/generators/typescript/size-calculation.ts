@@ -402,7 +402,9 @@ export function generateFieldSizeCalculation(
       const hasFallback = variants.some((v: any) => !v.when);
       if (!hasFallback) {
         code += `${indent}else {\n`;
-        code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type for ${fieldName}: \${${duPath}.type}\`);\n`;
+        // Cast to any: the variant union is exhaustive, so TS narrows this
+        // fallthrough to `never` and a bare `.type` access would be a type error.
+        code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type for ${fieldName}: \${(${duPath} as any).type}\`);\n`;
         code += `${indent}}\n`;
       }
       break;

@@ -207,33 +207,11 @@ export class FileHandleReader implements BinaryReader {
     this.cache.clear();
   }
 
-  /**
-   * Static factory to create from a file path
-   */
-  static async fromPath(path: string): Promise<FileHandleReader> {
-    const fs = await import('fs');
-    const handle = await fs.promises.open(path, 'r');
-    const stats = await handle.stat();
-    return new FileHandleReader(handle, stats.size);
-  }
-
-  /**
-   * Sync version of fromPath
-   */
-  static fromPathSync(path: string): FileHandleReader {
-    // Note: This requires Node.js fs module
-    const fs = require('fs');
-    const handle = fs.openSync(path, 'r');
-    const stats = fs.fstatSync(handle);
-    const fileDescriptor = handle;
-    return new FileHandleReader({ 
-      readSync: (buffer: Uint8Array, offset: number, length: number, position: number) => {
-        const bytesRead = fs.readSync(fileDescriptor, buffer, offset, length, position);
-        return { bytesRead: bytesRead };
-      },
-      closeSync: () => fs.closeSync(fileDescriptor)
-    }, stats.size);
-  }
+  // Note: file-path factories (open from a path) live in the node-only
+  // `node-file.ts` module so that this file — which is on the core decode
+  // import path — never references `fs`/`require` and stays browser-bundle and
+  // strict-tsc safe (no `@types/node` required). The class itself only needs an
+  // already-open handle, so it is browser-neutral.
 }
 
 /**
@@ -454,8 +432,10 @@ export function createReader(input: any): BinaryReader {
     return new BufferReader(input);
   }
 
-  // Node.js Buffer (subclass of Uint8Array)
-  if (typeof Buffer !== 'undefined' && input instanceof Buffer) {
+  // Node.js Buffer (subclass of Uint8Array). Read `Buffer` via globalThis so
+  // this file stays browser/strict-tsc safe (no bare `Buffer` reference).
+  const BufferCtor = (globalThis as any).Buffer;
+  if (typeof BufferCtor !== 'undefined' && input instanceof BufferCtor) {
     return new BufferReader(input);
   }
 
@@ -475,13 +455,14 @@ export function createReader(input: any): BinaryReader {
     return new FileHandleReader(input, size);
   }
 
-  // String path - try to open as file (Node.js only)
+  // String path - opening a file path requires Node's `fs`, which is kept off
+  // this (browser-safe) core module. Use the node-only `node-file.ts` helpers
+  // (`openFileSync` / `seekableDecoderFromFile`) instead.
   if (typeof input === 'string') {
-    try {
-      return FileHandleReader.fromPathSync(input);
-    } catch (e: any) {
-      throw new Error("Cannot open file: " + input + ". " + e);
-    }
+    throw new Error(
+      "createReader() does not open file paths. Import { openFileSync } from " +
+      "'./node-file.js' (Node only) to read from a path, or pass a Uint8Array."
+    );
   }
 
   throw new Error(

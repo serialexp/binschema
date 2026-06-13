@@ -179,7 +179,14 @@ function resolveTypeReference(typeRef: string | undefined, schema: BinarySchema,
 }
 
 /**
- * Generate discriminated union type
+ * Generate discriminated union type.
+ *
+ * The runtime decoder wraps each variant in a `{ type, value }` envelope
+ * (see generateDecodeDiscriminatedUnion in typescript.ts) and the encoder reads
+ * `.type`/`.value`, so the generated type must be the matching tagged union —
+ * not a bare union of the payload types. This makes `body.type === 'X'` narrow
+ * `body.value` correctly and keeps the union exhaustively checkable, matching
+ * what `decode()` actually returns and what `encode()` expects.
  */
 function generateDiscriminatedUnionType(field: any, schema: BinarySchema, useInputTypes: boolean): string {
   if (!field.variants || !Array.isArray(field.variants)) {
@@ -190,7 +197,7 @@ function generateDiscriminatedUnionType(field: any, schema: BinarySchema, useInp
   for (const variant of field.variants) {
     if (variant.type) {
       const resolvedType = resolveTypeReference(variant.type, schema, useInputTypes);
-      variantTypes.push(resolvedType);
+      variantTypes.push(`{ type: '${variant.type}'; value: ${resolvedType} }`);
     }
   }
 

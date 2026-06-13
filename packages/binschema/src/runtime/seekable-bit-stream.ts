@@ -87,46 +87,6 @@ export class SeekableBitStreamDecoder extends BitStreamDecoder {
   }
 
   /**
-   * Create decoder from file path (Node.js only)
-   */
-  static fromFile(path: string, bitOrder: BitOrder = "msb_first"): SeekableBitStreamDecoder {
-    try {
-      const fs = require('fs');
-      const fd = fs.openSync(path, 'r');
-      const stats = fs.fstatSync(fd);
-      
-      const reader = {
-        size: stats.size,
-        seekable: true,
-        readAt: (position: number, length: number): Uint8Array => {
-          const buffer = new Uint8Array(length);
-          const actualPos = position < 0 ? stats.size + position : position;
-          fs.readSync(fd, buffer, 0, length, actualPos);
-          return buffer;
-        },
-        readByteAt: (position: number): number => {
-          const buffer = new Uint8Array(1);
-          const actualPos = position < 0 ? stats.size + position : position;
-          fs.readSync(fd, buffer, 0, 1, actualPos);
-          return buffer[0];
-        },
-        slice: (start: number, end?: number): Uint8Array => {
-          const actualEnd = end ?? stats.size;
-          const length = actualEnd - start;
-          const buffer = new Uint8Array(length);
-          fs.readSync(fd, buffer, 0, length, start);
-          return buffer;
-        },
-        close: () => fs.closeSync(fd)
-      };
-      
-      return new SeekableBitStreamDecoder(reader, bitOrder);
-    } catch (e: any) {
-      throw new BinSchemaError(ErrorCode.INVALID_VALUE, "Failed to open file: " + path + ". " + e.message, { cause: e });
-    }
-  }
-
-  /**
    * Get size of underlying data
    */
   get size(): number {

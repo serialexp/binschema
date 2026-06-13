@@ -120,6 +120,15 @@ export {
   createReader,
 } from './runtime/binary-reader.js';
 
+// Node-only file-path helpers. Safe to export from the (node) package entry;
+// generated output never imports index.ts, so this does not affect browser
+// bundles of generated decoders.
+export {
+  openFileSync,
+  openFile,
+  seekableDecoderFromFile,
+} from './runtime/node-file.js';
+
 export { crc32 } from './runtime/crc32.js';
 
 // =============================================================================

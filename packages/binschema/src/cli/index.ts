@@ -239,6 +239,11 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
         "bit-stream.ts",
         "seekable-bit-stream.ts",
         "binary-reader.ts",
+        // node-file.ts is node-only (imports `node:fs`) but is NOT imported by
+        // generated.ts, so it stays off the browser bundle's import graph. It
+        // ships so Node consumers can `import './node-file.js'` for file-path
+        // reads (openFileSync / seekableDecoderFromFile).
+        "node-file.ts",
         "crc32.ts",
         "errors.ts",
         "expression-evaluator.ts",

@@ -13,6 +13,7 @@ import {
 } from "../../runtime/bit-stream.js";
 import { BinSchemaError, ErrorCode } from "../../runtime/errors.js";
 import { SeekableBitStreamDecoder } from "../../runtime/seekable-bit-stream.js";
+import { seekableDecoderFromFile } from "../../runtime/node-file.js";
 
 interface TestCheck {
   description: string;
@@ -297,7 +298,7 @@ function testHappyPathNoThrow() {
 
 function testSeekableFileNotFound() {
   const err = expectErrorCode(
-    () => SeekableBitStreamDecoder.fromFile("/nonexistent/path/that/does/not/exist.bin"),
+    () => seekableDecoderFromFile("/nonexistent/path/that/does/not/exist.bin"),
     ErrorCode.INVALID_VALUE
   );
   if (err) throw new Error(err);
