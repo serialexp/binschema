@@ -11,6 +11,7 @@ const bitstream = @import("bitstream.zig");
 const context = @import("context.zig");
 const errors = @import("errors.zig");
 const codecs = @import("codecs.zig");
+const strenc = @import("strenc.zig");
 
 // ---- bitstream ----
 pub const BitStreamEncoder = bitstream.BitStreamEncoder;
@@ -39,6 +40,13 @@ pub const errorFor = errors.errorFor;
 pub const Codec = codecs.Codec;
 pub const CodecKind = codecs.CodecKind;
 pub const resolveCodec = codecs.resolveCodec;
+
+// ---- string transcoding (latin1 / utf16) ----
+pub const encodeLatin1Alloc = strenc.encodeLatin1Alloc;
+pub const decodeLatin1Alloc = strenc.decodeLatin1Alloc;
+pub const encodeUtf16Alloc = strenc.encodeUtf16Alloc;
+pub const decodeUtf16Alloc = strenc.decodeUtf16Alloc;
+pub const readUtf16Unit = strenc.readUtf16Unit;
 
 /// Validate that `data` is well-formed UTF-8, returning it unchanged or
 /// `error.InvalidUtf8`. Generated string decoders call this instead of trusting
@@ -72,4 +80,5 @@ test {
     _ = context;
     _ = errors;
     _ = codecs;
+    _ = strenc;
 }

@@ -1,7 +1,7 @@
 // ABOUTME: Field-level decode emission for the Zig generator.
 // ABOUTME: Phase 2: primitives, bit fields, strings, bytes, byte-aligned arrays, struct refs.
 
-import { DEC, ALLOC, ROOT } from "./context.js";
+import { DEC, ALLOC, ROOT, RT } from "./context.js";
 import { zigFieldName, zigTypeName, uniqueVar } from "./naming.js";
 import {
   zigEndianness,
@@ -11,6 +11,8 @@ import {
   classifyTypeDef,
   varlengthReadMethod,
   translateConditional,
+  stringNeedsTranscode,
+  utf16EndiannessLiteral,
 } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { emitEnumDecode } from "./enum.js";
@@ -148,6 +150,10 @@ function assertSimpleEncoding(field: any): void {
 }
 
 function emitStringDecode(field: any, ctx: EmitCtx, lhs: string, structVar: string, indent: string): string[] {
+  const enc = field.encoding || "utf8";
+  if (stringNeedsTranscode(enc)) {
+    return emitTranscodedStringDecode(field, ctx, lhs, structVar, indent, enc);
+  }
   assertSimpleEncoding(field);
   const kind = field.kind;
   const lines: string[] = [];
@@ -181,6 +187,96 @@ function emitStringDecode(field: any, ctx: EmitCtx, lhs: string, structVar: stri
   const rem = uniqueVar("_rem");
   lines.push(`${indent}const ${rem} = ${DEC}.bytes.len - ${DEC}.byte_offset;`);
   lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(${rem});`);
+  return lines;
+}
+
+/**
+ * latin1 / utf16 string decode: read the wire bytes for this field, then
+ * transcode them to in-memory UTF-8 (allocated via the arena `allocator`). For
+ * fixed widths the meaningful prefix ends at the first null (1 byte for latin1,
+ * a 0x0000 code unit for utf16); null_terminated stops at and consumes that same
+ * sentinel.
+ */
+function emitTranscodedStringDecode(
+  field: any, ctx: EmitCtx, lhs: string, structVar: string, indent: string, enc: string,
+): string[] {
+  const isLatin1 = enc === "latin1";
+  const decFn = isLatin1 ? "decodeLatin1Alloc" : "decodeUtf16Alloc";
+  const e = utf16EndiannessLiteral(field, enc, ctx.endianness);
+  const eArg = isLatin1 ? "" : `, ${e}`;
+  const transcode = (rawExpr: string) => `${indent}${lhs} = try ${RT}.${decFn}(${ALLOC}, ${rawExpr}${eArg});`;
+  const kind = field.kind;
+  const lines: string[] = [];
+
+  if ((kind === "fixed" || (kind === undefined && field.length !== undefined)) && field.length !== undefined) {
+    const raw = uniqueVar("_raw");
+    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(${field.length});`);
+    const end = uniqueVar("_end");
+    if (isLatin1) {
+      lines.push(`${indent}const ${end} = std.mem.indexOfScalar(u8, ${raw}, 0) orelse ${raw}.len;`);
+    } else {
+      // Stop at the first 0x0000 code unit (scanning 2-byte aligned).
+      const j = uniqueVar("_j");
+      lines.push(`${indent}var ${end}: usize = ${raw}.len;`);
+      lines.push(`${indent}{`);
+      lines.push(`${indent}    var ${j}: usize = 0;`);
+      lines.push(`${indent}    while (${j} + 1 < ${raw}.len) : (${j} += 2) {`);
+      lines.push(`${indent}        if (${RT}.readUtf16Unit(${raw}, ${j}, ${e}) == 0) { ${end} = ${j}; break; }`);
+      lines.push(`${indent}    }`);
+      lines.push(`${indent}}`);
+    }
+    lines.push(transcode(`${raw}[0..${end}]`));
+    return lines;
+  }
+
+  if (kind === "length_prefixed") {
+    const lenVar = uniqueVar("_len");
+    lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
+    const raw = uniqueVar("_raw");
+    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(${lenVar});`);
+    lines.push(transcode(raw));
+    return lines;
+  }
+
+  if (kind === "null_terminated" || field.terminator !== undefined) {
+    const term = field.terminator !== undefined ? field.terminator : 0;
+    if (isLatin1) {
+      const raw = uniqueVar("_raw");
+      lines.push(`${indent}const ${raw} = try ${DEC}.readUntilByte(${term});`);
+      lines.push(transcode(raw));
+    } else {
+      // Collect 2-byte code units until a 0x0000 unit (consumed), then transcode.
+      const list = uniqueVar("_u16");
+      const b0 = uniqueVar("_b0");
+      const b1 = uniqueVar("_b1");
+      const raw = uniqueVar("_raw");
+      lines.push(`${indent}var ${list} = std.ArrayList(u8).empty;`);
+      lines.push(`${indent}while (true) {`);
+      lines.push(`${indent}    const ${b0} = try ${DEC}.readUint8();`);
+      lines.push(`${indent}    const ${b1} = try ${DEC}.readUint8();`);
+      lines.push(`${indent}    if (${b0} == 0 and ${b1} == 0) break;`);
+      lines.push(`${indent}    try ${list}.append(${ALLOC}, ${b0});`);
+      lines.push(`${indent}    try ${list}.append(${ALLOC}, ${b1});`);
+      lines.push(`${indent}}`);
+      lines.push(`${indent}const ${raw} = try ${list}.toOwnedSlice(${ALLOC});`);
+      lines.push(transcode(raw));
+    }
+    return lines;
+  }
+
+  if (field.length_field) {
+    const raw = uniqueVar("_raw");
+    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar)}));`);
+    lines.push(transcode(raw));
+    return lines;
+  }
+
+  // Greedy: consume the rest of the buffer, then transcode.
+  const rem = uniqueVar("_rem");
+  const raw = uniqueVar("_raw");
+  lines.push(`${indent}const ${rem} = ${DEC}.bytes.len - ${DEC}.byte_offset;`);
+  lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(${rem});`);
+  lines.push(transcode(raw));
   return lines;
 }
 

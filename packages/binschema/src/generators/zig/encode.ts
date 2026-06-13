@@ -11,6 +11,8 @@ import {
   varlengthWriteMethod,
   translateConditional,
   zigDeclaredType,
+  stringNeedsTranscode,
+  utf16EndiannessLiteral,
 } from "./types.js";
 import {
   emitComputedEncode,
@@ -180,6 +182,10 @@ function assertSimpleEncoding(field: any): void {
 }
 
 function emitStringEncode(field: any, value: string, ctx: EmitCtx, indent: string): string[] {
+  const enc = field.encoding || "utf8";
+  if (stringNeedsTranscode(enc)) {
+    return emitTranscodedStringEncode(field, value, ctx, indent, enc);
+  }
   assertSimpleEncoding(field);
   const kind = field.kind;
   const lines: string[] = [];
@@ -207,6 +213,48 @@ function emitStringEncode(field: any, value: string, ctx: EmitCtx, indent: strin
   }
   // Raw / greedy string.
   lines.push(`${indent}try ${ENC}.writeBytes(${value});`);
+  return lines;
+}
+
+/**
+ * latin1 / utf16 string encode: transcode the in-memory UTF-8 `[]const u8` into
+ * a wire-bytes buffer (owned, freed via defer), then frame it per `kind`. The
+ * length prefix / fixed width always measures BYTES, never characters. For
+ * utf16 the null terminator is a 2-byte 0x0000 code unit.
+ */
+function emitTranscodedStringEncode(
+  field: any, value: string, ctx: EmitCtx, indent: string, enc: string,
+): string[] {
+  const isLatin1 = enc === "latin1";
+  const lines: string[] = [];
+  const wb = uniqueVar("_wb");
+  if (isLatin1) {
+    lines.push(`${indent}const ${wb} = try ${RT}.encodeLatin1Alloc(${ENC}.allocator, ${value});`);
+  } else {
+    const e = utf16EndiannessLiteral(field, enc, ctx.endianness);
+    lines.push(`${indent}const ${wb} = try ${RT}.encodeUtf16Alloc(${ENC}.allocator, ${value}, ${e});`);
+  }
+  lines.push(`${indent}defer ${ENC}.allocator.free(${wb});`);
+
+  const kind = field.kind;
+  if ((kind === "fixed" || (kind === undefined && field.length !== undefined)) && field.length !== undefined) {
+    lines.push(...emitFixedBlobEncode(wb, field.length, indent));
+    return lines;
+  }
+  if (kind === "length_prefixed") {
+    lines.push(...emitLengthPrefixEncode(field.length_type || "uint8", `${wb}.len`, ctx, indent));
+    lines.push(`${indent}try ${ENC}.writeBytes(${wb});`);
+    return lines;
+  }
+  if (kind === "null_terminated" || field.terminator !== undefined) {
+    const term = field.terminator !== undefined ? field.terminator : 0;
+    lines.push(`${indent}try ${ENC}.writeBytes(${wb});`);
+    lines.push(`${indent}try ${ENC}.writeUint8(${term});`);
+    if (!isLatin1) lines.push(`${indent}try ${ENC}.writeUint8(${term});`);
+    return lines;
+  }
+  // field_referenced / raw: the length lives in a sibling field (or is implicit).
+  lines.push(`${indent}try ${ENC}.writeBytes(${wb});`);
   return lines;
 }
 

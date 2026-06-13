@@ -271,6 +271,36 @@ export function translateConditional(
   throw new ZigNotImplemented(`conditional expression '${condition}'`);
 }
 
+// ---------------------------------------------------------------------------
+// String encodings
+// ---------------------------------------------------------------------------
+
+/** Whether an encoding is a UTF-16 variant (plain or endianness-suffixed). */
+export function isUtf16Encoding(enc: string): boolean {
+  return enc === "utf16" || enc === "utf16_be" || enc === "utf16be" ||
+    enc === "utf16_le" || enc === "utf16le";
+}
+
+/**
+ * utf8/ascii store wire bytes directly (logical text == wire bytes); latin1 and
+ * utf16 require transcoding between the in-memory UTF-8 `[]const u8` and the wire
+ * encoding via the runtime helpers.
+ */
+export function stringNeedsTranscode(enc: string): boolean {
+  return enc === "latin1" || isUtf16Encoding(enc);
+}
+
+/**
+ * The Zig runtime-enum literal for a UTF-16 field's byte order. An endianness
+ * suffix on the encoding wins; otherwise the field's own `endianness`, else the
+ * global fallback.
+ */
+export function utf16EndiannessLiteral(field: any, enc: string, fallback: string): string {
+  if (enc === "utf16_be" || enc === "utf16be") return ".big_endian";
+  if (enc === "utf16_le" || enc === "utf16le") return ".little_endian";
+  return zigEndianness(field.endianness, fallback);
+}
+
 /** Zig type for an array `items` spec (string name or inline field object). */
 export function zigItemType(items: any, schema: BinarySchema): string {
   if (items == null) throw new ZigNotImplemented("array without items");
