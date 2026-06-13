@@ -286,18 +286,27 @@ sight; decode masks the offset, `seek`s, decodes the target, restores position),
 non-struct DU variants (a union arm may be a `string`/`bytes` or a
 `back_reference`, carried as `[]const u8`, not just a struct), and the
 `null_terminated` + `terminal_variants` array framing (a terminal arm ends the
-chain with no trailing 0 byte). All 13 DNS-compression suites generate. Still
-pending (all large structural buckets): `../` parent-stack decode references and
-bare ancestor-scope field refs (a different mechanism from `_root.` — walks up N
-parent scopes; surfaces in `dns_protocol_query`/`_response`, where a payload
-struct's array length references the outer header's `qdcount`, and in the
-kerberos bucket), kerberos SEQUENCE types (varlength measure-then-patch +
-`from_after_field` with parent refs, ~7 suites), `pcf_full` (an unresolved field
-type), and `optional_builtin_bit` (1 suite, a documented bit/byte-overlap runtime
-quirk the byte-oriented Zig runtime does not replicate).
+chain with no trailing 0 byte). All 13 DNS-compression suites generate. The
+Kerberos ASN.1/DER bucket now lands too (all 7 suites): a single recursive
+**content-first** encoder handles every varlength length prefix whose value is
+the byte size of a region not yet encoded — a `from_after_field` suffix or a
+`length_of` over a struct/union target — by encoding the region into a temp
+encoder, measuring it, writing the varlength prefix, then splicing the bytes
+(nested TLVs compose by recursion; struct fields self-measure via their own
+`encodeInto`). Supporting pieces: varlength (DER) `byte_length_prefixed` arrays
+(same measure-then-splice on both encode and decode), nominal Zig aliases for
+bare type-reference aliases (`pub const Realm = KerberosString;` so a struct
+alias resolves as a type and a method receiver), and the `offset` modifier on
+`length_of`/`count_of` (e.g. an ASN.1 BIT STRING whose DER length covers a
+leading unused-bits byte). Still pending: `../` parent-stack decode references
+and bare ancestor-scope field refs (a different mechanism from `_root.` — walks
+up N parent scopes; surfaces in `dns_protocol_query`/`_response`, where a payload
+struct's array length references the outer header's `qdcount`), `pcf_full` (an
+unresolved field type), and `optional_builtin_bit` (1 suite, a documented
+bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not replicate).
 
-**Latest harness numbers:** 343/354 codegen suites generate (+12 validation-only,
-not codegen targets), 805/805 cases pass, 0 errored, 0 failed; runtime unit tests
+**Latest harness numbers:** 350/354 codegen suites generate (+12 validation-only,
+not codegen targets), 820/820 cases pass, 0 errored, 0 failed; runtime unit tests
 28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---

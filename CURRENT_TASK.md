@@ -1,6 +1,28 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** sixteen slices landed. Most recent —
+> **Latest (Phase 5, in progress):** seventeen slices landed. Most recent —
+> **Kerberos ASN.1/DER** (all 7 suites). One recursive **content-first** encoder
+> (`index.ts` `emitContentFirstBody` + `structNeedsContentFirst`) now handles
+> every varlength length prefix whose value is the byte size of a region not yet
+> encoded — a `from_after_field` suffix or a `length_of` over a struct/union
+> target: encode the region into a temp encoder, measure it, write the varlength
+> prefix, splice the bytes. Nested TLVs (SEQUENCE-in-SEQUENCE, ASN.1 contexts)
+> compose by recursion; struct fields self-measure via their own `encodeInto`.
+> The temp encoder is declared storage+pointer (`const tmp = &store`) so the
+> `enc → tmp` redirect works for both method calls and child `encodeInto(tmp,…)`.
+> This subsumes (and replaces) the old single-shot `emitFromAfterFieldEncode`.
+> Supporting fixes: varlength (DER) `byte_length_prefixed` arrays measure-then-
+> splice on encode and read a varlength prefix on decode (`encode.ts`/`decode.ts`,
+> `emitLengthPrefixDecode` gained a `varlength` case); nominal Zig aliases for
+> bare type-reference aliases (`types.ts` `resolveAliasName` + `index.ts` emits
+> `pub const Realm = KerberosString;` for struct/enum terminals — string/array
+> terminals still resolve inline to `[]const u8`); and the `offset` modifier on
+> `length_of`/`count_of` (`computed.ts` — an ASN.1 BIT STRING's DER length covers
+> a leading unused-bits byte, `length_of value` + 1). Harness **350/354 ·
+> 820/820**, 0 errored/0 failed, TS 1192. Remaining skips: `dns_protocol_query`/
+> `_response` (ancestor-scope `qdcount` ref — parent-stack bucket), `pcf_full`
+> (unresolved field type), `optional_builtin_bit` (bit/byte-overlap quirk).
+> Before that —
 > **DNS label compression** (`back_reference` + non-struct DU variants). A union
 > arm may now be a `string`/`bytes` or a `back_reference` (carried as
 > `[]const u8`), not just a struct — `union.ts` classifies each variant and

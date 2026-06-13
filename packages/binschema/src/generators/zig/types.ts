@@ -95,6 +95,37 @@ export function resolveAlias(schema: BinarySchema, typeName: string): any | null
   return schema.types[name] ?? null;
 }
 
+/**
+ * Walk a bare-alias chain (`{ type: "Other" }`) to the terminal concrete type
+ * NAME (the struct/enum/string/… that actually defines the shape). Returns the
+ * input name unchanged when it isn't an alias. Companion to `resolveAlias`,
+ * which returns the terminal *definition*; this returns its name so callers can
+ * emit a nominal Zig alias (`pub const Realm = KerberosString;`).
+ */
+export function resolveAliasName(schema: BinarySchema, typeName: string): string {
+  let name = typeName;
+  const seen = new Set<string>();
+  while (name && schema.types[name] && !seen.has(name)) {
+    seen.add(name);
+    const def: any = schema.types[name];
+    if (
+      typeof def.type === "string" &&
+      schema.types[def.type] &&
+      !("sequence" in def) &&
+      def.type !== "string" &&
+      def.type !== "bytes" &&
+      def.type !== "array" &&
+      def.type !== "discriminated_union" &&
+      def.type !== "choice"
+    ) {
+      name = def.type;
+      continue;
+    }
+    break;
+  }
+  return name;
+}
+
 /** Classify a (resolved) type definition into a generator dispatch class. */
 export function classifyTypeDef(typeDef: any): TypeClass {
   if (!typeDef || typeof typeDef !== "object") return "unknown";

@@ -22,8 +22,16 @@ import {
   decodeParams,
   decodeArgs,
 } from "./context.js";
-import { resetVarCounter, zigFieldName, zigTypeName } from "./naming.js";
-import { zigBitOrder, zigDeclaredType, zigPrimitiveType, varlengthWriteMethod } from "./types.js";
+import { resetVarCounter, uniqueVar, zigFieldName, zigTypeName } from "./naming.js";
+import {
+  zigBitOrder,
+  zigDeclaredType,
+  zigPrimitiveType,
+  varlengthWriteMethod,
+  resolveAlias,
+  resolveAliasName,
+  classifyTypeDef,
+} from "./types.js";
 import { generateFieldEncode, emitEncodeValue, ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { generateFieldDecode, emitDecodeValue } from "./decode.js";
 import { generateEnumCode } from "./enum.js";
@@ -44,6 +52,9 @@ import {
   schemaUsesRootDecode,
   emitFrameLengthRegistration,
   structHasFieldIdDelta,
+  lengthOfNeedsMeasure,
+  isParentRef,
+  isSelector,
   FIELD_ID_ACC,
 } from "./computed.js";
 
@@ -126,6 +137,18 @@ export function generateZig(
       // A named back_reference (e.g. DNS `LabelPointer`) has no standalone Zig
       // type: it is only ever referenced as a discriminated_union variant, where
       // its pointer encode/decode is inlined (see union.ts + compression.ts).
+    } else if (typeof (typeDef as any).type === "string" && schema.types[(typeDef as any).type]) {
+      // Bare alias to another named type (e.g. `Realm -> KerberosString`). For a
+      // struct/enum terminal, emit a nominal Zig type alias so referencing fields
+      // (`realm: Realm`) and method calls (`Realm.encodeInto`) resolve. For a
+      // string/bytes/array terminal there is no nominal Zig type — references
+      // resolve inline to `[]const u8` / `[]const Item`, so emit nothing.
+      const resolved = resolveAlias(schema, name);
+      const cls = classifyTypeDef(resolved);
+      if (cls === "struct" || cls === "enum") {
+        const concrete = zigDeclaredType({ type: resolveAliasName(schema, name) }, schema);
+        lines.push(`pub const ${zigTypeName(name)} = ${concrete};`);
+      }
     }
     lines.push(``);
   }
@@ -205,17 +228,33 @@ function generateStructCode(
   lines.push(`    pub fn encodeInto(self: ${typeNameZ}, ${encodeParams()}) ${ERR}!void {`);
   const { posTargets, crcTargets, lenTargets } = computedTargets(fields, schema);
   const encBody: string[] = [];
-  const faIdx = fields.findIndex((f: any) => f.computed?.from_after_field);
-  if (faIdx >= 0) {
-    // A `from_after_field` length prefix needs content-first encoding: write the
-    // trailing content to a temp encoder, measure it, then write the varlength
-    // length + the content. Keep this path simple — it can't currently combine
-    // with parent frames or same-struct position/crc targets.
-    if (framesOn || posTargets.size > 0 || crcTargets.size > 0 || lenTargets.size > 0) {
-      throw new ZigNotImplemented("from_after_field combined with parent refs / position / crc / measured length");
+  if (structNeedsContentFirst(fields, schema)) {
+    // DER-style content-first encoding. Any varlength length prefix whose value
+    // is the byte size of a variable region — a `from_after_field` suffix or a
+    // `length_of` over a struct/union/choice target — cannot be written forward
+    // (its width isn't known until the region is encoded). We encode each such
+    // region into a temp encoder, measure it, write the varlength prefix, then
+    // splice the bytes. The transform is recursive, so nested TLVs (Kerberos
+    // SEQUENCEs, ASN.1 contexts) compose. It does not combine with parent
+    // frames or same-struct position/crc back-patches (different machinery).
+    if (framesOn || posTargets.size > 0 || crcTargets.size > 0) {
+      throw new ZigNotImplemented("content-first DER body combined with parent refs / position / crc");
     }
-    for (let i = 0; i < faIdx; i++) encBody.push(...generateFieldEncode(fields[i], emit));
-    encBody.push(...emitFromAfterFieldEncode(fields[faIdx], fields.slice(faIdx + 1), emit));
+    // A fixed-width measured length_of needs a back-patchable slot, which the
+    // splice-based content-first path can't provide — keep that combination out.
+    const fixedMeasured = fields.filter(
+      (f: any) =>
+        f.computed?.type === "length_of" &&
+        f.type !== "varlength" &&
+        f.computed.target &&
+        !isParentRef(f.computed.target) &&
+        !isSelector(f.computed.target) &&
+        lengthOfNeedsMeasure(f.computed.target, schema, fields),
+    );
+    if (fixedMeasured.length > 0) {
+      throw new ZigNotImplemented("content-first body with a fixed-width measured length_of");
+    }
+    encBody.push(...emitContentFirstBody(fields, emit, ENC, "        "));
   } else {
     if (framesOn) {
       encBody.push(`        const _frame = try ${CTX}.pushParent();`);
@@ -303,42 +342,115 @@ function generateStructCode(
 }
 
 /**
- * Content-first encode for a `from_after_field` length prefix. The length field
- * sits at this position in the wire, but its value is the byte count of all
- * fields that follow it. We encode that trailing content into a temporary
- * encoder (borrowing the outer encoder's allocator + bit order), measure it,
- * then write the varlength length and splice the content into the outer stream.
- *
- * Trailing fields must be plain (non-computed): a computed trailing field would
- * register placeholders/patches against the temp encoder whose offsets don't map
- * to the outer buffer. Such shapes throw ZigNotImplemented (clean skip).
+ * True when a struct must be encoded content-first (DER/TLV style). This is the
+ * case when any field is a varlength length prefix whose value is the byte size
+ * of a *variable* region that hasn't been encoded yet:
+ *   - `from_after_field`: the suffix of fields following the prefix, or
+ *   - `length_of` over a struct/union/choice target (its size isn't a slice
+ *     `.len`; it has to be measured by encoding it).
+ * A `length_of` over a string/bytes/array resolves to a synchronous `.len` and
+ * stays on the fast forward-emit path, so it doesn't trigger this.
  */
-function emitFromAfterFieldEncode(lengthField: any, trailing: any[], emit: EmitCtx, indent = "        "): string[] {
-  if (lengthField.type !== "varlength") {
-    // The reference generator only supports `from_after_field` on varlength
-    // prefixes (content-first sizing). Anything else is an invalid shape.
-    throw new ZigNotImplemented(`from_after_field on non-varlength field '${lengthField.name}'`);
-  }
-  for (const tf of trailing) {
-    if (tf.computed || tf.const !== undefined) {
-      throw new ZigNotImplemented(`from_after_field with computed/const trailing field '${tf.name}'`);
-    }
-  }
-  const tmp = `_fa_enc_${zigFieldName(lengthField.name)}`;
-  const bytesVar = `_fa_bytes_${zigFieldName(lengthField.name)}`;
+function structNeedsContentFirst(fields: any[], schema: any): boolean {
+  return fields.some((f: any) => {
+    const c = f.computed;
+    if (!c) return false;
+    if (c.from_after_field) return true;
+    return (
+      c.type === "length_of" &&
+      f.type === "varlength" &&
+      c.target &&
+      !isParentRef(c.target) &&
+      !isSelector(c.target) &&
+      lengthOfNeedsMeasure(c.target, schema, fields)
+    );
+  });
+}
+
+/**
+ * Emit a content-first encode for a sequence of fields into `encVar` (the outer
+ * `enc`, or a temp encoder when recursing). Walks the fields left-to-right:
+ *
+ *   - A `from_after_field` varlength prefix measures the *entire remaining
+ *     suffix*: recurse into a temp encoder, write the varlength length, splice.
+ *     The suffix is consumed, so emission for this level ends.
+ *   - A varlength `length_of` prefix over a struct/union/choice target measures
+ *     just that target (which must be the immediately following field): encode
+ *     it into a temp encoder, write the varlength length, splice.
+ *   - Any other field is emitted normally (its own `encodeInto` handles nested
+ *     content-first regions, so we never recurse into struct fields ourselves).
+ *
+ * Generated field-encode lines target the `enc` identifier; when `encVar` is a
+ * temp encoder we redirect `enc` → `encVar` (values still read from `self`).
+ */
+function emitContentFirstBody(fields: any[], emit: EmitCtx, encVar: string, indent: string): string[] {
   const lines: string[] = [];
-  lines.push(`${indent}var ${tmp} = ${RT}.BitStreamEncoder.init(${ENC}.allocator, ${ENC}.bit_order);`);
-  lines.push(`${indent}defer ${tmp}.deinit();`);
-  for (const tf of trailing) {
-    // Generated trailing-field encode targets the `enc` identifier; redirect it
-    // to the temp encoder. (Trailing fields read their values from `self`.)
-    for (const l of generateFieldEncode(tf, emit, indent)) {
-      lines.push(l.replace(new RegExp(`\\b${ENC}\\b`, "g"), tmp));
+  const redirect = (ls: string[]): string[] =>
+    encVar === ENC ? ls : ls.map((l) => l.replace(new RegExp(`\\b${ENC}\\b`, "g"), encVar));
+
+  let i = 0;
+  while (i < fields.length) {
+    const f = fields[i];
+    const c = f.computed;
+
+    if (c?.from_after_field) {
+      if (f.type !== "varlength") {
+        throw new ZigNotImplemented(`from_after_field on non-varlength field '${f.name}'`);
+      }
+      const store = uniqueVar("_cf_store");
+      const tmp = uniqueVar("_cf_enc");
+      const bytesVar = uniqueVar("_cf_bytes");
+      // Temp encoder as a pointer so the `enc` → tmp redirect works uniformly,
+      // both for method calls (tmp.writeX) and for passing it to a child's
+      // `encodeInto(tmp, ctx)` (which takes a *BitStreamEncoder).
+      lines.push(`${indent}var ${store} = ${RT}.BitStreamEncoder.init(${encVar}.allocator, ${encVar}.bit_order);`);
+      lines.push(`${indent}defer ${store}.deinit();`);
+      lines.push(`${indent}const ${tmp} = &${store};`);
+      lines.push(...emitContentFirstBody(fields.slice(i + 1), emit, tmp, indent));
+      lines.push(`${indent}const ${bytesVar} = ${tmp}.view();`);
+      lines.push(`${indent}try ${encVar}.${varlengthWriteMethod(f)}(@intCast(${bytesVar}.len));`);
+      lines.push(`${indent}try ${encVar}.writeBytes(${bytesVar});`);
+      return lines; // suffix consumed
     }
+
+    const measuredTarget =
+      c?.type === "length_of" &&
+      f.type === "varlength" &&
+      c.target &&
+      !isParentRef(c.target) &&
+      !isSelector(c.target) &&
+      lengthOfNeedsMeasure(c.target, emit.schema, fields)
+        ? c.target
+        : undefined;
+
+    if (measuredTarget) {
+      const j = fields.findIndex((g: any) => g.name === measuredTarget);
+      if (j !== i + 1) {
+        throw new ZigNotImplemented(
+          `varlength length_of target '${measuredTarget}' must immediately follow its length prefix`,
+        );
+      }
+      const store = uniqueVar("_cf_store");
+      const tmp = uniqueVar("_cf_enc");
+      const bytesVar = uniqueVar("_cf_bytes");
+      lines.push(`${indent}var ${store} = ${RT}.BitStreamEncoder.init(${encVar}.allocator, ${encVar}.bit_order);`);
+      lines.push(`${indent}defer ${store}.deinit();`);
+      lines.push(`${indent}const ${tmp} = &${store};`);
+      // Encode just the target field into the temp encoder (redirect enc → tmp);
+      // its own encodeInto recurses into any nested content-first regions.
+      for (const l of generateFieldEncode(fields[j], emit, indent)) {
+        lines.push(l.replace(new RegExp(`\\b${ENC}\\b`, "g"), tmp));
+      }
+      lines.push(`${indent}const ${bytesVar} = ${tmp}.view();`);
+      lines.push(`${indent}try ${encVar}.${varlengthWriteMethod(f)}(@intCast(${bytesVar}.len));`);
+      lines.push(`${indent}try ${encVar}.writeBytes(${bytesVar});`);
+      i = j + 1;
+      continue;
+    }
+
+    lines.push(...redirect(generateFieldEncode(f, emit, indent)));
+    i++;
   }
-  lines.push(`${indent}const ${bytesVar} = ${tmp}.view();`);
-  lines.push(`${indent}try ${ENC}.${varlengthWriteMethod(lengthField)}(@intCast(${bytesVar}.len));`);
-  lines.push(`${indent}try ${ENC}.writeBytes(${bytesVar});`);
   return lines;
 }
 

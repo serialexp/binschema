@@ -518,7 +518,7 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
   if (kind === "byte_length_prefixed") {
     const lenVar = uniqueVar("_blen");
     const endVar = uniqueVar("_bend");
-    lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
+    lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent, field.length_encoding));
     lines.push(`${indent}const ${endVar} = ${DEC}.position() + @as(usize, ${lenVar});`);
     lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
     lines.push(`${indent}while (${DEC}.position() < ${endVar}) {`);
@@ -595,7 +595,13 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
 // Helpers
 // ---------------------------------------------------------------------------
 
-function emitLengthPrefixDecode(prefixType: string, varName: string, ctx: EmitCtx, indent: string): string[] {
+function emitLengthPrefixDecode(
+  prefixType: string,
+  varName: string,
+  ctx: EmitCtx,
+  indent: string,
+  encoding?: string,
+): string[] {
   const e = zigEndianness(undefined, ctx.endianness);
   switch (prefixType) {
     case "uint8":
@@ -606,6 +612,9 @@ function emitLengthPrefixDecode(prefixType: string, varName: string, ctx: EmitCt
       return [`${indent}const ${varName} = try ${DEC}.readUint32(${e});`];
     case "uint64":
       return [`${indent}const ${varName} = try ${DEC}.readUint64(${e});`];
+    case "varlength":
+      // DER/LEB128 length prefix: width is self-describing in the stream.
+      return [`${indent}const ${varName} = try ${DEC}.${varlengthReadMethod({ type: "varlength", encoding })}();`];
     default:
       throw new ZigNotImplemented(`length prefix type '${prefixType}'`);
   }

@@ -492,12 +492,18 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
   }
   const t = computed.type;
   const target: string | undefined = computed.target;
+  // An optional constant `offset` is added to the computed length/count (e.g. an
+  // ASN.1 BIT STRING whose DER length covers a leading unused-bits byte in
+  // addition to the value bytes: `length_of value` + 1).
+  const offset: number = computed.offset ?? 0;
   // Emit a synchronous write of a known computed value, dispatching on the
   // field's storage shape (fixed int vs. varlength).
-  const writeValue = (expr: string): string[] =>
-    isVarlen
-      ? [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${expr}));`]
-      : emitIntWrite(intType, expr, e, indent);
+  const writeValue = (expr: string): string[] => {
+    const v = offset ? `(${expr}) + ${offset}` : expr;
+    return isVarlen
+      ? [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${v}));`]
+      : emitIntWrite(intType, v, e, indent);
+  };
   if (isVarlen && t !== "length_of" && t !== "count_of") {
     // Only length/count prefixes are naturally varlength (DER, LEB128, …); the
     // offset/checksum/sum kinds need a fixed-width back-patch slot.
@@ -828,10 +834,12 @@ export function emitComputedBackpatch(fields: any[], ctx: EmitCtx, indent: strin
           `${RT}.computeCrc32(${ENC}.view()[${fieldOffVar(c.target)}..${fieldEndVar(c.target)}]), ${e});`,
       );
     } else if (c.type === "length_of" && lengthOfNeedsMeasure(c.target, ctx.schema, ctx.fields)) {
-      // Measured byte span: end - start of the target field's encoded bytes.
+      // Measured byte span: end - start of the target field's encoded bytes,
+      // plus any constant `offset` (e.g. a BIT STRING's leading unused-bits byte).
+      const off = c.offset ? ` + ${c.offset}` : "";
       lines.push(
         `${indent}${ENC}.patch(${placeholderVar(f.name)}, ` +
-          `@intCast(${fieldEndVar(c.target)} - ${fieldOffVar(c.target)}), ${e});`,
+          `@intCast(${fieldEndVar(c.target)} - ${fieldOffVar(c.target)}${off}), ${e});`,
       );
     }
   }

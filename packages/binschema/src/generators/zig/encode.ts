@@ -454,6 +454,27 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
   // elements (not the element count). Reserve the prefix, encode the items into
   // the same buffer, then back-patch the byte span — the two-pass primitive.
   if (kind === "byte_length_prefixed") {
+    // A varlength (DER/LEB128) byte-length prefix has no fixed width, so it can't
+    // be reserved-and-patched. Encode the items into a temp encoder, measure the
+    // span, write the varlength prefix, then splice the bytes (content-first).
+    if ((field.length_type || "uint8") === "varlength") {
+      const lenField = { type: "varlength", encoding: field.length_encoding };
+      const store = uniqueVar("_blp_store");
+      const tmp = uniqueVar("_blp_enc");
+      const bytesVar = uniqueVar("_blp_bytes");
+      // Temp encoder as a pointer so the `enc` → tmp redirect works for both
+      // method calls and child `encodeInto(tmp, ctx)` (which takes a pointer).
+      lines.push(`${indent}var ${store} = ${RT}.BitStreamEncoder.init(${ENC}.allocator, ${ENC}.bit_order);`);
+      lines.push(`${indent}defer ${store}.deinit();`);
+      lines.push(`${indent}const ${tmp} = &${store};`);
+      lines.push(`${indent}for (${value}) |${itemVar}| {`);
+      for (const l of itemEncode) lines.push(l.replace(new RegExp(`\\b${ENC}\\b`, "g"), tmp));
+      lines.push(`${indent}}`);
+      lines.push(`${indent}const ${bytesVar} = ${tmp}.view();`);
+      lines.push(`${indent}try ${ENC}.${varlengthWriteMethod(lenField)}(@intCast(${bytesVar}.len));`);
+      lines.push(`${indent}try ${ENC}.writeBytes(${bytesVar});`);
+      return lines;
+    }
     const suffix = PLACEHOLDER_SUFFIX[field.length_type || "uint8"];
     if (!suffix) throw new ZigNotImplemented(`length prefix type '${field.length_type}'`);
     const e = zigEndianness(undefined, ctx.endianness);
