@@ -306,6 +306,8 @@ function structValue(typeName: string, typeDef: any, value: any, schema: any, al
   for (const field of typeDef.sequence) {
     // Computed/const fields are omitted from the encode input.
     if (field.computed || field.const !== undefined) continue;
+    // Padding is a pure wire spacer — not a struct member, not in the value.
+    if (field.type === "padding") continue;
     const fv = value?.[field.name];
     // A conditional field is stored as `?T`; when the test value omits it the
     // field is absent (null), otherwise the bare value coerces to the optional.

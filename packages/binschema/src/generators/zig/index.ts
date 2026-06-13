@@ -146,6 +146,9 @@ function generateStructCode(
   // value is supplied by the wire / computed on encode), so they get a default
   // so the struct can be constructed without them.
   for (const field of fields) {
+    // Padding is a pure wire-format spacer with no value — it never becomes a
+    // struct member (it's neither supplied on encode nor surfaced on decode).
+    if (field.type === "padding") continue;
     const ftype = structFieldType(field, schema);
     const def = fieldDefault(field);
     lines.push(`    ${zigFieldName(field.name)}: ${ftype}${def},`);

@@ -68,11 +68,33 @@ export function generateFieldEncode(field: any, ctx: EmitCtx, indent = "        
     const inner = emitEncodeValue(field, value, ctx, indent + "    ");
     return [`${indent}if (${cond}) {`, ...inner, `${indent}}`];
   }
+  if (field.type === "padding") return emitPaddingEncode(field, indent);
   if (field.computed) return emitComputedEncode(field, ctx, indent);
   if (field.const !== undefined) return emitConstEncode(field, ctx, indent);
   const fname = zigFieldName(field.name);
   const value = `${ctx.selfPath}.${fname}`;
   return emitEncodeValue(field, value, ctx, indent);
+}
+
+/**
+ * Alignment padding: write zero bytes until the encoder's byte offset is a
+ * multiple of `align_to`. Produces no struct member — purely a wire-format
+ * spacer. The count is computed at runtime from the live offset, so it composes
+ * with variable-length predecessors (arrays, varlength, strings).
+ */
+function emitPaddingEncode(field: any, indent: string): string[] {
+  const align = field.align_to ?? field.pad_to;
+  if (!align || align < 1) throw new ZigNotImplemented(`padding without align_to`);
+  const tag = zigFieldName(field.name || "padding");
+  const need = `_pad_need_${tag}`;
+  const i = `_pad_i_${tag}`;
+  return [
+    `${indent}const ${need} = (${align} - (${ENC}.byteOffset() % ${align})) % ${align};`,
+    `${indent}var ${i}: usize = 0;`,
+    `${indent}while (${i} < ${need}) : (${i} += 1) {`,
+    `${indent}    try ${ENC}.writeUint8(0);`,
+    `${indent}}`,
+  ];
 }
 
 /**

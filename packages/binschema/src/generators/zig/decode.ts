@@ -32,6 +32,9 @@ export function generateFieldDecode(
   indent = "        ",
 ): string[] {
   if (field.if) throw new ZigNotImplemented("if-form conditional fields");
+  // Alignment padding has no struct member: consume the zero bytes that align
+  // the decoder's position to `align_to` and assign nothing.
+  if (field.type === "padding") return emitPaddingDecode(field, indent);
   const fname = zigFieldName(field.name);
   // Conditional field: decode only when the guard (evaluated over already-decoded
   // siblings in `target`) is true; otherwise the `?T` field is null. computed/
@@ -53,6 +56,22 @@ export function generateFieldDecode(
   // Computed and const fields are present on the wire (they were written during
   // encode), so they decode exactly like their declared primitive type.
   return emitDecodeValue(field, ctx, `${target}.${fname}`, target, indent);
+}
+
+/**
+ * Skip alignment padding on decode: advance the decoder past the zero bytes that
+ * were written to align to `align_to`. The count is computed from the live
+ * position, mirroring the encode side.
+ */
+function emitPaddingDecode(field: any, indent: string): string[] {
+  const align = field.align_to ?? field.pad_to;
+  if (!align || align < 1) throw new ZigNotImplemented(`padding without align_to`);
+  const tag = zigFieldName(field.name || "padding");
+  const need = `_pad_need_${tag}`;
+  return [
+    `${indent}const ${need} = (${align} - (${DEC}.position() % ${align})) % ${align};`,
+    `${indent}_ = try ${DEC}.readBytesSlice(${need});`,
+  ];
 }
 
 /**
