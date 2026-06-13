@@ -342,6 +342,22 @@ fn type_needs_input_output_split(type_name: &str, schema: &Schema) -> bool {
 }
 
 
+/// Pack a bit array (one entry per bit, MSB-first within the array) into bytes,
+/// zero-padding the final byte. Mirrors the TS/Go/Zig harnesses' `bitsToBytes`
+/// so suites that pin only `bits` (no `bytes`) can still assert encoded output.
+fn bits_to_bytes(bits: &[u8], bit_order: &str) -> Vec<u8> {
+    let num_bytes = (bits.len() + 7) / 8;
+    let mut bytes = vec![0u8; num_bytes];
+    for (i, &bit) in bits.iter().enumerate() {
+        if bit != 0 {
+            let byte_idx = i / 8;
+            let bit_idx = if bit_order == "lsb_first" { i % 8 } else { 7 - (i % 8) };
+            bytes[byte_idx] |= 1 << bit_idx;
+        }
+    }
+    bytes
+}
+
 /// Generate the test harness main function
 fn generate_test_harness(suites: &[(String, TestSuite)]) -> String {
     let mut harness = String::from(
@@ -390,6 +406,11 @@ fn main() {
             })
             .unwrap_or(false);
 
+        // Bit ordering for packing bits-only test cases into expected bytes.
+        let bit_order = suite.schema.config.as_ref()
+            .and_then(|c| c.bit_order.as_deref())
+            .unwrap_or("msb_first");
+
         harness.push_str(&format!("    // Test suite: {}\n", suite.name));
         harness.push_str("    {\n");
         harness.push_str("        let mut results: Vec<TestResult> = Vec::new();\n\n");
@@ -402,6 +423,16 @@ fn main() {
 
             let should_error_on_encode = tc.should_error_on_encode.unwrap_or(false);
             let round_trip_only = tc.round_trip_only.unwrap_or(false);
+
+            // Effective expected bytes: use `bytes` when present, otherwise pack
+            // a bits-only pin into bytes (final byte zero-padded). This lets
+            // bit-level suites (single_bit, three_bits, bit_order_*) assert
+            // output like the other language harnesses do.
+            let effective_bytes: Option<Vec<u8>> = match (&tc.bytes, &tc.bits) {
+                (Some(b), _) => Some(b.clone()),
+                (None, Some(bits)) => Some(bits_to_bytes(bits, bit_order)),
+                (None, None) => None,
+            };
 
             // Generate test case
             harness.push_str(&format!(
@@ -417,7 +448,7 @@ fn main() {
             if has_instances {
                 // Types with instance fields: skip encoding, test decode-only from expected bytes
                 // This matches TypeScript's behavior (encoding is skipped for types with instances)
-                if let Some(bytes) = &tc.bytes {
+                if let Some(bytes) = &effective_bytes {
                     harness.push_str(&format!(
                         "            let expected: Vec<u8> = vec![{}];\n",
                         bytes
@@ -470,7 +501,7 @@ fn main() {
                     harness.push_str("                Ok(encoded) => {\n");
 
                     // Compare bytes
-                    if let Some(bytes) = &tc.bytes {
+                    if let Some(bytes) = &effective_bytes {
                         harness.push_str(&format!(
                             "                    let expected: Vec<u8> = vec![{}];\n",
                             bytes

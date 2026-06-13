@@ -218,7 +218,7 @@ selectors (no sub-field, `sum_of_type_sizes`) remain Phase 4 (#24).
 optional, `c3d4614` DU+choice+byte_budget+measured length_of). enum aliases
 (repr integer at the API; decode validates the variant set), bitfields
 (anonymous `struct { sub: uN }`, ordered `writeBits`), optionals (`?T` + uint8
-presence byte; bit-presence is a clean skip matching a known Rust gap), choice
+presence byte; bit-presence later added in Phase 5), choice
 (peek each variant's first const field) / discriminated_union (`union(enum)` with
 explicit `{field}`/`{peek}` discriminator, `when`-less arm as `else`),
 `byte_budget` (decode active variant from a bounded sub-slice, advance parent by
@@ -432,3 +432,17 @@ runtime unit tests 28/28; TS reference 1194/1194 (no existing bytes edited).
     *value constructor* to the harness in the same change, and check the coverage
     report shows the cases emitting — a rising suite count with a flat case count
     is the tell.
+
+13. **A harness that only compares `bytes` silently drops `bits`-only suites.**
+    Some bit-level suites (`single_bit`, `three_bits`, `bit_order_*`) pin the wire
+    format with a `bits` array and no `bytes`. The TS/Go/Zig harnesses pack those
+    bits into expected bytes (zero-padding the final byte, honoring `bit_order`)
+    via a `bitsToBytes` helper; the Rust batched harness originally had no such
+    path and recorded every such case as `"no bytes and not round_trip_only"` —
+    5 suites / 10 cases failing that *looked* like a generator/runtime bug but was
+    purely a harness omission (the Rust generator + runtime encode/decode bits
+    correctly). Fixed in `rust/tests/compile_batch.rs` by computing an
+    `effective_bytes` (`bytes` if present, else `bits_to_bytes(bits, bit_order)`)
+    and asserting against that. Lesson: when standing up a new language harness,
+    port the `bitsToBytes` fallback alongside the `round_trip_only` fallback — a
+    bit-only pin is a normal, common shape, not an edge case.

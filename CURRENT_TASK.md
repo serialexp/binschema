@@ -178,9 +178,10 @@
 >   API; decode validates the variant set (`else => error.InvalidValue`).
 > - **bitfield** (`bitfield.ts`): anonymous `struct { sub: uN, ... }`; encode via
 >   ordered `writeBits`, decode assigns sub-fields in statement order.
-> - **optional** (`optional.ts`): `?T` with a uint8 presence byte. Bit-presence
->   optionals are a clean skip (reference runtime has a bit/byte-overlap quirk;
->   also a known Rust gap) — only `optional_builtin_bit` skips for this reason.
+> - **optional** (`optional.ts`): `?T` with a uint8 presence byte, or a single-bit
+>   presence marker when `presence_type: "bit"` (Phase 5 — the misaligned
+>   `writeUint8`/`readUint8` runtime paths pack the value LSB-first like the
+>   TS/Python reference, so no runtime change was needed).
 > - **choice / discriminated_union** (`union.ts`): anonymous
 >   `union(enum) { Variant: VariantStruct, ... }`. choice peeks each variant's
 >   first const field (flat `{type,...}` value); DU uses explicit `{field}` /
