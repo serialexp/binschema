@@ -371,8 +371,11 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
     case "field_referenced":
     case "eof_terminated":
     case "computed_count":
+    case "variant_terminated":
       // No length prefix on the wire — count is fixed / external / implicit /
-      // recomputed on decode from an expression.
+      // recomputed on decode from an expression. For variant_terminated the
+      // terminal marker is itself the array's last element, so encode just
+      // writes every item in order (handled by the generic loop below).
       break;
     case "signature_terminated":
     case "null_terminated":

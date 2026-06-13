@@ -387,6 +387,31 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
 
+  // variant_terminated: read polymorphic (union) items until a decoded item's
+  // active variant is one of `terminal_variants`. The terminal marker is itself
+  // the array's last element (it stays in the slice), so we append first and then
+  // break on a terminal tag — mirroring the TS/Python reference.
+  if (kind === "variant_terminated") {
+    const terminals: string[] = field.terminal_variants || [];
+    if (terminals.length === 0) {
+      throw new ZigNotImplemented("variant_terminated array without terminal_variants");
+    }
+    const arms = terminals.map((t) => `${indent}        .${zigTypeName(t)} => break,`);
+    lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
+    lines.push(`${indent}while (true) {`);
+    lines.push(`${indent}    if (!${DEC}.hasMore()) break;`);
+    lines.push(`${indent}    var ${item}: ${itemType} = undefined;`);
+    lines.push(...emitDecodeValue(itemField, ctx, item, structVar, indent + "    "));
+    lines.push(`${indent}    try ${list}.append(${ALLOC}, ${item});`);
+    lines.push(`${indent}    switch (${item}) {`);
+    lines.push(...arms);
+    lines.push(`${indent}        else => {},`);
+    lines.push(`${indent}    }`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = try ${list}.toOwnedSlice(${ALLOC});`);
+    return lines;
+  }
+
   // null_terminated: read items until a terminator byte is peeked (and consumed).
   if (kind === "null_terminated") {
     if (field.terminal_variants?.length) {
