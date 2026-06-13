@@ -1,6 +1,14 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** fourteen slices landed. Most recent —
+> **Latest (Phase 5, in progress):** fifteen slices landed. Most recent —
+> **`_root.` cross-struct decode refs** (`computed.ts` `schemaUsesRootDecode` +
+> `context.ts`/`index.ts`/`decode.ts`: when any `length_field`/`count_field`
+> reads `_root.a.b`, every `decodeWith` seeds a `root: ?*const anyopaque` —
+> `root_in orelse @ptrCast(&result)`, self at the entry / inherited otherwise —
+> and forwards it to nested decoders; a descendant resolves the path by casting
+> the pointer back to the entry type. Schemas with no `_root` ref keep the lean
+> path untouched. Unblocked the 3 elf/zip instance suites — harness 332/354 ·
+> 789/789). Before that —
 > **`instances` (random access)** (`packages/binschema/src/generators/zig/instances.ts`:
 > after the sequence decodes, save the cursor, seek to each instance's resolved
 > absolute offset, decode the typed payload, restore the cursor — eager like
@@ -9,21 +17,18 @@
 > Positions resolve from a literal `>=0` (absolute), literal `<0` (from EOF), a
 > sibling field, or a dotted path into an earlier-decoded instance; `alignment`
 > is validated. Instance struct members are appended to the struct, populated on
-> decode, ignored on encode. **18/21 instance suites land**; the other 3
-> (elf/zip) are blocked by the parent/root cross-struct ref bucket and pcf_full by
-> an unresolved field type — not by instances). Zig harness now **329/354 codegen
-> suites generate (+12 validation-only), 786/786 cases pass, 0 errored, 0 failed**;
-> runtime 28/28; TS reference **1192/1192** (no existing bytes edited).
+> decode, ignored on encode. **18/21 instance suites landed at the time**; the
+> `_root.` slice above then unblocked the remaining elf/zip suites.
 >
 > **Phase 5 still pending — large structural buckets** (pick via
 > `ZIG_TEST_REPORT=skips`, run from project root): DU variants that aren't structs
 > + `back_reference` for DNS label pointers (needs a runtime compression
-> dictionary, ~13 suites), parent/root cross-struct field references (`../` /
-> `_root.` paths threaded into nested decode — unblocks the elf/zip instance
-> suites), kerberos SEQUENCE types (varlength measure-then-patch +
-> `from_after_field` with parent refs, ~7), `optional_builtin_bit` (1 suite — a
-> documented bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not
-> replicate).
+> dictionary, ~13 suites), `../` parent-stack decode references (distinct from the
+> `_root.` mechanism — walks up N parent scopes; needed for the kerberos bucket),
+> kerberos SEQUENCE types (varlength measure-then-patch + `from_after_field` with
+> parent refs, ~7), `pcf_full` (unresolved field type, 1), `optional_builtin_bit`
+> (1 suite — a documented bit/byte-overlap runtime quirk the byte-oriented Zig
+> runtime does not replicate).
 >
 > ---
 >

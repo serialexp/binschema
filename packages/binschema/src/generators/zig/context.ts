@@ -16,7 +16,8 @@ export const RT = "binschema";
 export const ENC = "enc"; // *BitStreamEncoder
 export const CTX = "ctx"; // *EncodeContext
 export const DEC = "dec"; // *BitStreamDecoder
-export const ROOT = "root"; // ?*anyopaque — decode-side parent/root for ../ refs
+export const ROOT = "root"; // the effective root pointer used inside a decode body
+export const PARENT_ROOT = "root_in"; // the inherited root param (null at the entry)
 export const ALLOC = "allocator"; // std.mem.Allocator threaded into decode (owned slices)
 
 /** Parameter list for an `encodeInto`-style method (no leading self). */
@@ -29,9 +30,17 @@ export function encodeArgs(): string {
   return `${ENC}, ${CTX}`;
 }
 
-/** Parameter list for a `decodeWith`-style function. */
-export function decodeParams(): string {
-  return `${ALLOC}: std.mem.Allocator, ${DEC}: *${RT}.BitStreamDecoder, ${ROOT}: ?*anyopaque`;
+/**
+ * Parameter list for a `decodeWith`-style function. When the schema uses
+ * `_root.…` decode references, the inherited root arrives as `root_in`
+ * (`?*const anyopaque`) and the body rebinds it to a `root` local (seeding self
+ * at the entry); otherwise the lean signature names the param `root` directly.
+ */
+export function decodeParams(usesRoot = false): string {
+  const rootParam = usesRoot
+    ? `${PARENT_ROOT}: ?*const anyopaque`
+    : `${ROOT}: ?*anyopaque`;
+  return `${ALLOC}: std.mem.Allocator, ${DEC}: *${RT}.BitStreamDecoder, ${rootParam}`;
 }
 
 /** Argument list to forward when calling a `decodeWith`-style function. */

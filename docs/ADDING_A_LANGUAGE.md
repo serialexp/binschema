@@ -271,18 +271,26 @@ TS's lazy getters; the encoder never writes instance bytes so the harness
 verifies these suites decode-only via `expectEqualDeep`. Positions resolve from a
 literal `>=0` (absolute), literal `<0` (from EOF), a sibling field, or a dotted
 path into an earlier-decoded instance; `alignment` is validated. 18/21 instance
-suites land here — the other 3 are blocked by the parent/root cross-struct and
-unresolved-type buckets below, not by instances). Still pending (all large
-structural buckets): compression/back-reference for DNS label pointers
-(`back_reference` type + a runtime compression dictionary; gates DU variants that
-aren't structs, ~13 suites), parent/root cross-struct field references (`../` /
-`_root.` paths threaded into nested decode; gates elf/zip instance suites),
-kerberos SEQUENCE types (varlength measure-then-patch + `from_after_field` with
-parent refs, ~7 suites), and `optional_builtin_bit` (1 suite, a documented
-bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not replicate).
+suites land here — the other 3 are unblocked by the `_root.` work below), then
+**`_root.` cross-struct decode references** (`computed.ts` `schemaUsesRootDecode`
++ `index.ts`: when any `length_field`/`count_field` reads `_root.a.b`, every
+struct's `decodeWith` seeds a `root: ?*const anyopaque` — `root_in orelse
+@ptrCast(&result)`, i.e. self at the entry, inherited otherwise — and forwards it
+to nested decoders; a descendant resolves `_root.a.b` by casting the pointer back
+to the entry type `@as(*const Root, @ptrCast(@alignCast(root.?))).a.b`. Schemas
+without any `_root` ref keep the lean param-named-`root` path untouched. This
+unblocked the 3 elf/zip instance suites). Still pending (all large structural
+buckets): compression/back-reference for DNS label pointers (`back_reference`
+type + a runtime compression dictionary; gates DU variants that aren't structs,
+~13 suites), `../` parent-stack decode references (a different mechanism from
+`_root.` — walks up N parent scopes; none currently in the skip set but needed
+for the kerberos bucket), kerberos SEQUENCE types (varlength measure-then-patch +
+`from_after_field` with parent refs, ~7 suites), and `optional_builtin_bit`
+(1 suite, a documented bit/byte-overlap runtime quirk the byte-oriented Zig
+runtime does not replicate).
 
-**Latest harness numbers:** 329/354 codegen suites generate (+12 validation-only,
-not codegen targets), 786/786 cases pass, 0 errored, 0 failed; runtime unit tests
+**Latest harness numbers:** 332/354 codegen suites generate (+12 validation-only,
+not codegen targets), 789/789 cases pass, 0 errored, 0 failed; runtime unit tests
 28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---

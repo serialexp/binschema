@@ -50,6 +50,10 @@ export interface EmitCtx {
    *  self-variant occurrence: the N-th element of this type correlates to the
    *  N-th matching target). Undefined outside a named struct (alias functions). */
   selfTypeName?: string;
+  /** The Zig type name of the schema's entry (root) type. A `_root.a.b` decode
+   *  reference resolves against this type by casting the threaded `root` pointer.
+   *  Only set when the schema actually uses `_root` (decode-side). */
+  rootTypeName?: string;
 }
 
 /**

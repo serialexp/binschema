@@ -307,6 +307,46 @@ export function schemaHasParentRefs(schema: any): boolean {
 }
 
 /**
+ * Does any type use a `_root.…`-prefixed reference that must be resolved on the
+ * DECODE side? Scans `length_field` / `count_field` on every field (and nested
+ * array `items`) across all sequences and instance payloads. When true, every
+ * generated `decodeWith` seeds a `root` pointer (self when it is the entry,
+ * otherwise the inherited root) so descendant decoders can read `_root.a.b`.
+ */
+export function schemaUsesRootDecode(schema: any): boolean {
+  const fieldUsesRoot = (f: any): boolean => {
+    if (!f || typeof f !== "object") return false;
+    const lf = f.length_field;
+    const cf = f.count_field;
+    if (typeof lf === "string" && lf.startsWith("_root")) return true;
+    if (typeof cf === "string" && cf.startsWith("_root")) return true;
+    // Array items can themselves be field-referenced.
+    if (f.items && fieldUsesRoot(f.items)) return true;
+    return false;
+  };
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any)?.sequence;
+    if (Array.isArray(seq) && seq.some(fieldUsesRoot)) return true;
+    // A top-level string/bytes/array type carries its referencing fields inline.
+    if (fieldUsesRoot(typeDef)) return true;
+    const insts = (typeDef as any)?.instances;
+    if (Array.isArray(insts)) {
+      for (const inst of insts) {
+        const t = inst?.type;
+        // Inline DU instance: scan its variant fields.
+        if (t && typeof t === "object" && Array.isArray(t.variants)) {
+          for (const v of t.variants) {
+            const vseq = v?.sequence;
+            if (Array.isArray(vseq) && vseq.some(fieldUsesRoot)) return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * The `length_of` value a parent should register for a field so a child's
  * `length_of ../field` resolves synchronously: array/string/bytes -> `.len`
  * (element/byte count), integer scalar -> the value itself (matching the

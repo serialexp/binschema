@@ -241,11 +241,11 @@ function emitStringDecode(field: any, ctx: EmitCtx, lhs: string, structVar: stri
     return lines;
   }
   if (kind === "field_referenced" && field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
     return lines;
   }
   if (field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
     return lines;
   }
   // Greedy: consume the rest of the buffer.
@@ -331,7 +331,7 @@ function emitTranscodedStringDecode(
 
   if (field.length_field) {
     const raw = uniqueVar("_raw");
-    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar)}));`);
+    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
     lines.push(transcode(raw));
     return lines;
   }
@@ -364,7 +364,7 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
   if (kind === "field_referenced" && field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
     return lines;
   }
   if (field.length !== undefined) {
@@ -372,7 +372,7 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
   if (field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName)}));`);
     return lines;
   }
   const rem = uniqueVar("_rem");
@@ -549,7 +549,7 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
     countExpr = `@as(usize, ${lenVar})`;
   } else if (kind === "field_referenced" && (field.length_field || field.count_field)) {
-    countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar)}))`;
+    countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar, ctx.rootTypeName)}))`;
   } else if (kind === "computed_count" && field.count_expr) {
     countExpr = translateCountExpr(field.count_expr, structVar);
   } else {
@@ -631,9 +631,22 @@ function translateCountExpr(expr: string, structVar: string): string {
   return `@as(usize, ${translated})`;
 }
 
-function siblingRef(fieldRef: string, structVar: string): string {
-  if (fieldRef.startsWith("../") || fieldRef.startsWith("_root")) {
-    throw new ZigNotImplemented(`parent/root field reference '${fieldRef}' (cross-struct)`);
+function siblingRef(fieldRef: string, structVar: string, rootTypeName?: string): string {
+  if (fieldRef.startsWith("_root")) {
+    // `_root.a.b` → read field `a.b` on the decoded entry struct. The threaded
+    // `root` pointer is `?*const anyopaque`; cast it back to the entry type. The
+    // entry decoder seeds `root` to itself, so this is non-null here.
+    if (!rootTypeName) {
+      throw new ZigNotImplemented(`_root reference '${fieldRef}' without a known root type`);
+    }
+    const segs = fieldRef.split(".").slice(1).map((s) => zigFieldName(s));
+    if (segs.length === 0) {
+      throw new ZigNotImplemented(`bare '_root' reference '${fieldRef}'`);
+    }
+    return `@as(*const ${rootTypeName}, @ptrCast(@alignCast(${ROOT}.?))).${segs.join(".")}`;
+  }
+  if (fieldRef.startsWith("../")) {
+    throw new ZigNotImplemented(`parent field reference '${fieldRef}' (cross-struct)`);
   }
   const segs = fieldRef.split(".").map((s) => zigFieldName(s));
   return `${structVar}.${segs.join(".")}`;
