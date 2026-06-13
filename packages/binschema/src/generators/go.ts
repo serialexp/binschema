@@ -821,8 +821,19 @@ function generateComputedFieldEncoding(
         lines.push(`${indent}for ${computedVarName}I := ${computedVarName}ArrV.Len() - 1; ${computedVarName}I >= 0; ${computedVarName}I-- {`);
       }
       lines.push(`${indent}\t${computedVarName}It := ${computedVarName}ArrV.Index(${computedVarName}I).Interface()`);
-      lines.push(`${indent}\tif _, ${computedVarName}Ok := ${computedVarName}It.(*${goFilterType}); ${computedVarName}Ok {`);
-      lines.push(`${indent}\t\t${computedVarName}Target = ${computedVarName}It`);
+      // Match the element whether the slice holds *T (choice/DU variants are
+      // stored as interface{} pointers) or T by value (a homogeneous []T array).
+      // Normalize to a pointer so the sub-field walk below (reflect .Elem()) is
+      // uniform. NB: a bare `break` inside the type switch would break the switch,
+      // not the for loop — so the loop break stays in the `if` after the switch.
+      lines.push(`${indent}\tswitch ${computedVarName}Typed := ${computedVarName}It.(type) {`);
+      lines.push(`${indent}\tcase *${goFilterType}:`);
+      lines.push(`${indent}\t\t${computedVarName}Target = ${computedVarName}Typed`);
+      lines.push(`${indent}\tcase ${goFilterType}:`);
+      lines.push(`${indent}\t\t${computedVarName}Copy := ${computedVarName}Typed`);
+      lines.push(`${indent}\t\t${computedVarName}Target = &${computedVarName}Copy`);
+      lines.push(`${indent}\t}`);
+      lines.push(`${indent}\tif ${computedVarName}Target != nil {`);
       lines.push(`${indent}\t\tbreak`);
       lines.push(`${indent}\t}`);
       lines.push(`${indent}}`);

@@ -196,16 +196,23 @@ element's top frame nesting-safely; `recordPosition` carries that frame, and
 `subfield.length` / `subfield.range` from it. DU/choice selectors + element-size
 selectors (no sub-field, `sum_of_type_sizes`) remain Phase 4 (#24).
 
-> **Cross-language finding from the new homogeneous suites** (a textbook payoff
-> of the tests-first mandate): `homogeneous-selectors.test.ts` passes on TS and
-> Python but **fails on Go** (and, by inspection, likely Rust). Root cause: for a
-> homogeneous array the Go/Rust encode context retains only the element's
-> `_encoded_size`, not its sub-fields, so `[first/last<T>].payload` (selecting a
-> *sub-field* of the chosen element) can't resolve — it computes the wrong value.
-> The DU-flavored peers pass because `choice` items carry full sub-fields. This
-> latent bug had hidden for months precisely because every selector suite was
-> DU-shaped. Tracked as a follow-up; not yet fixed (surfaced while answering a
-> "should we test selectors without a DU?" question).
+> **Cross-language finding from the new homogeneous suites — now fixed** (a
+> textbook payoff of the tests-first mandate): `homogeneous-selectors.test.ts`
+> initially passed on TS/Python/Zig but **failed on Go and Rust**, exposing a
+> latent bug that had hidden for months because every prior selector suite was
+> DU-shaped. Two distinct root causes, both in the encode path:
+> - **Go**: the sub-field walk asserted each element was `*T` (a pointer), which
+>   only holds for `choice`/DU variants stored as `interface{}` pointers. A
+>   homogeneous `[]T` holds values, so the assertion never matched and the
+>   selector errored. Fixed by matching both `*T` and `T` (normalizing to a
+>   pointer) in the reflect loop — `go.ts`.
+> - **Rust**: the homogeneous-array context collector stored only each element's
+>   `_encoded_size`, never its sub-fields, so `item_fields.get("payload")`
+>   resolved to 0. The `choice` path populated full sub-fields and worked. Fixed
+>   by snapshotting each element's sub-fields (shared `emitItemFieldInserts`
+>   helper, now used by both the choice and homogeneous paths) — `rust.ts`.
+> Both languages now pass the two homogeneous suites with no regression to the
+> DU-flavored peers.
 
 **Phase 4 — PENDING.** discriminated_union (`union(enum)`), choice, optionals
 (`?T`), bitfields, enum aliases. Unlocks DU-flavored selectors +

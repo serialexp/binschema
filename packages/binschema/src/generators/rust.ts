@@ -3926,6 +3926,67 @@ function generateSimpleImpl(name: string, schemaTypeName: string, fields: Field[
   return lines;
 }
 
+/** Integer/float field types -> their FieldValue scalar variant. */
+const FIELD_VALUE_SCALAR: Record<string, string> = {
+  uint8: "U8", uint16: "U16", uint32: "U32", uint64: "U64",
+  int8: "I8", int16: "I16", int32: "I32", int64: "I64",
+  float32: "F32", float64: "F64",
+};
+
+/**
+ * Emit `item_fields.insert("<name>", FieldValue::...)` lines that snapshot each
+ * extractable sub-field of an array element into the encode context, so a later
+ * `length_of`/`crc32_of arr[first/last/corresponding<T>].subfield` selector can
+ * read the value. `accessor` is the element binding (`v` for a choice variant's
+ * inner value, `item` for a homogeneous element); `indent` is the leading
+ * whitespace for each emitted line. Shared by the choice-array and
+ * homogeneous-typed-array context-collection paths (previously the homogeneous
+ * path stored only `_encoded_size`, so its sub-field selectors resolved to 0 —
+ * the choice path populated sub-fields and worked).
+ */
+function emitItemFieldInserts(
+  extractableFields: Field[],
+  accessor: string,
+  indent: string,
+  schema: BinarySchema,
+): string[] {
+  const out: string[] = [];
+  for (const sf of extractableFields) {
+    if (!sf.name) continue;
+    const sfName = sf.name;
+    const sfRustName = toRustFieldName(sfName);
+    const sfType = sf.type as string;
+    const acc = `${accessor}.${sfRustName}`;
+    if (sfType === "array" && (sf as any).items?.type === "uint8") {
+      out.push(`${indent}item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(${acc}.clone()));`);
+    } else if (sfType === "string") {
+      out.push(`${indent}item_fields.insert("${sfName}".to_string(), FieldValue::String(${acc}.clone()));`);
+    } else if (sfType in FIELD_VALUE_SCALAR) {
+      out.push(`${indent}item_fields.insert("${sfName}".to_string(), FieldValue::${FIELD_VALUE_SCALAR[sfType]}(${acc}));`);
+    } else if (sfType === "array") {
+      // Non-uint8 array — encode each element to bytes for size/crc computation.
+      out.push(`${indent}{`);
+      out.push(`${indent}    let mut sf_enc = BitStreamEncoder::new(BitOrder::MsbFirst);`);
+      out.push(`${indent}    for sf_item in &${acc} { let sf_bytes = sf_item.encode()?; for b in sf_bytes { sf_enc.write_uint8(b); } }`);
+      out.push(`${indent}    item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(sf_enc.finish()));`);
+      out.push(`${indent}}`);
+    } else if (schema.types?.[sfType]) {
+      // Named composite type — encode to bytes.
+      const sfTypeName = toRustTypeName(sfType);
+      const sfNeedsSuffix = typeNeedsInputOutputSuffix(sfType, schema);
+      out.push(`${indent}{`);
+      if (sfNeedsSuffix && isCompositeType(sfType, schema)) {
+        out.push(`${indent}    let sf_bytes = ${sfTypeName}Input::from(${acc}.clone()).encode().unwrap_or_default();`);
+      } else {
+        out.push(`${indent}    let sf_bytes = ${acc}.encode()?;`);
+      }
+      out.push(`${indent}    item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(sf_bytes));`);
+      out.push(`${indent}}`);
+    }
+  }
+  return out;
+}
+
 /**
  * Generates the encode method
  * Encodes input fields from self, writes const values directly, skips computed fields
@@ -4069,58 +4130,8 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
                 f.name && f.type !== "padding" && !f.computed && f.const == null
               );
               lines.push(`                    ${choiceEnumName}::${rustChoiceTypeName}(v) => {`);
-              for (const sf of extractableFields) {
-                if (!sf.name) continue;
-                const sfName = sf.name;
-                const sfRustName = toRustFieldName(sfName);
-                const sfType = sf.type as string;
-                // Convert each field to a FieldValue
-                if (sfType === "array" && (sf as any).items?.type === "uint8") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(v.${sfRustName}.clone()));`);
-                } else if (sfType === "string") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::String(v.${sfRustName}.clone()));`);
-                } else if (sfType === "uint8") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U8(v.${sfRustName}));`);
-                } else if (sfType === "uint16") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U16(v.${sfRustName}));`);
-                } else if (sfType === "uint32") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U32(v.${sfRustName}));`);
-                } else if (sfType === "uint64") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::U64(v.${sfRustName}));`);
-                } else if (sfType === "int8") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I8(v.${sfRustName}));`);
-                } else if (sfType === "int16") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I16(v.${sfRustName}));`);
-                } else if (sfType === "int32") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I32(v.${sfRustName}));`);
-                } else if (sfType === "int64") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::I64(v.${sfRustName}));`);
-                } else if (sfType === "float32") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::F32(v.${sfRustName}));`);
-                } else if (sfType === "float64") {
-                  lines.push(`                        item_fields.insert("${sfName}".to_string(), FieldValue::F64(v.${sfRustName}));`);
-                } else if (sfType === "array") {
-                  // Non-uint8 array — encode to bytes for size/crc computation
-                  lines.push(`                        {`);
-                  lines.push(`                            let mut sf_enc = BitStreamEncoder::new(BitOrder::MsbFirst);`);
-                  lines.push(`                            for sf_item in &v.${sfRustName} { let sf_bytes = sf_item.encode()?; for b in sf_bytes { sf_enc.write_uint8(b); } }`);
-                  lines.push(`                            item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(sf_enc.finish()));`);
-                  lines.push(`                        }`);
-                } else if (schema.types?.[sfType]) {
-                  // Named composite type — encode to bytes
-                  const sfTypeName = toRustTypeName(sfType);
-                  const sfNeedsSuffix = typeNeedsInputOutputSuffix(sfType, schema);
-                  lines.push(`                        {`);
-                  if (sfNeedsSuffix && isCompositeType(sfType, schema)) {
-                    // Output type — convert to Input first, use unwrap_or_default for types that need parent context
-                    lines.push(`                            let sf_bytes = ${sfTypeName}Input::from(v.${sfRustName}.clone()).encode().unwrap_or_default();`);
-                  } else {
-                    lines.push(`                            let sf_bytes = v.${sfRustName}.encode()?;`);
-                  }
-                  lines.push(`                            item_fields.insert("${sfName}".to_string(), FieldValue::Bytes(sf_bytes));`);
-                  lines.push(`                        }`);
-                }
-              }
+              // Variant inner value is bound to `v`; snapshot its sub-fields.
+              lines.push(...emitItemFieldInserts(extractableFields, "v", "                        ", schema));
               lines.push(`                    },`);
             } else {
               // Non-sequence type (string alias, back_reference, etc.)
@@ -4154,6 +4165,16 @@ function generateEncodeMethod(fields: Field[], defaultEndianness: string, defaul
           }
           lines.push(`                let mut item_fields: HashMap<std::string::String, FieldValue> = HashMap::new();`);
           lines.push(`                item_fields.insert("_encoded_size".to_string(), FieldValue::U64(item_bytes.len() as u64));`);
+          // Snapshot each element's sub-fields so `length_of`/`crc32_of
+          // arr[first/last<T>].subfield` selectors can read them. Only when the
+          // element encodes standalone (`item` is bound, not `_`); items that
+          // need parent context fall back to the size-only record above.
+          if (!itemsNeedCtx) {
+            const extractable = itemFields.filter((f: any) =>
+              f.name && f.type !== "padding" && !f.computed && f.const == null
+            );
+            lines.push(...emitItemFieldInserts(extractable, "item", "                ", schema));
+          }
           lines.push(`                items_data.push(("${itemTypeName}".to_string(), item_fields));`);
           lines.push(`            }`);
           lines.push(`            parent_fields.insert("${field.name}".to_string(), FieldValue::Items(items_data));`);
