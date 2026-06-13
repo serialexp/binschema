@@ -308,13 +308,16 @@ pointer to the entry type). This closed `dns_protocol_query`/`_response`. The
 `pcf_full` PCF-font suite now lands too: a bare alias to a *primitive*
 (`Uint8 -> uint8`, not to another named type) is resolved at every site
 (`zigDeclaredType`, encode/decode type-ref dispatch, and the harness value
-builder) by checking `zigPrimitiveType` on the resolved def. Only
-`optional_builtin_bit` remains (1 suite, a documented bit/byte-overlap runtime
-quirk the byte-oriented Zig runtime does not replicate).
+builder) by checking `zigPrimitiveType` on the resolved def. The final suite,
+`optional_builtin_bit` (`presence_type: "bit"`), lands too: the presence marker
+is emitted as a single bit (`writeBits(1,1)` / `readBits(1)`) instead of a byte,
+and the misaligned `writeUint8`/`readUint8` runtime paths already pack the value
+LSB-first exactly like the TS/Python reference — no runtime change needed. **Phase
+5 is complete: every codegen suite passes.**
 
-**Latest harness numbers:** 353/354 codegen suites generate (+12 validation-only,
-not codegen targets), 832/832 cases pass, 0 errored, 0 failed; runtime unit tests
-28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
+**Latest harness numbers:** 354/354 codegen suites generate (+12 validation-only,
+not codegen targets), 833/833 cases pass, 0 codegen-skipped, 0 errored, 0 failed;
+runtime unit tests 28/28; TS reference 1194/1194 (no existing bytes edited).
 
 ---
 

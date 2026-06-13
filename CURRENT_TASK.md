@@ -1,14 +1,19 @@
-# Zig Generator — Phase 5 IN PROGRESS
+# Zig Generator — Phase 5 COMPLETE
 
-> **Latest (Phase 5, in progress):** nineteen slices landed. Most recent —
+> **Latest (Phase 5 COMPLETE):** twenty slices landed; **every codegen suite now
+> passes** (354/354 · 833/833, 0 codegen-skipped, 0 errored, 0 failed, TS 1194).
+> Final slice — **bit-presence optionals** (closed `optional_builtin_bit`). An
+> optional with `presence_type: "bit"` now emits a single-bit presence marker
+> (`writeBits(1,1)` / `readBits(1)`) instead of a byte; the misaligned
+> `writeUint8`/`readUint8` runtime paths already pack the value LSB-first exactly
+> like the TS/Python reference, so no runtime change was needed (the old "runtime
+> does not replicate" skip note was stale). Before that —
 > **primitive-alias resolution** (closed `pcf_full`). A bare alias whose terminal
 > type is a *primitive* (`Uint8 -> uint8`, not another named struct/enum) is now
 > resolved at every site: `zigDeclaredType`, the encode/decode type-ref dispatch,
 > and the harness value builder all check `zigPrimitiveType(resolveAlias(...))` and
-> emit the primitive directly instead of throwing "unresolved field type". Harness
-> **353/354 · 832/832**, 0 errored/0 failed, TS 1192. Only `optional_builtin_bit`
-> remains (a bit/byte-overlap quirk the byte-oriented Zig runtime does not
-> replicate). Before that —
+> emit the primitive directly instead of throwing "unresolved field type". Before
+> that —
 > **bare ancestor-scope field refs** (closed `dns_protocol_query`/`_response`).
 > A non-local `length_field`/`count_field` that names a field of the entry (root)
 > type — DNS `DnsQuery.questions` is `length_field: "qdcount"`, where `qdcount`

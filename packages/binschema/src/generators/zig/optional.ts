@@ -1,7 +1,8 @@
-// ABOUTME: Optional (`?T`) field emission for the Zig generator (Phase 4).
-// ABOUTME: A `uint8` presence byte (1=present, 0=absent) precedes the value.
-// Bit-presence optionals rely on a bit/byte-overlap quirk in the reference
-// runtime that the byte-oriented Zig runtime does not replicate — skipped.
+// ABOUTME: Optional (`?T`) field emission for the Zig generator (Phase 4/5).
+// ABOUTME: A presence marker (1=present, 0=absent) precedes the value. The
+// marker is a `uint8` byte by default, or a single bit when
+// `presence_type: "bit"` — the bit case packs into the surrounding bitstream
+// exactly like the TS/Python reference (misaligned `writeUint8` is LSB-first).
 
 import { ENC, DEC } from "./context.js";
 import { uniqueVar } from "./naming.js";
@@ -16,16 +17,32 @@ function innerField(field: any): any {
   return f;
 }
 
-function assertBytePresence(field: any): void {
+/** Validate the presence marker kind; only `uint8` and `bit` are supported. */
+function presenceKind(field: any): "uint8" | "bit" {
   const presence = field.presence_type || "uint8";
-  if (presence !== "uint8") {
-    throw new ZigNotImplemented(`optional with '${presence}' presence (bit/byte overlap)`);
+  if (presence !== "uint8" && presence !== "bit") {
+    throw new ZigNotImplemented(`optional with '${presence}' presence`);
   }
+  return presence;
+}
+
+/** Emit the presence-marker write (1=present, 0=absent). */
+function writePresence(kind: "uint8" | "bit", present: 0 | 1, indent: string): string {
+  return kind === "bit"
+    ? `${indent}try ${ENC}.writeBits(${present}, 1);`
+    : `${indent}try ${ENC}.writeUint8(${present});`;
+}
+
+/** Emit the presence-marker read as a Zig `bool` expression. */
+function readPresenceExpr(kind: "uint8" | "bit"): string {
+  return kind === "bit"
+    ? `(try ${DEC}.readBits(1)) != 0`
+    : `(try ${DEC}.readUint8()) != 0`;
 }
 
 /** Zig declared type for an optional field: `?<inner>`. */
 export function zigOptionalType(field: any, schema: any): string {
-  assertBytePresence(field);
+  presenceKind(field);
   return `?${zigDeclaredType(innerField(field), schema)}`;
 }
 
@@ -40,14 +57,14 @@ export function emitOptionalEncode(
   indent: string,
   recurse: (f: any, v: string, c: EmitCtx, i: string) => string[],
 ): string[] {
-  assertBytePresence(field);
+  const kind = presenceKind(field);
   const opt = uniqueVar("_opt");
   const lines: string[] = [];
   lines.push(`${indent}if (${value}) |${opt}| {`);
-  lines.push(`${indent}    try ${ENC}.writeUint8(1);`);
+  lines.push(writePresence(kind, 1, indent + "    "));
   lines.push(...recurse(innerField(field), opt, ctx, indent + "    "));
   lines.push(`${indent}} else {`);
-  lines.push(`${indent}    try ${ENC}.writeUint8(0);`);
+  lines.push(writePresence(kind, 0, indent + "    "));
   lines.push(`${indent}}`);
   return lines;
 }
@@ -64,12 +81,12 @@ export function emitOptionalDecode(
   indent: string,
   recurse: (f: any, c: EmitCtx, lhs: string, sv: string, i: string) => string[],
 ): string[] {
-  assertBytePresence(field);
+  const kind = presenceKind(field);
   const present = uniqueVar("_present");
   const tmp = uniqueVar("_optv");
   const innerType = zigDeclaredType(innerField(field), ctx.schema);
   const lines: string[] = [];
-  lines.push(`${indent}const ${present} = (try ${DEC}.readUint8()) != 0;`);
+  lines.push(`${indent}const ${present} = ${readPresenceExpr(kind)};`);
   lines.push(`${indent}if (${present}) {`);
   lines.push(`${indent}    var ${tmp}: ${innerType} = undefined;`);
   lines.push(...recurse(innerField(field), ctx, tmp, structVar, indent + "    "));
