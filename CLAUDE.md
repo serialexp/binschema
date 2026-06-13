@@ -619,11 +619,25 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
 
 ### Adding a New Generator
 
+**Read `docs/ADDING_A_LANGUAGE.md` first.** It is the canonical guide: the
+mandatory phase order and *why* each step precedes the next, the module split,
+the architecture litmus test, plus a **"Pitfalls & lessons learned" appendix**
+(generator-general traps that will bite the next target, language-specific
+gotchas, and operational notes) and a **live per-language status appendix**.
+
 1. Implement generator in `src/generators/<language>.ts`
 2. Add runtime library in `<language>/runtime/`
 3. Create test suite in `<language>/test/`
 4. Ensure it can consume JSON test cases from `tests-json/`
 5. Update documentation
+
+**Keep `docs/ADDING_A_LANGUAGE.md` current as part of the work, not after it:**
+- When a phase lands, update its entry in the **live status appendix** (commit
+  hashes preferred) and the **latest harness numbers** line.
+- Whenever a trap costs real debugging time, add it to the **"Pitfalls &
+  lessons learned" appendix** — root-cause first, anchored to the suite/commit
+  that surfaced it, filed under generator-general vs. language-specific vs.
+  operational. The point is that each trap is paid for exactly once.
 
 ### Debugging Go Tests
 

@@ -214,13 +214,126 @@ selectors (no sub-field, `sum_of_type_sizes`) remain Phase 4 (#24).
 > Both languages now pass the two homogeneous suites with no regression to the
 > DU-flavored peers.
 
-**Phase 4 — PENDING.** discriminated_union (`union(enum)`), choice, optionals
-(`?T`), bitfields, enum aliases. Unlocks DU-flavored selectors +
-`sum_of_type_sizes`.
+**Phase 4 — DONE** (commits `a37640a` enum, `be0b893` bitfield, `ede6faf`
+optional, `c3d4614` DU+choice+byte_budget+measured length_of). enum aliases
+(repr integer at the API; decode validates the variant set), bitfields
+(anonymous `struct { sub: uN }`, ordered `writeBits`), optionals (`?T` + uint8
+presence byte; bit-presence is a clean skip matching a known Rust gap), choice
+(peek each variant's first const field) / discriminated_union (`union(enum)` with
+explicit `{field}`/`{peek}` discriminator, `when`-less arm as `else`),
+`byte_budget` (decode active variant from a bounded sub-slice, advance parent by
+the full budget — RIFF), and **measured `length_of`** of a struct/union target
+(reserve u32, back-patch with the encoded byte span since unions have no `.len`).
 
-**Phase 5 — PENDING.** Remaining varlength, compression/back-reference,
-utf16/latin1, array transforms, `instances`, parity sweep.
+**Phase 4 follow-on (#24) — DONE** (commits `67e6a79` named unions + first/last,
+`44a7aa1` sum_of_type_sizes + sum_of_sizes, `381f7b3` corresponding<T>). See the
+new pitfalls below for the three traps this phase surfaced (distinct anonymous
+unions, occurrence-at-encode-time, occurrence-in-own-array).
 
-**Latest harness numbers:** 178/365 suites generate, 407/407 cases pass, 0
-errored; runtime unit tests 17/17; TS reference 1189/1189 unchanged. Update on
-each landing.
+**Phase 5 — PENDING.** Remaining varlength (signed/zigzag/sleb128),
+compression/back-reference (DNS), conditional fields, utf16/latin1,
+array transforms (delta), alignment padding, `instances` (random access),
+length_prefixed_items, kerberos non-integer computed fields, parity sweep.
+
+**Latest harness numbers:** 255/365 suites generate, 530/530 cases pass, 0
+errored, 0 failed; runtime unit tests 21/21; TS reference 1189/1189 unchanged.
+Update on each landing.
+
+---
+
+## Appendix: Pitfalls & lessons learned
+
+> A running log of traps that cost real debugging time, so the next generator
+> author (or a future revisit of this one) pays for each once. Split into
+> **generator-general** (will bite any new target) and **language-specific**.
+> Add to this as you hit new ones — terse, example-anchored, root-cause first.
+
+### Generator-general (applies to the *next* language too)
+
+1. **`corresponding<T>` occurrence must be captured at ENCODE time, not read
+   back from final aggregate state.** The intuitive implementation — at patch
+   resolution, ask the context "how many `T` are there" — collapses *every*
+   referencer onto the same target (the last/total count), so all of them point
+   at `target[0]` or `target[N]`. The Nth referencing element must correlate to
+   the Nth matching target, and "which N am I" is only knowable *while encoding
+   that element*. Fix: stamp the 1-based occurrence index onto the deferred patch
+   at encode time (Zig: `occurrence: ?usize` on `selector_position`/`_length`/
+   `_crc32`); the resolver consumes it instead of recomputing. (Python solves the
+   same problem differently — it inlines the correlation at the call site rather
+   than deferring; either is fine, but *something* must capture occurrence early.)
+
+2. **Occurrence is counted in the referencer's OWN (innermost) array, not the
+   target array.** This unifies same-array correlation (ZIP: local file headers
+   ↔ central-directory entries live in the *same* element stream) with
+   cross-array correlation (sibling arrays via `../../`). If you count in the
+   target array you get ZIP right and every sibling-array schema wrong (the three
+   `sibling_array_cross_reference` / `inner_references_outer_array` /
+   `deep_nesting_cross_reference` suites). Fix: a `current_arrays` stack the array
+   loop push/pops; `selfOccurrence(self_type, fallback)` reads the top of stack.
+   Plain (non-selector-tracked) sibling arrays still need to push their name and
+   bump a per-element type index, hence a correlation-only loop wrapper.
+
+3. **Deferred patches must capture a frame *pointer/handle*, not a relative
+   level index.** Relative indices (`../`, `../../`) are only valid *before* the
+   ancestor frame is popped; by resolution time the stack has unwound. Capture the
+   pointer to a pointer-stable, arena-allocated frame at emit time so it survives
+   the pop. (Already in the Phase-3b notes and `POSITION_TRACKING_ARCHITECTURE.md`
+   — repeated here because it's the single highest-value correctness insight and
+   the next author will be tempted to store an index.)
+
+4. **A homogeneous `[]T` is NOT a degenerate `choice` — the encode-path value
+   shape differs.** Selectors and sub-field walks that were only ever tested on
+   DU/choice arrays assume the element is a tagged/boxed value (Go: `*T`
+   interface pointer; Rust: a context entry carrying full sub-fields). A plain
+   `[]T` holds bare values, so those assumptions silently resolve to "no match" /
+   size `0`. This stayed latent for *months* because every selector suite was
+   DU-shaped (see the Phase-3e cross-language finding above). Lesson: add the
+   *homogeneous* variant of every polymorphic-array feature to the corpus — the
+   shapes diverge in the encoder even when they look identical in the schema.
+
+5. **`from_after_field` only exists on `varlength` in the reference.** Don't
+   invent a fixed-width `from_after_field` suite to "round out coverage" — TS
+   (the spec) rejects it, so you'd be cementing a non-spec shape. Fixed-width is a
+   legitimate clean skip.
+
+6. **Defer with a typed `NotImplemented` throw, never a silent miscompute.** The
+   expensive bug class is a feature that emits `0`/`null` instead of throwing —
+   the harness counts the suite as passing-ish and the gap hides. A throw makes
+   the per-suite skip honest and greppable (`<LANG>_TEST_REPORT=skips`).
+
+### Zig-specific
+
+7. **Anonymous `union(enum){ … }` literals at two different source sites are
+   DISTINCT types** — even when structurally identical. Assigning one where the
+   other is expected fails to compile. Any feature that materializes a union in
+   more than one place (a DU field *and* the array-element recording that filters
+   it by variant, e.g. `first<T>` over a choice array) must emit ONE shared
+   **named** union type and refer to it everywhere. Fix: `collectUnionTypes` +
+   `unionTypeName`; the array recorder reads each element's actual variant via a
+   runtime tag switch (`unionTypeSwitchExpr`). This was the whole reason
+   `67e6a79` (named unions) had to precede `first/last` over choice arrays.
+
+8. **`BitStreamEncoder.init(allocator, bitOrder)` takes a `BitOrder`
+   (`.msb_first`/`.lsb_first`), NOT an `Endianness` (`.little_endian`/
+   `.big_endian`).** They're both two-valued enums describing "byte/bit order"
+   and are trivially swappable by autocomplete; passing `.little_endian` is a
+   compile error pointing at the *enum definition*, not the call site, which makes
+   it read like a deeper problem than a one-token typo. Endianness is a *separate*
+   concept threaded to `patchUintN`/`writeUintN`. Cost a confusing runtime-test
+   compile error during the `sum_of_type_sizes` work.
+
+9. **Toolchain is a dev build (`zig 0.17.0-dev`) — std APIs drift.** Pin the
+   version in `build.zig.zon`/docs; treat "this std signature changed" as expected
+   when revisiting after an upgrade, not a code bug.
+
+### Operational
+
+10. **Run the harness from the project root** (`/home/bart/Projects/binschema`),
+    not from `packages/binschema`. The file-import-based harness resolves the root
+    module's `binschema` dependency relative to cwd; from the wrong directory you
+    get a misleading `Module not found 'zig/test/run_tests.ts'` that looks like a
+    missing file rather than a cwd problem.
+
+11. **The test-export step writes JSON but does not prune orphans.** Delete a
+    suite and its stale `.generated/tests-json/**/<name>.json` lingers and keeps
+    "failing" as a ghost — remove it by hand. (Also noted in the harness section.)
