@@ -153,13 +153,25 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
     case "array":
       return `[]const ${zigItemType(resolved.items, schema)}`;
     case "enum":
-      throw new ZigNotImplemented(`enum type '${field.type}' (Phase 4)`);
+      // Enums are represented as their repr integer at the API boundary.
+      return enumReprZigTypeFor(resolved);
     case "discriminated_union":
       throw new ZigNotImplemented(`discriminated_union type '${field.type}' (Phase 4)`);
     case "choice":
       throw new ZigNotImplemented(`choice type '${field.type}' (Phase 4)`);
     default:
       throw new ZigNotImplemented(`unresolved field type '${field.type}'`);
+  }
+}
+
+/** Map a resolved enum typeDef's repr (uint8/uint16/uint32) to its Zig int type. */
+export function enumReprZigTypeFor(typeDef: any): string {
+  switch (typeDef?.repr) {
+    case "uint8": return "u8";
+    case "uint16": return "u16";
+    case "uint32": return "u32";
+    default:
+      throw new ZigNotImplemented(`enum repr '${typeDef?.repr}'`);
   }
 }
 

@@ -161,7 +161,18 @@ function zigValueType(field: any, schema: any, alias: string): string {
     case "struct": return `${alias}.${zigTypeName(field.type)}`;
     case "string": case "bytes": return "[]const u8";
     case "array": return `[]const ${zigValueType(itemField(resolved.items), schema, alias)}`;
+    case "enum": return enumReprType(resolved);
     default: throw new UnsupportedValue(`value type for '${field.type}'`);
+  }
+}
+
+/** The Zig repr-integer type for a resolved enum typeDef (value boundary type). */
+function enumReprType(typeDef: any): string {
+  switch (typeDef?.repr) {
+    case "uint8": return "u8";
+    case "uint16": return "u16";
+    case "uint32": return "u32";
+    default: throw new UnsupportedValue(`enum repr '${typeDef?.repr}'`);
   }
 }
 
@@ -195,6 +206,7 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
     case "bytes": return bytesValue(value);
     case "array": return arrayValue(resolved.items, value, schema, alias);
     case "struct": return structValue(field.type, resolved, value, schema, alias);
+    case "enum": return intLiteral(value);
     default: throw new UnsupportedValue(`value for type '${field.type}'`);
   }
 }

@@ -25,6 +25,7 @@ import { resetVarCounter, zigFieldName, zigTypeName } from "./naming.js";
 import { zigBitOrder, zigDeclaredType, zigPrimitiveType, varlengthWriteMethod } from "./types.js";
 import { generateFieldEncode, emitEncodeValue, ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { generateFieldDecode, emitDecodeValue } from "./decode.js";
+import { generateEnumCode } from "./enum.js";
 import {
   computedTargets,
   emitComputedBackpatch,
@@ -79,7 +80,7 @@ export function generateZig(
       }
       lines.push(...generateStructCode(name, typeDef as any, schema, defaultEndianness, defaultBitOrder));
     } else if (isEnumType(typeDef as any)) {
-      throw new ZigNotImplemented(`enum type '${name}' (Phase 4)`);
+      lines.push(...generateEnumCode(name, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ((typeDef as any).type === "discriminated_union") {
       throw new ZigNotImplemented(`discriminated_union type '${name}' (Phase 4)`);
     } else if (

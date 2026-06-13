@@ -12,6 +12,7 @@ import {
   varlengthReadMethod,
 } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
+import { emitEnumDecode } from "./enum.js";
 
 /**
  * Emit statements to decode a single named field of `target` (e.g. "result")
@@ -73,7 +74,7 @@ export function emitDecodeValue(
     case "array":
       return emitArrayDecode(resolved, ctx, lhs, structVar, indent);
     case "enum":
-      throw new ZigNotImplemented(`enum type '${field.type}' (Phase 4)`);
+      return emitEnumDecode(resolved, lhs, field.endianness, ctx.endianness, indent);
     case "discriminated_union":
       throw new ZigNotImplemented(`discriminated_union type '${field.type}' (Phase 4)`);
     case "choice":

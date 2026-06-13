@@ -16,6 +16,7 @@ import {
   selectorItemTypeName,
   emitSelectorArrayRecording,
 } from "./computed.js";
+import { emitEnumEncode } from "./enum.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -95,7 +96,7 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "array":
       return emitArrayEncode(resolved, value, ctx, indent);
     case "enum":
-      throw new ZigNotImplemented(`enum type '${field.type}' (Phase 4)`);
+      return emitEnumEncode(resolved, value, field.endianness, ctx.endianness, indent);
     case "discriminated_union":
       throw new ZigNotImplemented(`discriminated_union type '${field.type}' (Phase 4)`);
     case "choice":
