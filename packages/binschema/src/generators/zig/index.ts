@@ -298,6 +298,8 @@ function structFieldType(field: any, schema: BinarySchema): string {
  * built without them.
  */
 function fieldDefault(field: any): string {
+  // Optional fields default to null so a struct can be built with them absent.
+  if (field.type === "optional") return " = null";
   if (!field.computed && field.const === undefined) return "";
   if (field.type === "bool") return " = false";
   if (field.type === "varlength") return " = 0";

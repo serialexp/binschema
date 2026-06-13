@@ -5,6 +5,7 @@ import type { BinarySchema, Endianness } from "../../schema/binary-schema.js";
 import { zigTypeName } from "./naming.js";
 import { ZigNotImplemented } from "./encode.js";
 import { zigBitfieldType } from "./bitfield.js";
+import { zigOptionalType } from "./optional.js";
 
 /** Map a BinSchema endianness to the Zig runtime enum literal. */
 export function zigEndianness(endianness: string | undefined, fallback: string): string {
@@ -133,7 +134,7 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
       // width is determined by the encoding at encode/decode time.
       return "u64";
     case "optional":
-      throw new ZigNotImplemented("optional fields (Phase 4)");
+      return zigOptionalType(field, schema);
     case "bitfield":
       return zigBitfieldType(field);
     case "discriminated_union":

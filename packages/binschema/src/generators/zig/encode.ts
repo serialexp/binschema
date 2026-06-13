@@ -18,6 +18,7 @@ import {
 } from "./computed.js";
 import { emitEnumEncode } from "./enum.js";
 import { emitBitfieldEncode } from "./bitfield.js";
+import { emitOptionalEncode } from "./optional.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -78,7 +79,7 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "array": return emitArrayEncode(field, value, ctx, indent);
     case "varlength":
       return [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${value}));`];
-    case "optional": throw new ZigNotImplemented("optional fields");
+    case "optional": return emitOptionalEncode(field, value, ctx, indent, emitEncodeValue);
     case "bitfield": return emitBitfieldEncode(field, value, indent);
     case "discriminated_union": throw new ZigNotImplemented("discriminated_union fields");
     case "choice": throw new ZigNotImplemented("choice fields");

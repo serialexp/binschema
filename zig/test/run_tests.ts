@@ -155,6 +155,7 @@ function zigValueType(field: any, schema: any, alias: string): string {
     case "string": case "bytes": return "[]const u8";
     case "array": return `[]const ${zigValueType(itemField(field.items), schema, alias)}`;
     case "bitfield": return bitfieldType(field);
+    case "optional": return `?${zigValueType(optionalInner(field), schema, alias)}`;
   }
   const resolved = resolveAlias(schema, field.type);
   const cls = classifyTypeDef(resolved);
@@ -182,6 +183,15 @@ function itemField(items: any): any {
   return typeof items === "string" ? { type: items } : items;
 }
 
+/** The inner value field of an optional (`value_type` as a field object). */
+function optionalInner(field: any): any {
+  if (field.presence_type && field.presence_type !== "uint8") {
+    throw new UnsupportedValue(`optional presence '${field.presence_type}'`);
+  }
+  const vt = field.value_type;
+  return typeof vt === "string" ? { type: vt } : { ...vt };
+}
+
 /** Emit a Zig expression constructing the value for a field of the given shape. */
 function valueExpr(field: any, value: any, schema: any, alias: string): string {
   const prim = zigPrimitiveType(field);
@@ -199,6 +209,10 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
   if (field.type === "bytes") return bytesValue(value);
   if (field.type === "array") return arrayValue(field.items, value, schema, alias);
   if (field.type === "bitfield") return bitfieldValue(field, value);
+  if (field.type === "optional") {
+    if (value == null) return "null";
+    return valueExpr(optionalInner(field), value, schema, alias);
+  }
 
   // Type reference.
   const resolved = resolveAlias(schema, field.type);
