@@ -1,6 +1,33 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** thirteen slices landed. The four most recent —
+> **Latest (Phase 5, in progress):** fourteen slices landed. Most recent —
+> **`instances` (random access)** (`packages/binschema/src/generators/zig/instances.ts`:
+> after the sequence decodes, save the cursor, seek to each instance's resolved
+> absolute offset, decode the typed payload, restore the cursor — eager like
+> Go/Python, not TS's lazy getters. The encoder never writes instance bytes, so
+> the harness verifies these decode-only via `std.testing.expectEqualDeep`.
+> Positions resolve from a literal `>=0` (absolute), literal `<0` (from EOF), a
+> sibling field, or a dotted path into an earlier-decoded instance; `alignment`
+> is validated. Instance struct members are appended to the struct, populated on
+> decode, ignored on encode. **18/21 instance suites land**; the other 3
+> (elf/zip) are blocked by the parent/root cross-struct ref bucket and pcf_full by
+> an unresolved field type — not by instances). Zig harness now **329/354 codegen
+> suites generate (+12 validation-only), 786/786 cases pass, 0 errored, 0 failed**;
+> runtime 28/28; TS reference **1192/1192** (no existing bytes edited).
+>
+> **Phase 5 still pending — large structural buckets** (pick via
+> `ZIG_TEST_REPORT=skips`, run from project root): DU variants that aren't structs
+> + `back_reference` for DNS label pointers (needs a runtime compression
+> dictionary, ~13 suites), parent/root cross-struct field references (`../` /
+> `_root.` paths threaded into nested decode — unblocks the elf/zip instance
+> suites), kerberos SEQUENCE types (varlength measure-then-patch +
+> `from_after_field` with parent refs, ~7), `optional_builtin_bit` (1 suite — a
+> documented bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not
+> replicate).
+>
+> ---
+>
+> **Earlier Phase 5 slices — the four before instances:**
 > **compressed wire-transform regions** (`73183ec`: store/deflate/gzip codecs in
 > `zig/runtime/codecs.zig` wired to `std.compress.flate`; inner value encoded to a
 > self-contained buffer, framed `[uncompressed_size][compressed_length][bytes]`;
@@ -16,22 +43,7 @@
 > **`field_id_delta` computed+conditional** (`204e8f6`: Thrift-style stateful
 > field-id deltas — a struct-scoped `u64` accumulator holds the last emitted
 > absolute id, advanced only inside the field's conditional guard so a dropped
-> optional makes the next delta jump across it). Zig harness now **312/354 codegen
-> suites generate (+12 validation-only), 766/766 cases pass, 0 errored, 0 failed**;
-> runtime 28/28; TS reference **1192/1192** (no existing bytes edited).
->
-> **Phase 5 still pending — all large structural buckets** (pick via
-> `ZIG_TEST_REPORT=skips`, run from project root): `instances` (random access —
-> lazy position-based read getters + a seekable decode path; encode is
-> decode-oriented in the harness, ~21 suites), DU variants that aren't structs +
-> `back_reference` for DNS label pointers (needs a runtime compression dictionary,
-> ~13 suites), kerberos SEQUENCE types (varlength measure-then-patch +
-> `from_after_field` with parent refs — the content-first/placeholder composition
-> gap, ~7), `optional_builtin_bit` (1 suite — a documented bit/byte-overlap
-> runtime quirk the byte-oriented Zig runtime does not replicate). The clean,
-> self-contained skip buckets are now exhausted; what remains each needs runtime
-> and/or struct-shape work. **Awaiting Bart's steer on which big bucket to take
-> next.**
+> optional makes the next delta jump across it).
 >
 > ---
 >

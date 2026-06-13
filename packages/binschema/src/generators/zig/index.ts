@@ -28,6 +28,11 @@ import { generateFieldDecode, emitDecodeValue } from "./decode.js";
 import { generateEnumCode } from "./enum.js";
 import { collectUnionTypes } from "./union.js";
 import {
+  collectInstanceUnionTypes,
+  instanceMemberType,
+  emitInstancesDecode,
+} from "./instances.js";
+import {
   computedTargets,
   emitComputedBackpatch,
   fieldOffVar,
@@ -75,6 +80,14 @@ export function generateZig(
   // decode reference the SAME Zig type (anonymous `union(enum){…}` literals at
   // different sites are distinct types and would not be assignable).
   const unionTypes = collectUnionTypes(schema);
+  // DU/choice instance fields introduce their own union types; merge them in
+  // (de-duplicated by name) so they are emitted once at container scope too.
+  {
+    const seen = new Set(unionTypes.map((u) => u.name));
+    for (const u of collectInstanceUnionTypes(schema)) {
+      if (!seen.has(u.name)) { seen.add(u.name); unionTypes.push(u); }
+    }
+  }
   if (unionTypes.length > 0) {
     for (const u of unionTypes) lines.push(`pub const ${u.name} = ${u.body};`);
     lines.push(``);
@@ -84,13 +97,6 @@ export function generateZig(
     if (name.includes("<")) continue; // skip generic templates
 
     if ("sequence" in (typeDef as any)) {
-      // Types carrying `instances` (lazily-decoded, position-referenced fields)
-      // affect the wire layout beyond the plain sequence — random access is a
-      // later phase. Reject cleanly rather than emit a sequence-only struct
-      // that silently produces wrong bytes.
-      if (Array.isArray((typeDef as any).instances) && (typeDef as any).instances.length > 0) {
-        throw new ZigNotImplemented(`type '${name}' with instances (random access, Phase 3)`);
-      }
       lines.push(...generateStructCode(name, typeDef as any, schema, defaultEndianness, defaultBitOrder));
     } else if (isEnumType(typeDef as any)) {
       lines.push(...generateEnumCode(name, typeDef as any, defaultEndianness, defaultBitOrder));
@@ -154,6 +160,13 @@ function generateStructCode(
     const ftype = structFieldType(field, schema);
     const def = fieldDefault(field, schema);
     lines.push(`    ${zigFieldName(field.name)}: ${ftype}${def},`);
+  }
+  // Instance (random-access) members follow the sequence members. They are
+  // populated on decode (seek/read) and ignored on encode (the payload is
+  // assumed already present in the stream), so they carry no default.
+  const instances = (typeDef.instances || []) as any[];
+  for (const inst of instances) {
+    lines.push(`    ${zigFieldName(inst.name)}: ${instanceMemberType(inst, schema)},`);
   }
   lines.push(``);
 
@@ -245,6 +258,9 @@ function generateStructCode(
   for (const field of fields) {
     decBody.push(...generateFieldDecode(field, emit, "result"));
   }
+  // Random-access instance fields decode after the sequence (they may reference
+  // already-decoded sibling/instance fields for their offsets).
+  decBody.push(...emitInstancesDecode(typeDef, emit));
   if (structHasFieldIdDelta(fields)) {
     decBody.unshift(`        var ${FIELD_ID_ACC}: u64 = 0;`);
   }

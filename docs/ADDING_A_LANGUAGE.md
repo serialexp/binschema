@@ -264,17 +264,25 @@ appends-then-breaks via a switch over the active tag), **`field_id_delta`
 computed+conditional** (`204e8f6`, Thrift-style stateful field-id deltas: a
 struct-scoped `u64` accumulator holds the last emitted absolute id, advanced
 only inside the field's conditional guard so a dropped optional makes the next
-delta jump across it). Still pending (all large structural buckets):
-compression/back-reference for DNS label pointers (`back_reference` type + a
-runtime compression dictionary; gates DU variants that aren't structs, ~13
-suites), `instances` (random access — lazy position-based read getters + a
-seekable decode path; encode is decode-oriented in the harness, ~21 suites),
+delta jump across it), **`instances` (random access)** (`instances.ts`: after
+the sequence decodes, save the cursor, seek to each instance's resolved absolute
+offset, decode the typed payload, restore the cursor — eager like Go/Python, not
+TS's lazy getters; the encoder never writes instance bytes so the harness
+verifies these suites decode-only via `expectEqualDeep`. Positions resolve from a
+literal `>=0` (absolute), literal `<0` (from EOF), a sibling field, or a dotted
+path into an earlier-decoded instance; `alignment` is validated. 18/21 instance
+suites land here — the other 3 are blocked by the parent/root cross-struct and
+unresolved-type buckets below, not by instances). Still pending (all large
+structural buckets): compression/back-reference for DNS label pointers
+(`back_reference` type + a runtime compression dictionary; gates DU variants that
+aren't structs, ~13 suites), parent/root cross-struct field references (`../` /
+`_root.` paths threaded into nested decode; gates elf/zip instance suites),
 kerberos SEQUENCE types (varlength measure-then-patch + `from_after_field` with
 parent refs, ~7 suites), and `optional_builtin_bit` (1 suite, a documented
 bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not replicate).
 
-**Latest harness numbers:** 312/354 codegen suites generate (+12 validation-only,
-not codegen targets), 766/766 cases pass, 0 errored, 0 failed; runtime unit tests
+**Latest harness numbers:** 329/354 codegen suites generate (+12 validation-only,
+not codegen targets), 786/786 cases pass, 0 errored, 0 failed; runtime unit tests
 28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---

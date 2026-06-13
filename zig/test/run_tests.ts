@@ -27,6 +27,7 @@ import { generateZig, ZigNotImplemented } from "../../packages/binschema/src/gen
 import { loadJson5File } from "../../packages/binschema/src/test-runner/json5-load.js";
 import { zigTypeName, zigFieldName } from "../../packages/binschema/src/generators/zig/naming.js";
 import { unionTypeName } from "../../packages/binschema/src/generators/zig/union.js";
+import { instanceFieldShape } from "../../packages/binschema/src/generators/zig/instances.js";
 import {
   zigPrimitiveType,
   resolveAlias,
@@ -336,6 +337,13 @@ function structValue(typeName: string, typeDef: any, value: any, schema: any, al
     }
     parts.push(`.${zigFieldName(field.name)} = ${valueExpr(field, fv, schema, alias)}`);
   }
+  // Instance (random-access) members: present in the decoded value (read from
+  // their absolute offsets), so include them when constructing the expected
+  // decoded literal. Built from the same field-shape the generator uses.
+  for (const inst of (typeDef.instances || [])) {
+    const fv = value?.[inst.name];
+    parts.push(`.${zigFieldName(inst.name)} = ${valueExpr(instanceFieldShape(inst), fv, schema, alias)}`);
+  }
   const tn = `${alias}.${zigTypeName(typeName)}`;
   return parts.length === 0 ? `${tn}{}` : `${tn}{ ${parts.join(", ")} }`;
 }
@@ -417,6 +425,11 @@ function main() {
     // string/bytes/array alias (encoded via free encode<Name>/decode<Name>)?
     const ttDef = suite.schema.types[suite.test_type];
     const ttIsStruct = ttDef != null && "sequence" in ttDef;
+    // A type with `instances` (random-access fields) is decode-only: the encoder
+    // writes just the sequence, never the position-referenced instance payloads,
+    // so encode(value) would be shorter than the full wire bytes. Verify decode
+    // against the expected value by deep equality instead of round-tripping bytes.
+    const ttHasInstances = ttIsStruct && Array.isArray((ttDef as any).instances) && (ttDef as any).instances.length > 0;
     const tn = zigTypeName(suite.test_type);
 
     let emitted = 0;
@@ -425,6 +438,34 @@ function main() {
       const tc = suite.test_cases[ci];
       // Error-expecting cases are exercised in a later phase.
       if (tc.error || tc.should_error_on_encode) continue;
+
+      // Instance suites: decode the full bytes and deep-compare to the expected
+      // value (sequence fields + instance fields), no encode/re-encode.
+      if (ttHasInstances) {
+        let expectedExpr: string;
+        try {
+          expectedExpr = structValueExpr(alias, suite, tc.decoded_value ?? tc.value);
+        } catch {
+          constructSkips++;
+          continue;
+        }
+        const expected = tc.bytes ?? [];
+        const testName = `${suite.name}__${ci}: ${zigStr(tc.description ?? "")}`;
+        const block: string[] = [];
+        block.push(`test "${zigStr(testName)}" {`);
+        block.push(`    const a = std.testing.allocator;`);
+        block.push(`    const bytes = ${byteArrayLiteral(expected)};`);
+        block.push(`    var arena = std.heap.ArenaAllocator.init(a);`);
+        block.push(`    defer arena.deinit();`);
+        block.push(`    const decoded = try ${alias}.${tn}.decode(arena.allocator(), &bytes);`);
+        block.push(`    const expected = ${expectedExpr};`);
+        block.push(`    try std.testing.expectEqualDeep(expected, decoded);`);
+        block.push(`}`);
+        testBlocks.push(block.join("\n"));
+        emitted++;
+        continue;
+      }
+
       let valueExprStr: string;
       let encodeCall: string;
       let decodeCall: string;
