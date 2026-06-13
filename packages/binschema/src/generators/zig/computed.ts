@@ -22,7 +22,7 @@
 
 import { RT, ENC, CTX, ERR } from "./context.js";
 import { zigFieldName } from "./naming.js";
-import { zigEndianness, zigPrimitiveType, resolveAlias, classifyTypeDef } from "./types.js";
+import { zigEndianness, zigPrimitiveType, resolveAlias, classifyTypeDef, varlengthWriteMethod } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 
 const INT_FIELD_TYPES = new Set([
@@ -402,11 +402,29 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
   const computed = field.computed;
   const e = zigEndianness(field.endianness, ctx.endianness);
   const intType = field.type;
-  if (!(intType in PLACEHOLDER_SUFFIX)) {
+  // varlength (DER/LEB128/…) computed fields are supported only on the
+  // synchronous length_of/count_of slice path below, where the value is known
+  // directly from the input (`self.<target>.len`) and written with the
+  // varlength method — no fixed-width placeholder is possible. All other
+  // computed kinds (position_of/crc32_of/measure/selector/sum) require a
+  // back-patchable fixed slot and stay integer-only.
+  const isVarlen = intType === "varlength";
+  if (!(intType in PLACEHOLDER_SUFFIX) && !isVarlen) {
     throw new ZigNotImplemented(`computed field of non-integer type '${intType}'`);
   }
   const t = computed.type;
   const target: string | undefined = computed.target;
+  // Emit a synchronous write of a known computed value, dispatching on the
+  // field's storage shape (fixed int vs. varlength).
+  const writeValue = (expr: string): string[] =>
+    isVarlen
+      ? [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${expr}));`]
+      : emitIntWrite(intType, expr, e, indent);
+  if (isVarlen && t !== "length_of" && t !== "count_of") {
+    // Only length/count prefixes are naturally varlength (DER, LEB128, …); the
+    // offset/checksum/sum kinds need a fixed-width back-patch slot.
+    throw new ZigNotImplemented(`varlength computed field of kind '${t}'`);
+  }
 
   if (t === "length_of" || t === "count_of") {
     if (computed.from_after_field) {
@@ -415,6 +433,7 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
     if (!target) throw new ZigNotImplemented(`${t} without target`);
     const sel = parseSelectorTarget(target);
     if (sel) {
+      if (isVarlen) throw new ZigNotImplemented("varlength length_of selector (needs a fixed back-patch slot)");
       // `length_of arr[first<T>|…].subfield`: the selected element's logical
       // sub-field length isn't known here (the element encodes later), so reserve
       // a slot now and defer a selector_length patch. The resolver reads the
@@ -434,7 +453,7 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       // element-or-byte count, or a scalar's value), so it is available
       // synchronously here. See `emitFrameLengthRegistration`.
       const read = `(${CTX}.parentLength(${parent.levels}, "${parent.name}") orelse return ${ERR}.SchemaMismatch)`;
-      return emitIntWrite(intType, read, e, indent);
+      return writeValue(read);
     }
     if (isParentRef(target)) {
       throw new ZigNotImplemented(`${t} target '${target}' (dotted/_root parent ref, later phase)`);
@@ -443,11 +462,16 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
     // reserve a fixed-width slot now and back-patch it with the target's encoded
     // byte span once it has been written (emitComputedBackpatch).
     if (t === "length_of" && lengthOfNeedsMeasure(target, ctx.schema, ctx.fields)) {
+      // Measuring a struct/DU/choice byte span needs a back-patchable fixed slot;
+      // a varlength prefix has no fixed width, so this shape isn't expressible.
+      if (isVarlen) {
+        throw new ZigNotImplemented("varlength length_of a struct/union (measure-then-patch needs a fixed width)");
+      }
       return [`${indent}const ${placeholderVar(field.name)} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`];
     }
     // Same-struct: string/bytes -> byte length; array -> element count. Both map
     // to the Zig slice `.len`, and the value is known from the input directly.
-    return emitIntWrite(intType, `${ctx.selfPath}.${zigFieldName(target)}.len`, e, indent);
+    return writeValue(`${ctx.selfPath}.${zigFieldName(target)}.len`);
   }
 
   if (t === "position_of") {
