@@ -165,10 +165,13 @@ export function emitSelectorArrayRecording(
   itemVar: string,
   itemEncodeLines: string[],
   indent: string,
+  /** Optional Zig EXPRESSION yielding the element's runtime type name (a switch
+   *  over a polymorphic union item). Overrides the static `typeName`. */
+  typeExpr?: string | null,
 ): string[] {
-  const typeArg = typeName === null ? "null" : `"${typeName}"`;
   const offVar = `${itemVar}_seloff`;
   const markVar = `${itemVar}_selmark`;
+  const typeVar = `${itemVar}_seltype`;
   const lines: string[] = [];
   lines.push(`${indent}for (${value}) |${itemVar}| {`);
   lines.push(`${indent}    const ${offVar} = ${ENC}.byteOffset();`);
@@ -177,6 +180,16 @@ export function emitSelectorArrayRecording(
   // which length_of/crc32_of selectors over `[sel].subfield` read back).
   lines.push(`${indent}    const ${markVar} = ${CTX}.frameMark();`);
   lines.push(...itemEncodeLines);
+  // Polymorphic (choice/DU) arrays record each element's actual variant type so
+  // first/last/corresponding selectors can filter by it; homogeneous arrays use
+  // the static struct type name (or null when no selector targets the array).
+  let typeArg: string;
+  if (typeExpr) {
+    lines.push(`${indent}    const ${typeVar} = ${typeExpr};`);
+    typeArg = typeVar;
+  } else {
+    typeArg = typeName === null ? "null" : `"${typeName}"`;
+  }
   lines.push(`${indent}    try ${CTX}.recordPosition("${arrayName}", ${typeArg}, ${offVar}, ${CTX}.frameAt(${markVar}));`);
   lines.push(`${indent}}`);
   lines.push(`${indent}try ${CTX}.markArrayDone("${arrayName}");`);
@@ -453,6 +466,20 @@ function emitParentDeferredPatch(
 }
 
 /**
+ * `corresponding<T>` correlates the N-th element of the *referencing* type to the
+ * N-th element of the *target* type — the index must be captured per-element at
+ * encode time. The Zig runtime resolver currently reads only the final aggregate
+ * iteration state, so corresponding can't be resolved correctly yet. Skip it
+ * cleanly (whole-suite codegen-skip) rather than emit silently-wrong offsets;
+ * first<T>/last<T> are unaffected.
+ */
+function assertSelectorImplemented(sel: SelectorTarget): void {
+  if (sel.selector === "corresponding") {
+    throw new ZigNotImplemented("corresponding<T> selector (per-element occurrence correlation, follow-on)");
+  }
+}
+
+/**
  * Emit a placeholder + a deferred `selector_position` patch for
  * `position_of arr[first<T>|last<T>|corresponding<T>]`. The resolver matches the
  * recorded element positions (see emitSelectorArrayRecording) by `filter_type`
@@ -466,6 +493,7 @@ function emitSelectorPositionPatch(
   indent: string,
   alignment: number,
 ): string[] {
+  assertSelectorImplemented(sel);
   const ph = placeholderVar(field.name);
   const width = PATCH_WIDTH[intType];
   return [
@@ -493,6 +521,7 @@ function emitSelectorFramePatch(
   op: "selector_length" | "selector_crc32",
   indent: string,
 ): string[] {
+  assertSelectorImplemented(sel);
   const ph = placeholderVar(field.name);
   const width = PATCH_WIDTH[intType];
   return [

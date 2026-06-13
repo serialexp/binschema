@@ -19,7 +19,7 @@ import {
 import { emitEnumEncode } from "./enum.js";
 import { emitBitfieldEncode } from "./bitfield.js";
 import { emitOptionalEncode } from "./optional.js";
-import { emitChoiceEncode, emitDuEncode } from "./union.js";
+import { emitChoiceEncode, emitDuEncode, unionTypeSwitchExpr } from "./union.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -257,10 +257,13 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
 
   // If a computed field selects into this array (first/last/corresponding), the
   // parent records each element's absolute start offset + type as it encodes,
-  // so a deferred selector_position patch can resolve the matching element.
+  // so a deferred selector_position patch can resolve the matching element. For a
+  // polymorphic (choice/DU) array, the element type is the union's active variant
+  // — recorded via a runtime switch — rather than a single static struct type.
   if (field.name && arrayNeedsSelectorTracking(field.name, ctx.schema)) {
     const typeName = selectorItemTypeName(field, ctx.schema);
-    lines.push(...emitSelectorArrayRecording(field.name, typeName, value, itemVar, itemEncode, indent));
+    const typeExpr = unionTypeSwitchExpr(itemField, ctx.schema, itemVar);
+    lines.push(...emitSelectorArrayRecording(field.name, typeName, value, itemVar, itemEncode, indent, typeExpr));
     return lines;
   }
 

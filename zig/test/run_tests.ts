@@ -26,6 +26,7 @@ import { spawnSync } from "node:child_process";
 import { generateZig, ZigNotImplemented } from "../../packages/binschema/src/generators/zig/index.js";
 import { loadJson5File } from "../../packages/binschema/src/test-runner/json5-load.js";
 import { zigTypeName, zigFieldName } from "../../packages/binschema/src/generators/zig/naming.js";
+import { unionTypeName } from "../../packages/binschema/src/generators/zig/union.js";
 import {
   zigPrimitiveType,
   resolveAlias,
@@ -156,6 +157,7 @@ function zigValueType(field: any, schema: any, alias: string): string {
     case "array": return `[]const ${zigValueType(itemField(field.items), schema, alias)}`;
     case "bitfield": return bitfieldType(field);
     case "optional": return `?${zigValueType(optionalInner(field), schema, alias)}`;
+    case "choice": case "discriminated_union": return `${alias}.${unionTypeName(field)}`;
   }
   const resolved = resolveAlias(schema, field.type);
   const cls = classifyTypeDef(resolved);
@@ -164,6 +166,7 @@ function zigValueType(field: any, schema: any, alias: string): string {
     case "string": case "bytes": return "[]const u8";
     case "array": return `[]const ${zigValueType(itemField(resolved.items), schema, alias)}`;
     case "enum": return enumReprType(resolved);
+    case "choice": case "discriminated_union": return `${alias}.${unionTypeName(resolved)}`;
     default: throw new UnsupportedValue(`value type for '${field.type}'`);
   }
 }

@@ -29,14 +29,116 @@ function variantArmType(variantType: string, schema: any): string {
 }
 
 /**
- * The Zig declared type for a choice/DU field: an anonymous tagged union with one
- * arm per variant (tag = variant Pascal name, payload = variant struct type).
+ * A deterministic, structural NAME for a choice/DU's tagged union, derived from
+ * its (ordered) variant list — e.g. `BsUnion_MetaChunk_DataChunk`. Two union
+ * sites with the same variants in the same order share one named type, which is
+ * required because Zig treats every anonymous `union(enum) { … }` literal as a
+ * DISTINCT type: a `[]const union(enum){…}` field and an `alloc(union(enum){…})`
+ * in decode would otherwise be incompatible types. choice and discriminated_union
+ * over the same structs map to the same Zig union type (the discriminator logic
+ * differs at encode/decode, not in the type), so they share too.
  */
-export function zigUnionType(field: any, schema: any): string {
+export function unionTypeName(field: any): string {
+  const names = variantTypeNames(field);
+  if (names.length === 0) throw new ZigNotImplemented("union with no variants");
+  return `BsUnion_${names.map((n) => zigTypeName(n)).join("_")}`;
+}
+
+/** The full `union(enum) { Tag: Payload, … }` type body for a choice/DU. */
+export function unionTypeBody(field: any, schema: any): string {
   const names = variantTypeNames(field);
   if (names.length === 0) throw new ZigNotImplemented("union with no variants");
   const arms = names.map((n) => `${zigTypeName(n)}: ${variantArmType(n, schema)}`);
   return `union(enum) { ${arms.join(", ")} }`;
+}
+
+/**
+ * The Zig declared type for a choice/DU field: the NAMED tagged union (emitted
+ * once at container scope by `collectUnionTypes` / index.ts), referenced by name
+ * everywhere it appears so all uses agree on a single Zig type.
+ */
+export function zigUnionType(field: any, schema: any): string {
+  // Validate arms resolve to structs (throws ZigNotImplemented otherwise).
+  unionTypeBody(field, schema);
+  return unionTypeName(field);
+}
+
+/**
+ * Walk every type in the schema and collect the distinct named union types that
+ * must be emitted at container scope: one per (structural) choice/DU shape used
+ * as a struct field, an array item, or an optional's value. Returns them in a
+ * stable order, de-duplicated by name.
+ */
+export function collectUnionTypes(schema: any): Array<{ name: string; body: string }> {
+  const seen = new Map<string, string>();
+
+  const visitFieldShape = (shape: any): void => {
+    if (!shape || typeof shape !== "object") return;
+    const t = shape.type;
+    if (t === "choice" || t === "discriminated_union") {
+      const name = unionTypeName(shape);
+      if (!seen.has(name)) seen.set(name, unionTypeBody(shape, schema));
+      return;
+    }
+    if (t === "array" && shape.items != null) {
+      visitFieldShape(typeof shape.items === "string" ? { type: shape.items } : shape.items);
+      return;
+    }
+    if (t === "optional" && shape.value_type != null) {
+      visitFieldShape(typeof shape.value_type === "string" ? { type: shape.value_type } : shape.value_type);
+      return;
+    }
+    // A type reference may itself name a choice/DU (used as an array item, etc.).
+    if (typeof t === "string") {
+      const resolved = resolveAlias(schema, t);
+      const cls = resolved && classifyTypeDef(resolved);
+      if (cls === "choice" || cls === "discriminated_union") {
+        const name = unionTypeName(resolved);
+        if (!seen.has(name)) seen.set(name, unionTypeBody(resolved, schema));
+      }
+    }
+  };
+
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any)?.sequence;
+    if (Array.isArray(seq)) {
+      for (const f of seq) visitFieldShape(f);
+    }
+    // A top-level named choice/DU type itself.
+    const cls = classifyTypeDef(typeDef);
+    if (cls === "choice" || cls === "discriminated_union") visitFieldShape(typeDef);
+  }
+
+  return Array.from(seen, ([name, body]) => ({ name, body }));
+}
+
+/** True if a (possibly type-ref) item field resolves to a choice / DU. */
+export function isUnionField(field: any, schema: any): boolean {
+  if (!field || typeof field !== "object") return false;
+  if (field.type === "choice" || field.type === "discriminated_union") return true;
+  if (typeof field.type === "string") {
+    const cls = classifyTypeDef(resolveAlias(schema, field.type));
+    return cls === "choice" || cls === "discriminated_union";
+  }
+  return false;
+}
+
+/**
+ * A Zig switch EXPRESSION mapping a union value's active tag to its schema
+ * variant type-name string literal — e.g.
+ *   `switch (item) { .MetaChunk => "MetaChunk", .DataChunk => "DataChunk" }`.
+ * Used to record each polymorphic-array element's actual type so a
+ * `first<T>`/`last<T>`/`corresponding<T>` selector filters by it. Returns null
+ * for non-union item fields (a static type name is used instead).
+ */
+export function unionTypeSwitchExpr(field: any, schema: any, itemVar: string): string | null {
+  const def = field.type === "choice" || field.type === "discriminated_union"
+    ? field
+    : resolveAlias(schema, field.type);
+  if (!def || (def.type !== "choice" && def.type !== "discriminated_union")) return null;
+  const names = variantTypeNames(def);
+  const arms = names.map((n) => `.${zigTypeName(n)} => "${n}"`);
+  return `switch (${itemVar}) { ${arms.join(", ")} }`;
 }
 
 // ---------------------------------------------------------------------------

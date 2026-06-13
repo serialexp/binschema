@@ -26,6 +26,7 @@ import { zigBitOrder, zigDeclaredType, zigPrimitiveType, varlengthWriteMethod } 
 import { generateFieldEncode, emitEncodeValue, ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { generateFieldDecode, emitDecodeValue } from "./decode.js";
 import { generateEnumCode } from "./enum.js";
+import { collectUnionTypes } from "./union.js";
 import {
   computedTargets,
   emitComputedBackpatch,
@@ -67,6 +68,16 @@ export function generateZig(
   lines.push(`const ${RT} = @import("${runtimeModule}");`);
   lines.push(``);
 
+  // Named tagged-union types for every distinct choice/DU shape. Emitted once at
+  // container scope so a `[]const UnionName` field and an `alloc(UnionName, n)` in
+  // decode reference the SAME Zig type (anonymous `union(enum){…}` literals at
+  // different sites are distinct types and would not be assignable).
+  const unionTypes = collectUnionTypes(schema);
+  if (unionTypes.length > 0) {
+    for (const u of unionTypes) lines.push(`pub const ${u.name} = ${u.body};`);
+    lines.push(``);
+  }
+
   for (const [name, typeDef] of Object.entries(schema.types)) {
     if (name.includes("<")) continue; // skip generic templates
 
@@ -82,9 +93,9 @@ export function generateZig(
     } else if (isEnumType(typeDef as any)) {
       lines.push(...generateEnumCode(name, typeDef as any, defaultEndianness, defaultBitOrder));
     } else if ((typeDef as any).type === "discriminated_union" || (typeDef as any).type === "choice") {
-      // Named DU/choice types have no standalone Zig representation — they are
-      // resolved inline (to an anonymous tagged union) at each referencing field
-      // site, with encode/decode inlined into the parent. Nothing to emit here.
+      // Named DU/choice types map to a shared named union (emitted above by
+      // collectUnionTypes) and have encode/decode inlined into each referencing
+      // parent. Nothing further to emit here.
     } else if (
       (typeDef as any).type === "string" ||
       (typeDef as any).type === "bytes" ||
