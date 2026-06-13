@@ -63,6 +63,9 @@ const PositionEntry = struct {
     /// the element is a struct encoded under a frame. Null for frame-less
     /// elements. Used to resolve `arr[first<T>].subfield` length_of / crc32_of.
     frame: ?*Frame = null,
+    /// The element's end byte offset; `end - offset` is its encoded size, summed
+    /// by `sum_of_type_sizes` over all elements of a given type.
+    end: usize = 0,
 };
 
 const IterState = struct {
@@ -125,6 +128,24 @@ pub const Patch = union(enum) {
         selector: SelectorKind,
         filter_type: ?[]const u8,
         sub_field: []const u8,
+    },
+    /// `sum_of_type_sizes(array, element_type)` — sum of encoded byte sizes of
+    /// every array element whose recorded type matches `element_type`.
+    selector_sum: struct {
+        local_offset: usize,
+        width: PatchWidth,
+        endianness: Endianness,
+        array_name: []const u8,
+        element_type: ?[]const u8,
+    },
+    /// `sum_of_sizes(targets)` — sum of the encoded byte spans of an explicit set
+    /// of ancestor fields (`../a`, `../b`, …), read from a captured parent frame.
+    parent_sum: struct {
+        local_offset: usize,
+        width: PatchWidth,
+        endianness: Endianness,
+        frame: *Frame,
+        field_names: []const []const u8,
     },
 };
 
@@ -217,12 +238,13 @@ pub const EncodeContext = struct {
         array_name: []const u8,
         type_name: ?[]const u8,
         offset: usize,
+        end: usize,
         frame: ?*Frame,
     ) Error!void {
         const a = self.alloc();
         const gop = try self.positions.getOrPut(a, array_name);
         if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(a, .{ .offset = offset, .type_name = type_name, .frame = frame });
+        try gop.value_ptr.append(a, .{ .offset = offset, .type_name = type_name, .end = end, .frame = frame });
     }
 
     pub fn getPosition(
@@ -346,6 +368,25 @@ pub const EncodeContext = struct {
                     if (r.end <= r.start) break :blk @as(u64, bitstream.computeCrc32(""));
                     break :blk @as(u64, bitstream.computeCrc32(enc.bytes.items[r.start..r.end]));
                 },
+                .selector_sum => |sp| blk: {
+                    const st = self.array_iterations.get(sp.array_name);
+                    if (st == null or !st.?.done) break :blk null;
+                    const entries = (self.positions.get(sp.array_name) orelse break :blk @as(u64, 0)).items;
+                    var total: u64 = 0;
+                    for (entries) |e| {
+                        if (matchType(e.type_name, sp.element_type)) total += @as(u64, e.end - e.offset);
+                    }
+                    break :blk total;
+                },
+                .parent_sum => |ps| blk: {
+                    var total: u64 = 0;
+                    for (ps.field_names) |fname| {
+                        const info = ps.frame.fields.get(fname) orelse break :blk null;
+                        const r = info.range orelse break :blk null;
+                        total += @as(u64, r.end - r.start);
+                    }
+                    break :blk total;
+                },
             };
 
             if (resolved) |value| {
@@ -365,6 +406,8 @@ pub const EncodeContext = struct {
             .selector_position => |x| .{ x.local_offset, x.width, x.endianness },
             .selector_length => |x| .{ x.local_offset, x.width, x.endianness },
             .selector_crc32 => |x| .{ x.local_offset, x.width, x.endianness },
+            .selector_sum => |x| .{ x.local_offset, x.width, x.endianness },
+            .parent_sum => |x| .{ x.local_offset, x.width, x.endianness },
         };
     }
 
@@ -520,9 +563,9 @@ test "deferred parent_crc32 patch resolves over field range" {
 test "position tracking and selector resolution" {
     var ctx = EncodeContext.init(testing.allocator);
     defer ctx.deinit();
-    try ctx.recordPosition("items", "Label", 12, null);
-    try ctx.recordPosition("items", "Pointer", 20, null);
-    try ctx.recordPosition("items", "Label", 24, null);
+    try ctx.recordPosition("items", "Label", 12, 12, null);
+    try ctx.recordPosition("items", "Pointer", 20, 20, null);
+    try ctx.recordPosition("items", "Label", 24, 24, null);
     try ctx.markArrayDone("items");
 
     try testing.expectEqual(@as(usize, 12), ctx.getPosition("items", "Label", 0).?);
@@ -565,7 +608,7 @@ test "selector_length / selector_crc32 resolve a sub-field on the selected eleme
     try ctx.setLength(f0, "payload", 2);
     try ctx.setRange(f0, "payload", p0_start, enc.byteOffset());
     ctx.popParent();
-    try ctx.recordPosition("chunks", "Chunk", p0_start, f0);
+    try ctx.recordPosition("chunks", "Chunk", p0_start, enc.byteOffset(), f0);
 
     const f1 = try ctx.pushParent();
     const p1_start = enc.byteOffset();
@@ -573,7 +616,7 @@ test "selector_length / selector_crc32 resolve a sub-field on the selected eleme
     try ctx.setLength(f1, "payload", 9);
     try ctx.setRange(f1, "payload", p1_start, enc.byteOffset());
     ctx.popParent();
-    try ctx.recordPosition("chunks", "Chunk", p1_start, f1);
+    try ctx.recordPosition("chunks", "Chunk", p1_start, enc.byteOffset(), f1);
     try ctx.markArrayDone("chunks");
 
     try ctx.addDeferredPatch(.{ .selector_length = .{
@@ -606,4 +649,67 @@ test "selector_length / selector_crc32 resolve a sub-field on the selected eleme
     try testing.expectEqual(@as(u8, 0xF4), out[3]);
     try testing.expectEqual(@as(u8, 0x39), out[4]);
     try testing.expectEqual(@as(u8, 0x26), out[5]);
+}
+
+test "selector_sum sums encoded byte sizes of matching array elements" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
+    defer enc.deinit();
+
+    // A u32 placeholder for sum_of_type_sizes(blocks, "Data").
+    const ph = try enc.placeholderU32();
+    // Record three elements: Data(5 bytes), Index(3 bytes), Data(5 bytes).
+    try ctx.recordPosition("blocks", "Data", 0, 5, null);
+    try ctx.recordPosition("blocks", "Index", 5, 8, null);
+    try ctx.recordPosition("blocks", "Data", 8, 13, null);
+    try ctx.markArrayDone("blocks");
+    try ctx.addDeferredPatch(.{ .selector_sum = .{
+        .local_offset = ph.offset,
+        .width = .u32,
+        .endianness = .little_endian,
+        .array_name = "blocks",
+        .element_type = "Data",
+    } });
+    try ctx.resolveDeferredPatches(&enc);
+
+    const out = try enc.finish();
+    defer testing.allocator.free(out);
+    // 5 + 5 == 10 (little-endian u32).
+    try testing.expectEqual(@as(u8, 10), out[0]);
+    try testing.expectEqual(@as(u8, 0), out[1]);
+    try testing.expectEqual(@as(u8, 0), out[2]);
+    try testing.expectEqual(@as(u8, 0), out[3]);
+}
+
+test "parent_sum sums the byte spans of an explicit set of parent fields" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
+    defer enc.deinit();
+
+    // A child writes a u32 placeholder for sum_of_sizes(../a, ../b, ../c).
+    const ph = try enc.placeholderU32();
+    const parent = try ctx.pushParent();
+    // Parent later records three fields' ranges: 3, 5, 2 bytes.
+    try ctx.setRange(parent, "a", 4, 7);
+    try ctx.setRange(parent, "b", 7, 12);
+    try ctx.setRange(parent, "c", 12, 14);
+    try ctx.addDeferredPatch(.{ .parent_sum = .{
+        .local_offset = ph.offset,
+        .width = .u32,
+        .endianness = .little_endian,
+        .frame = parent,
+        .field_names = &[_][]const u8{ "a", "b", "c" },
+    } });
+    ctx.popParent();
+    try ctx.resolveDeferredPatches(&enc);
+
+    const out = try enc.finish();
+    defer testing.allocator.free(out);
+    // 3 + 5 + 2 == 10 (little-endian u32).
+    try testing.expectEqual(@as(u8, 10), out[0]);
+    try testing.expectEqual(@as(u8, 0), out[1]);
+    try testing.expectEqual(@as(u8, 0), out[2]);
+    try testing.expectEqual(@as(u8, 0), out[3]);
 }

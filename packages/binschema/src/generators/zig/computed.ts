@@ -76,6 +76,13 @@ export function isSelector(target: string | undefined): boolean {
   return !!target && (target.includes("[first<") || target.includes("[last<") || target.includes("[corresponding<"));
 }
 
+/** Strip any leading `../` segments, returning the bare (array) name. */
+export function bareArrayName(target: string): string {
+  let rem = target;
+  while (rem.startsWith("../")) rem = rem.slice(3);
+  return rem;
+}
+
 export interface SelectorTarget {
   /** Bare array field name the selector indexes into (e.g. "chunks"). */
   arrayName: string;
@@ -130,6 +137,10 @@ export function arrayNeedsSelectorTracking(arrayName: string | undefined, schema
     for (const f of seq) {
       const sel = parseSelectorTarget(f?.computed?.target);
       if (sel && sel.arrayName === arrayName) return true;
+      // `sum_of_type_sizes` sums per-element byte sizes of a `../array`, so the
+      // array must record each element's offset+end+type just like a selector.
+      const c = f?.computed;
+      if (c?.type === "sum_of_type_sizes" && c.target && bareArrayName(c.target) === arrayName) return true;
     }
   }
   return false;
@@ -170,6 +181,7 @@ export function emitSelectorArrayRecording(
   typeExpr?: string | null,
 ): string[] {
   const offVar = `${itemVar}_seloff`;
+  const endVar = `${itemVar}_selend`;
   const markVar = `${itemVar}_selmark`;
   const typeVar = `${itemVar}_seltype`;
   const lines: string[] = [];
@@ -180,6 +192,9 @@ export function emitSelectorArrayRecording(
   // which length_of/crc32_of selectors over `[sel].subfield` read back).
   lines.push(`${indent}    const ${markVar} = ${CTX}.frameMark();`);
   lines.push(...itemEncodeLines);
+  // The element's end offset; `end - offset` is its encoded byte size, summed by
+  // `sum_of_type_sizes` over all elements of a given type.
+  lines.push(`${indent}    const ${endVar} = ${ENC}.byteOffset();`);
   // Polymorphic (choice/DU) arrays record each element's actual variant type so
   // first/last/corresponding selectors can filter by it; homogeneous arrays use
   // the static struct type name (or null when no selector targets the array).
@@ -190,7 +205,7 @@ export function emitSelectorArrayRecording(
   } else {
     typeArg = typeName === null ? "null" : `"${typeName}"`;
   }
-  lines.push(`${indent}    try ${CTX}.recordPosition("${arrayName}", ${typeArg}, ${offVar}, ${CTX}.frameAt(${markVar}));`);
+  lines.push(`${indent}    try ${CTX}.recordPosition("${arrayName}", ${typeArg}, ${offVar}, ${endVar}, ${CTX}.frameAt(${markVar}));`);
   lines.push(`${indent}}`);
   lines.push(`${indent}try ${CTX}.markArrayDone("${arrayName}");`);
   return lines;
@@ -224,6 +239,10 @@ export function schemaHasParentRefs(schema: any): boolean {
     for (const f of seq) {
       const target: string | undefined = f?.computed?.target;
       if (target && (target.startsWith("../") || target.startsWith("_root"))) return true;
+      // `sum_of_sizes` carries a `targets` array of `../field` parent refs whose
+      // byte ranges (recorded in the parent frame) it sums — so it needs frames.
+      const targets: string[] | undefined = f?.computed?.targets;
+      if (Array.isArray(targets) && targets.some((t) => t.startsWith("../") || t.startsWith("_root"))) return true;
     }
   }
   return false;
@@ -423,6 +442,55 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       throw new ZigNotImplemented(`crc32_of target '${target}' (dotted/_root parent ref, later phase)`);
     }
     return [`${indent}const ${placeholderVar(field.name)} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`];
+  }
+
+  if (t === "sum_of_type_sizes") {
+    // Sum the encoded byte sizes of every element of `element_type` in the
+    // (`../`) target array. The array isn't necessarily encoded yet (the
+    // referencing struct can precede it), so reserve a slot now and defer a
+    // selector_sum patch; the resolver sums each matching element's recorded
+    // (end - offset) once the whole tree is encoded.
+    if (!target) throw new ZigNotImplemented("sum_of_type_sizes without target");
+    const elementType = computed.element_type;
+    if (!elementType) throw new ZigNotImplemented("sum_of_type_sizes without element_type");
+    const ph = placeholderVar(field.name);
+    const width = PATCH_WIDTH[intType];
+    const arrayName = bareArrayName(target);
+    return [
+      `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+      `${indent}try ${CTX}.addDeferredPatch(.{ .selector_sum = .{ ` +
+        `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
+        `.array_name = "${arrayName}", .element_type = "${elementType}" } });`,
+    ];
+  }
+
+  if (t === "sum_of_sizes") {
+    // Sum the encoded byte spans of an explicit set of `../field` ancestor
+    // fields. Each target's range is recorded in the parent frame as it encodes;
+    // reserve a slot now and defer a parent_sum patch that reads those ranges
+    // once the whole tree is encoded.
+    const targets: string[] | undefined = computed.targets;
+    if (!Array.isArray(targets) || targets.length === 0) {
+      throw new ZigNotImplemented("sum_of_sizes without targets");
+    }
+    const parsed = targets.map((tg) => parsePlainParentRef(tg));
+    if (parsed.some((p) => p === null)) {
+      throw new ZigNotImplemented("sum_of_sizes with non-plain-parent targets");
+    }
+    const levels = parsed[0]!.levels;
+    if (parsed.some((p) => p!.levels !== levels)) {
+      throw new ZigNotImplemented("sum_of_sizes targets at differing parent depths");
+    }
+    const ph = placeholderVar(field.name);
+    const width = PATCH_WIDTH[intType];
+    const frame = `(${CTX}.frameAtLevel(${levels}) orelse return ${ERR}.SchemaMismatch)`;
+    const names = parsed.map((p) => `"${p!.name}"`).join(", ");
+    return [
+      `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+      `${indent}try ${CTX}.addDeferredPatch(.{ .parent_sum = .{ ` +
+        `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
+        `.frame = ${frame}, .field_names = &[_][]const u8{ ${names} } } });`,
+    ];
   }
 
   throw new ZigNotImplemented(`computed type '${t}'`);
