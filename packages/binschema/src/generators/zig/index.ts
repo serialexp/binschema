@@ -128,7 +128,7 @@ function generateStructCode(
   const fields = typeDef.sequence || [];
   const bo = zigBitOrder(bitOrder, "msb_first");
 
-  const emit: EmitCtx = { schema, endianness, bitOrder, selfPath: "self", fields };
+  const emit: EmitCtx = { schema, endianness, bitOrder, selfPath: "self", fields, selfTypeName: name };
   // When the schema uses any `../` parent reference, every struct pushes a
   // parent frame and records its fields' lengths/ranges so descendant computed
   // fields can resolve cross-struct references. Schemas with no such ref keep

@@ -124,6 +124,19 @@ export function schemaHasSelectors(schema: any): boolean {
   return false;
 }
 
+/** Does any computed target use a `corresponding<T>` selector specifically? */
+export function schemaHasCorrespondingSelectors(schema: any): boolean {
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any).sequence;
+    if (!Array.isArray(seq)) continue;
+    for (const f of seq) {
+      const t: string | undefined = f?.computed?.target;
+      if (t && t.includes("[corresponding<")) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Does the array field named `arrayName` need per-element position tracking,
  * because some computed field selects into it with first/last/corresponding?
@@ -185,29 +198,74 @@ export function emitSelectorArrayRecording(
   const markVar = `${itemVar}_selmark`;
   const typeVar = `${itemVar}_seltype`;
   const lines: string[] = [];
+  // Mark this as the current array so a `corresponding<T>` field inside an element
+  // counts its occurrence within this array (selfOccurrence reads the top).
+  lines.push(`${indent}try ${CTX}.pushCurrentArray("${arrayName}");`);
   lines.push(`${indent}for (${value}) |${itemVar}| {`);
   lines.push(`${indent}    const ${offVar} = ${ENC}.byteOffset();`);
   // Mark the frame history before the element encodes so we can capture the
   // element's own top frame afterwards (it records its sub-field ranges/lengths,
   // which length_of/crc32_of selectors over `[sel].subfield` read back).
   lines.push(`${indent}    const ${markVar} = ${CTX}.frameMark();`);
-  lines.push(...itemEncodeLines);
-  // The element's end offset; `end - offset` is its encoded byte size, summed by
-  // `sum_of_type_sizes` over all elements of a given type.
-  lines.push(`${indent}    const ${endVar} = ${ENC}.byteOffset();`);
-  // Polymorphic (choice/DU) arrays record each element's actual variant type so
-  // first/last/corresponding selectors can filter by it; homogeneous arrays use
-  // the static struct type name (or null when no selector targets the array).
-  let typeArg: string;
+  // Determine the element's type BEFORE encoding it: polymorphic (choice/DU)
+  // arrays switch over the active variant; homogeneous arrays use the static
+  // struct name. This type is needed up-front to bump the per-type occurrence
+  // counter so a `corresponding<T>` field inside the element can read its own
+  // 1-based occurrence index during its encode.
+  let typeArg: string | null;
   if (typeExpr) {
     lines.push(`${indent}    const ${typeVar} = ${typeExpr};`);
     typeArg = typeVar;
   } else {
-    typeArg = typeName === null ? "null" : `"${typeName}"`;
+    typeArg = typeName === null ? null : `"${typeName}"`;
   }
-  lines.push(`${indent}    try ${CTX}.recordPosition("${arrayName}", ${typeArg}, ${offVar}, ${endVar}, ${CTX}.frameAt(${markVar}));`);
+  if (typeArg !== null) {
+    lines.push(`${indent}    _ = try ${CTX}.bumpTypeIndex("${arrayName}", ${typeArg});`);
+  }
+  lines.push(...itemEncodeLines);
+  // The element's end offset; `end - offset` is its encoded byte size, summed by
+  // `sum_of_type_sizes` over all elements of a given type.
+  lines.push(`${indent}    const ${endVar} = ${ENC}.byteOffset();`);
+  lines.push(`${indent}    try ${CTX}.recordPosition("${arrayName}", ${typeArg ?? "null"}, ${offVar}, ${endVar}, ${CTX}.frameAt(${markVar}));`);
   lines.push(`${indent}}`);
+  lines.push(`${indent}${CTX}.popCurrentArray();`);
   lines.push(`${indent}try ${CTX}.markArrayDone("${arrayName}");`);
+  return lines;
+}
+
+/**
+ * Emit a plain struct/choice array loop that maintains *only* the cross-array
+ * `corresponding<T>` correlation state — `current_array` plus the per-element
+ * type-occurrence counter — with no position recording. Used for arrays that no
+ * selector targets but whose elements hold a `corresponding<T>` field pointing at
+ * a sibling array (the referencing element's occurrence is counted here).
+ */
+export function emitCorrelationArrayLoop(
+  arrayName: string,
+  value: string,
+  itemVar: string,
+  itemEncodeLines: string[],
+  typeName: string | null,
+  typeExpr: string | null | undefined,
+  indent: string,
+): string[] {
+  const typeVar = `${itemVar}_corrtype`;
+  const lines: string[] = [];
+  lines.push(`${indent}try ${CTX}.pushCurrentArray("${arrayName}");`);
+  lines.push(`${indent}for (${value}) |${itemVar}| {`);
+  let typeArg: string | null;
+  if (typeExpr) {
+    lines.push(`${indent}    const ${typeVar} = ${typeExpr};`);
+    typeArg = typeVar;
+  } else {
+    typeArg = typeName === null ? null : `"${typeName}"`;
+  }
+  if (typeArg !== null) {
+    lines.push(`${indent}    _ = try ${CTX}.bumpTypeIndex("${arrayName}", ${typeArg});`);
+  }
+  lines.push(...itemEncodeLines);
+  lines.push(`${indent}}`);
+  lines.push(`${indent}${CTX}.popCurrentArray();`);
   return lines;
 }
 
@@ -367,7 +425,7 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       if (sel.subPath.includes(".")) {
         throw new ZigNotImplemented(`${t} selector nested sub-path '.${sel.subPath}'`);
       }
-      return emitSelectorFramePatch(field, intType, sel, e, "selector_length", indent);
+      return emitSelectorFramePatch(field, intType, sel, e, "selector_length", indent, ctx.selfTypeName);
     }
     const parent = parsePlainParentRef(target);
     if (parent) {
@@ -410,7 +468,7 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       if (sel.subPath) {
         throw new ZigNotImplemented(`position_of selector with sub-path '.${sel.subPath}' (only the element offset is a position)`);
       }
-      return emitSelectorPositionPatch(field, intType, sel, e, indent, computed.alignment || 1);
+      return emitSelectorPositionPatch(field, intType, sel, e, indent, computed.alignment || 1, ctx.selfTypeName);
     }
     if (isParentRef(target)) {
       throw new ZigNotImplemented(`position_of target '${target}' (dotted/_root parent ref, later phase)`);
@@ -436,7 +494,7 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
       if (sel.subPath.includes(".")) {
         throw new ZigNotImplemented(`crc32_of selector nested sub-path '.${sel.subPath}'`);
       }
-      return emitSelectorFramePatch(field, intType, sel, e, "selector_crc32", indent);
+      return emitSelectorFramePatch(field, intType, sel, e, "selector_crc32", indent, ctx.selfTypeName);
     }
     if (isParentRef(target)) {
       throw new ZigNotImplemented(`crc32_of target '${target}' (dotted/_root parent ref, later phase)`);
@@ -535,16 +593,28 @@ function emitParentDeferredPatch(
 
 /**
  * `corresponding<T>` correlates the N-th element of the *referencing* type to the
- * N-th element of the *target* type — the index must be captured per-element at
- * encode time. The Zig runtime resolver currently reads only the final aggregate
- * iteration state, so corresponding can't be resolved correctly yet. Skip it
- * cleanly (whole-suite codegen-skip) rather than emit silently-wrong offsets;
- * first<T>/last<T> are unaffected.
+ * N-th matching *target* element. N is the referencing element's 1-based
+ * occurrence index, captured at encode time via `ctx.typeIndex(array, selfType)`
+ * (the array loop bumps the per-type counter before encoding each element). The
+ * captured occurrence travels on the deferred patch so the resolver picks the
+ * N-th matching target rather than the final aggregate count. `selfTypeName` is
+ * the struct's own schema type name (its variant name in the array).
  */
-function assertSelectorImplemented(sel: SelectorTarget): void {
-  if (sel.selector === "corresponding") {
-    throw new ZigNotImplemented("corresponding<T> selector (per-element occurrence correlation, follow-on)");
+function emitOccurrenceCapture(
+  field: any,
+  sel: SelectorTarget,
+  selfTypeName: string | undefined,
+  indent: string,
+): { lines: string[]; occ: string } {
+  if (sel.selector !== "corresponding") return { lines: [], occ: "" };
+  if (!selfTypeName) {
+    throw new ZigNotImplemented("corresponding<T> selector outside a named struct");
   }
+  const occVar = `_corr_n_${zigFieldName(field.name)}`;
+  return {
+    lines: [`${indent}const ${occVar} = ${CTX}.selfOccurrence("${selfTypeName}", "${sel.arrayName}");`],
+    occ: `, .occurrence = ${occVar}`,
+  };
 }
 
 /**
@@ -560,16 +630,18 @@ function emitSelectorPositionPatch(
   e: string,
   indent: string,
   alignment: number,
+  selfTypeName: string | undefined,
 ): string[] {
-  assertSelectorImplemented(sel);
   const ph = placeholderVar(field.name);
   const width = PATCH_WIDTH[intType];
+  const { lines: occLines, occ } = emitOccurrenceCapture(field, sel, selfTypeName, indent);
   return [
     `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+    ...occLines,
     `${indent}try ${CTX}.addDeferredPatch(.{ .selector_position = .{ ` +
       `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
       `.array_name = "${sel.arrayName}", .selector = .${sel.selector}, ` +
-      `.filter_type = "${sel.filterType}", .alignment = ${alignment} } });`,
+      `.filter_type = "${sel.filterType}", .alignment = ${alignment}${occ} } });`,
   ];
 }
 
@@ -588,16 +660,18 @@ function emitSelectorFramePatch(
   e: string,
   op: "selector_length" | "selector_crc32",
   indent: string,
+  selfTypeName: string | undefined,
 ): string[] {
-  assertSelectorImplemented(sel);
   const ph = placeholderVar(field.name);
   const width = PATCH_WIDTH[intType];
+  const { lines: occLines, occ } = emitOccurrenceCapture(field, sel, selfTypeName, indent);
   return [
     `${indent}const ${ph} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`,
+    ...occLines,
     `${indent}try ${CTX}.addDeferredPatch(.{ .${op} = .{ ` +
       `.local_offset = ${ph}.offset, .width = .${width}, .endianness = ${e}, ` +
       `.array_name = "${sel.arrayName}", .selector = .${sel.selector}, ` +
-      `.filter_type = "${sel.filterType}", .sub_field = "${sel.subPath}" } });`,
+      `.filter_type = "${sel.filterType}", .sub_field = "${sel.subPath}"${occ} } });`,
   ];
 }
 

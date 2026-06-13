@@ -97,7 +97,9 @@ pub const Patch = union(enum) {
         frame: *Frame,
         field_name: []const u8,
     },
-    /// `position_of(array[first<T>|last<T>|corresponding<T>])`.
+    /// `position_of(array[first<T>|last<T>|corresponding<T>])`. For corresponding,
+    /// `occurrence` is the 1-based occurrence index of the referencing element,
+    /// captured at encode time (correlate the N-th referencer to the N-th target).
     selector_position: struct {
         local_offset: usize,
         width: PatchWidth,
@@ -106,6 +108,7 @@ pub const Patch = union(enum) {
         selector: SelectorKind,
         filter_type: ?[]const u8,
         alignment: usize = 1,
+        occurrence: ?usize = null,
     },
     /// `length_of(array[first<T>|last<T>|corresponding<T>].subfield)` — logical
     /// length of a sub-field on the selected element (read from its frame).
@@ -117,6 +120,7 @@ pub const Patch = union(enum) {
         selector: SelectorKind,
         filter_type: ?[]const u8,
         sub_field: []const u8,
+        occurrence: ?usize = null,
     },
     /// `crc32_of(array[first<T>|last<T>|corresponding<T>].subfield)` — CRC32 over
     /// the encoded byte range of a sub-field on the selected element.
@@ -128,6 +132,7 @@ pub const Patch = union(enum) {
         selector: SelectorKind,
         filter_type: ?[]const u8,
         sub_field: []const u8,
+        occurrence: ?usize = null,
     },
     /// `sum_of_type_sizes(array, element_type)` — sum of encoded byte sizes of
     /// every array element whose recorded type matches `element_type`.
@@ -159,6 +164,11 @@ pub const EncodeContext = struct {
     all_frames: std.ArrayListUnmanaged(*Frame) = .empty,
     positions: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(PositionEntry)) = .empty,
     array_iterations: std.StringHashMapUnmanaged(IterState) = .empty,
+    /// Stack of the array names currently being encoded (innermost on top). A
+    /// `corresponding<T>` field reads the top to count its referencing element's
+    /// occurrence within its *own* array — which is the target array for a
+    /// same-array correlation (ZIP) and a sibling array for a cross-array one.
+    current_arrays: std.ArrayListUnmanaged([]const u8) = .empty,
     deferred_patches: std.ArrayListUnmanaged(Patch) = .empty,
     compression_dict: std.StringHashMapUnmanaged(usize) = .empty,
     absolute_byte_offset: usize = 0,
@@ -287,6 +297,33 @@ pub const EncodeContext = struct {
         return gop.value_ptr.*;
     }
 
+    /// The current (already-bumped) occurrence count of `type_name` in
+    /// `array_name`, or 0 if none yet. Read at encode time to capture a
+    /// referencing element's 1-based occurrence for `corresponding<T>`.
+    pub fn typeIndex(self: *EncodeContext, array_name: []const u8, type_name: []const u8) usize {
+        const st = self.array_iterations.get(array_name) orelse return 0;
+        return st.type_indices.get(type_name) orelse 0;
+    }
+
+    pub fn pushCurrentArray(self: *EncodeContext, array_name: []const u8) Error!void {
+        try self.current_arrays.append(self.alloc(), array_name);
+    }
+
+    pub fn popCurrentArray(self: *EncodeContext) void {
+        if (self.current_arrays.items.len > 0) _ = self.current_arrays.pop();
+    }
+
+    /// The 1-based occurrence of a `corresponding<T>` referencing element of type
+    /// `self_type` within its own (innermost) array, or — when encoded outside any
+    /// array — within `fallback_array` (the correlation target array).
+    pub fn selfOccurrence(self: *EncodeContext, self_type: []const u8, fallback_array: []const u8) usize {
+        const arr = if (self.current_arrays.items.len > 0)
+            self.current_arrays.items[self.current_arrays.items.len - 1]
+        else
+            fallback_array;
+        return self.typeIndex(arr, self_type);
+    }
+
     // ---- Back-reference compression dictionary ----
 
     pub fn compressionLookup(self: *EncodeContext, key: []const u8) ?usize {
@@ -350,18 +387,18 @@ pub const EncodeContext = struct {
                         },
                         .corresponding => {
                             if (self.positions.get(sp.array_name) == null) break :blk null;
-                            break :blk self.resolveSelectorCorresponding(sp, st);
+                            break :blk self.resolveSelectorCorresponding(sp);
                         },
                     }
                 },
                 .selector_length => |sp| blk: {
-                    const e = self.selectorEntry(sp.array_name, sp.filter_type, sp.selector) orelse break :blk null;
+                    const e = self.selectorEntry(sp.array_name, sp.filter_type, sp.selector, sp.occurrence) orelse break :blk null;
                     const fr = e.frame orelse break :blk null;
                     const info = fr.fields.get(sp.sub_field) orelse break :blk null;
                     break :blk (info.length orelse break :blk null);
                 },
                 .selector_crc32 => |sp| blk: {
-                    const e = self.selectorEntry(sp.array_name, sp.filter_type, sp.selector) orelse break :blk null;
+                    const e = self.selectorEntry(sp.array_name, sp.filter_type, sp.selector, sp.occurrence) orelse break :blk null;
                     const fr = e.frame orelse break :blk null;
                     const info = fr.fields.get(sp.sub_field) orelse break :blk null;
                     const r = info.range orelse break :blk null;
@@ -413,12 +450,16 @@ pub const EncodeContext = struct {
 
     /// The position entry selected by `selector` (first/last/corresponding) over
     /// `array_name`, filtered by `filter_type`. Shared by the offset (position_of)
-    /// and frame-reading (length_of/crc32_of) selector patches.
+    /// and frame-reading (length_of/crc32_of) selector patches. For corresponding,
+    /// `occurrence` is the 1-based occurrence index captured at encode time (the
+    /// N-th referencer correlates to the N-th matching target); when null, it falls
+    /// back to the final aggregate type count.
     fn selectorEntry(
         self: *EncodeContext,
         array_name: []const u8,
         filter_type: ?[]const u8,
         selector: SelectorKind,
+        occurrence: ?usize,
     ) ?PositionEntry {
         const entries = (self.positions.get(array_name) orelse return null).items;
         switch (selector) {
@@ -436,10 +477,14 @@ pub const EncodeContext = struct {
             },
             .corresponding => {
                 var target_idx: usize = 0;
-                const st = self.array_iterations.get(array_name);
-                if (filter_type) |ft| {
-                    if (st) |s| {
-                        if (s.type_indices.get(ft)) |c| target_idx = c -| 1;
+                if (occurrence) |occ| {
+                    target_idx = occ -| 1;
+                } else {
+                    const st = self.array_iterations.get(array_name);
+                    if (filter_type) |ft| {
+                        if (st) |s| {
+                            if (s.type_indices.get(ft)) |c| target_idx = c -| 1;
+                        }
                     }
                 }
                 var count: usize = 0;
@@ -456,13 +501,12 @@ pub const EncodeContext = struct {
 
     fn resolveSelectorFirstLast(self: *EncodeContext, sp: anytype, first: bool) u64 {
         const sel: SelectorKind = if (first) .first else .last;
-        const e = self.selectorEntry(sp.array_name, sp.filter_type, sel) orelse return 0xFFFFFFFF;
+        const e = self.selectorEntry(sp.array_name, sp.filter_type, sel, null) orelse return 0xFFFFFFFF;
         return applyAlignment(e.offset, sp.alignment);
     }
 
-    fn resolveSelectorCorresponding(self: *EncodeContext, sp: anytype, st: ?IterState) u64 {
-        _ = st;
-        const e = self.selectorEntry(sp.array_name, sp.filter_type, .corresponding) orelse return 0xFFFFFFFF;
+    fn resolveSelectorCorresponding(self: *EncodeContext, sp: anytype) u64 {
+        const e = self.selectorEntry(sp.array_name, sp.filter_type, .corresponding, sp.occurrence) orelse return 0xFFFFFFFF;
         return applyAlignment(e.offset, sp.alignment);
     }
 
@@ -680,6 +724,66 @@ test "selector_sum sums encoded byte sizes of matching array elements" {
     try testing.expectEqual(@as(u8, 0), out[1]);
     try testing.expectEqual(@as(u8, 0), out[2]);
     try testing.expectEqual(@as(u8, 0), out[3]);
+}
+
+test "corresponding selector_position uses the captured per-element occurrence" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+    var enc = BitStreamEncoder.init(testing.allocator, .msb_first);
+    defer enc.deinit();
+
+    // Two IndexEntry placeholders, each correlating to the N-th DataBlock.
+    const ph0 = try enc.placeholderU32();
+    const ph1 = try enc.placeholderU32();
+    // Record two DataBlocks (offsets 1 and 7) then two IndexEntry slots.
+    try ctx.recordPosition("sections", "DataBlock", 1, 7, null);
+    try ctx.recordPosition("sections", "DataBlock", 7, 13, null);
+    try ctx.markArrayDone("sections");
+
+    // IndexEntry #1 captured occurrence 1 -> 1st DataBlock (offset 1).
+    try ctx.addDeferredPatch(.{ .selector_position = .{
+        .local_offset = ph0.offset,
+        .width = .u32,
+        .endianness = .little_endian,
+        .array_name = "sections",
+        .selector = .corresponding,
+        .filter_type = "DataBlock",
+        .occurrence = 1,
+    } });
+    // IndexEntry #2 captured occurrence 2 -> 2nd DataBlock (offset 7).
+    try ctx.addDeferredPatch(.{ .selector_position = .{
+        .local_offset = ph1.offset,
+        .width = .u32,
+        .endianness = .little_endian,
+        .array_name = "sections",
+        .selector = .corresponding,
+        .filter_type = "DataBlock",
+        .occurrence = 2,
+    } });
+    try ctx.resolveDeferredPatches(&enc);
+
+    const out = try enc.finish();
+    defer testing.allocator.free(out);
+    try testing.expectEqual(@as(u8, 1), out[0]); // occurrence 1 -> offset 1 (LE u32)
+    try testing.expectEqual(@as(u8, 7), out[4]); // occurrence 2 -> offset 7
+}
+
+test "selfOccurrence reads the innermost current array, falling back otherwise" {
+    var ctx = EncodeContext.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Simulate encoding the `secondaries` array: push it current, bump per item.
+    try ctx.pushCurrentArray("secondaries");
+    _ = try ctx.bumpTypeIndex("secondaries", "Secondary");
+    // A cross-array corresponding<Primary> reads the referencer's own occurrence.
+    try testing.expectEqual(@as(usize, 1), ctx.selfOccurrence("Secondary", "primaries"));
+    _ = try ctx.bumpTypeIndex("secondaries", "Secondary");
+    try testing.expectEqual(@as(usize, 2), ctx.selfOccurrence("Secondary", "primaries"));
+    ctx.popCurrentArray();
+
+    // Outside any array, selfOccurrence falls back to the target array's count.
+    _ = try ctx.bumpTypeIndex("primaries", "Primary");
+    try testing.expectEqual(@as(usize, 1), ctx.selfOccurrence("Primary", "primaries"));
 }
 
 test "parent_sum sums the byte spans of an explicit set of parent fields" {

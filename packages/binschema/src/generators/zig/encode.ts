@@ -15,6 +15,8 @@ import {
   arrayNeedsSelectorTracking,
   selectorItemTypeName,
   emitSelectorArrayRecording,
+  schemaHasCorrespondingSelectors,
+  emitCorrelationArrayLoop,
 } from "./computed.js";
 import { emitEnumEncode } from "./enum.js";
 import { emitBitfieldEncode } from "./bitfield.js";
@@ -37,6 +39,10 @@ export interface EmitCtx {
   selfPath: string;
   /** The sibling field list of the struct being emitted (for target lookups). */
   fields?: any[];
+  /** The schema type name of the struct being emitted (for corresponding<T>'s
+   *  self-variant occurrence: the N-th element of this type correlates to the
+   *  N-th matching target). Undefined outside a named struct (alias functions). */
+  selfTypeName?: string;
 }
 
 /**
@@ -265,6 +271,18 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
     const typeExpr = unionTypeSwitchExpr(itemField, ctx.schema, itemVar);
     lines.push(...emitSelectorArrayRecording(field.name, typeName, value, itemVar, itemEncode, indent, typeExpr));
     return lines;
+  }
+
+  // An array no selector targets, but whose elements hold a cross-array
+  // `corresponding<T>` field, still needs current_array + per-element occurrence
+  // tracking so the referencing element can count its index within THIS array.
+  if (field.name && schemaHasCorrespondingSelectors(ctx.schema)) {
+    const typeName = selectorItemTypeName(field, ctx.schema);
+    const typeExpr = unionTypeSwitchExpr(itemField, ctx.schema, itemVar);
+    if (typeName !== null || typeExpr) {
+      lines.push(...emitCorrelationArrayLoop(field.name, value, itemVar, itemEncode, typeName, typeExpr, indent));
+      return lines;
+    }
   }
 
   lines.push(`${indent}for (${value}) |${itemVar}| {`);
