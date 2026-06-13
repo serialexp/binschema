@@ -10,6 +10,7 @@ import {
   resolveAlias,
   classifyTypeDef,
   varlengthReadMethod,
+  translateConditional,
 } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { emitEnumDecode } from "./enum.js";
@@ -28,10 +29,27 @@ export function generateFieldDecode(
   target: string,
   indent = "        ",
 ): string[] {
-  if (field.conditional || field.if) throw new ZigNotImplemented("conditional fields");
+  if (field.if) throw new ZigNotImplemented("if-form conditional fields");
+  const fname = zigFieldName(field.name);
+  // Conditional field: decode only when the guard (evaluated over already-decoded
+  // siblings in `target`) is true; otherwise the `?T` field is null. computed/
+  // const conditionals are deferred (mirrors the encode side).
+  if (field.conditional) {
+    if (field.computed) throw new ZigNotImplemented("computed conditional field");
+    if (field.const !== undefined) throw new ZigNotImplemented("const conditional field");
+    const cond = translateConditional(field.conditional, target, ctx.fields, ctx.schema);
+    const lhs = `${target}.${fname}`;
+    const inner = emitDecodeValue(field, ctx, lhs, target, indent + "    ");
+    return [
+      `${indent}if (${cond}) {`,
+      ...inner,
+      `${indent}} else {`,
+      `${indent}    ${lhs} = null;`,
+      `${indent}}`,
+    ];
+  }
   // Computed and const fields are present on the wire (they were written during
   // encode), so they decode exactly like their declared primitive type.
-  const fname = zigFieldName(field.name);
   return emitDecodeValue(field, ctx, `${target}.${fname}`, target, indent);
 }
 

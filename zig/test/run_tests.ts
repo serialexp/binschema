@@ -302,6 +302,12 @@ function structValue(typeName: string, typeDef: any, value: any, schema: any, al
     // Computed/const fields are omitted from the encode input.
     if (field.computed || field.const !== undefined) continue;
     const fv = value?.[field.name];
+    // A conditional field is stored as `?T`; when the test value omits it the
+    // field is absent (null), otherwise the bare value coerces to the optional.
+    if (field.conditional && (fv === undefined || fv === null)) {
+      parts.push(`.${zigFieldName(field.name)} = null`);
+      continue;
+    }
     parts.push(`.${zigFieldName(field.name)} = ${valueExpr(field, fv, schema, alias)}`);
   }
   const tn = `${alias}.${zigTypeName(typeName)}`;

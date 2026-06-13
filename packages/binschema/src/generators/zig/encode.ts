@@ -9,6 +9,7 @@ import {
   resolveAlias,
   classifyTypeDef,
   varlengthWriteMethod,
+  translateConditional,
 } from "./types.js";
 import {
   emitComputedEncode,
@@ -51,7 +52,19 @@ export interface EmitCtx {
  * `ctx`. Indentation is 8 spaces (method body) by default.
  */
 export function generateFieldEncode(field: any, ctx: EmitCtx, indent = "        "): string[] {
-  if (field.conditional || field.if) throw new ZigNotImplemented("conditional fields");
+  if (field.if) throw new ZigNotImplemented("if-form conditional fields");
+  // Conditional field: emit only when the guard is true. The field is stored as
+  // `?T`, so inside the guard we unwrap the access with `.?`. computed/const
+  // conditionals (e.g. field_id_delta) interact with running accumulators and
+  // are deferred.
+  if (field.conditional) {
+    if (field.computed) throw new ZigNotImplemented("computed conditional field");
+    if (field.const !== undefined) throw new ZigNotImplemented("const conditional field");
+    const cond = translateConditional(field.conditional, ctx.selfPath, ctx.fields, ctx.schema);
+    const value = `${ctx.selfPath}.${zigFieldName(field.name)}.?`;
+    const inner = emitEncodeValue(field, value, ctx, indent + "    ");
+    return [`${indent}if (${cond}) {`, ...inner, `${indent}}`];
+  }
   if (field.computed) return emitComputedEncode(field, ctx, indent);
   if (field.const !== undefined) return emitConstEncode(field, ctx, indent);
   const fname = zigFieldName(field.name);

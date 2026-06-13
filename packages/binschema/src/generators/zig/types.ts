@@ -2,7 +2,7 @@
 // ABOUTME: Phase 1 covers byte-aligned scalars and bit fields; richer types land later.
 
 import type { BinarySchema, Endianness } from "../../schema/binary-schema.js";
-import { zigTypeName } from "./naming.js";
+import { zigTypeName, zigFieldName } from "./naming.js";
 import { ZigNotImplemented } from "./encode.js";
 import { zigBitfieldType } from "./bitfield.js";
 import { zigOptionalType } from "./optional.js";
@@ -121,6 +121,15 @@ export function classifyTypeDef(typeDef: any): TypeClass {
  * Throws ZigNotImplemented for kinds not yet supported (enum/DU/choice/etc.).
  */
 export function zigDeclaredType(field: any, schema: BinarySchema): string {
+  // A conditional field is present only when its guard is true, so it is stored
+  // as an optional (`?T`) — null when absent. Strip the marker and wrap the
+  // underlying type.
+  if (field.conditional) {
+    const inner = { ...field };
+    delete inner.conditional;
+    return `?${zigDeclaredType(inner, schema)}`;
+  }
+
   const prim = zigPrimitiveType(field);
   if (prim !== null) return prim;
 
@@ -176,6 +185,89 @@ export function enumReprZigTypeFor(typeDef: any): string {
     default:
       throw new ZigNotImplemented(`enum repr '${typeDef?.repr}'`);
   }
+}
+
+/**
+ * Resolve a (possibly dotted) field path used in a conditional into a Zig access
+ * expression plus any null-guards. Walking the schema lets us detect an
+ * *optional intermediate* segment — a field that is itself conditional (`?T`) —
+ * and unwrap it with `.?` while AND-guarding on `<seg> != null` so that an
+ * absent parent makes the whole condition false (matching the reference's
+ * short-circuiting `.get()` chains).
+ */
+function resolveCondPath(
+  path: string,
+  prefix: string,
+  fields: any[] | undefined,
+  schema: BinarySchema,
+): { access: string; guards: string[] } {
+  const segs = path.split(".");
+  let access = prefix;
+  let curFields = fields;
+  const guards: string[] = [];
+  for (let i = 0; i < segs.length; i++) {
+    const isLast = i === segs.length - 1;
+    const fld = (curFields || []).find((f) => f.name === segs[i]);
+    access += `.${zigFieldName(segs[i])}`;
+    if (fld?.conditional && !isLast) {
+      guards.push(`${access} != null`);
+      access += ".?";
+    }
+    if (!isLast && fld) {
+      const resolved = resolveAlias(schema, fld.type);
+      curFields = resolved?.sequence;
+    }
+  }
+  return { access, guards };
+}
+
+/**
+ * Translate a `conditional` expression into a strict-bool Zig condition.
+ * `prefix` is the access root (`self` on encode, the result var on decode);
+ * `fields` is the enclosing struct's sequence (for optional-intermediate
+ * detection). Mirrors the Go generator's four patterns. C-style "truthiness" on
+ * a bitwise AND (`flags & 0x01`) becomes an explicit `(...) != 0` since Zig `if`
+ * requires a bool.
+ */
+export function translateConditional(
+  condition: string,
+  prefix: string,
+  fields: any[] | undefined,
+  schema: BinarySchema,
+): string {
+  const cond = condition.trim();
+  const withGuards = (guards: string[], core: string): string =>
+    guards.length ? `${guards.map((g) => `(${g})`).join(" and ")} and ${core}` : core;
+
+  // (field & mask) <op> value   — parenthesized bitwise AND with a comparison.
+  let m = cond.match(/^\((\w+(?:\.\w+)*)\s*&\s*([^)]+)\)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (m) {
+    const r = resolveCondPath(m[1], prefix, fields, schema);
+    return withGuards(r.guards, `(${r.access} & ${m[2].trim()}) ${m[3]} ${m[4].trim()}`);
+  }
+
+  // field <op> value            — simple comparison (already boolean).
+  m = cond.match(/^(\w+(?:\.\w+)*)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (m) {
+    const r = resolveCondPath(m[1], prefix, fields, schema);
+    return withGuards(r.guards, `${r.access} ${m[2]} ${m[3].trim()}`);
+  }
+
+  // field & mask                — bitwise AND truthiness.
+  m = cond.match(/^(\w+(?:\.\w+)*)\s*&\s*(.+)$/);
+  if (m) {
+    const r = resolveCondPath(m[1], prefix, fields, schema);
+    return withGuards(r.guards, `(${r.access} & ${m[2].trim()}) != 0`);
+  }
+
+  // field                       — bare boolean field.
+  m = cond.match(/^(\w+(?:\.\w+)*)$/);
+  if (m) {
+    const r = resolveCondPath(m[1], prefix, fields, schema);
+    return withGuards(r.guards, r.access);
+  }
+
+  throw new ZigNotImplemented(`conditional expression '${condition}'`);
 }
 
 /** Zig type for an array `items` spec (string name or inline field object). */
