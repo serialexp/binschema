@@ -240,15 +240,25 @@ framed array kinds** (`6271e45`: null_terminated, signature_terminated,
 byte_length_prefixed via placeholder/patch, packed_count Thrift header),
 **latin1 & utf16 string encodings** (`9532624`, new `zig/runtime/strenc.zig`
 transcoding module: latin1 1:1 byte mapping, utf16 code units + endianness +
-surrogate pairs). Still pending: compression/back-reference (DNS), alignment
-padding (`unresolved field type`), `instances` (random access), kerberos
-non-integer computed fields, DU variants that aren't structs (DNS),
-`variant_terminated` + `terminal_variants` (union arrays), `field_id_delta`
-computed+conditional, string_const defaults, parity sweep.
+surrogate pairs), **alignment padding** (`b95fa83`, `type: "padding"` +
+`align_to`: a memberless wire spacer that writes/consumes zeros to align the
+byte offset; count computed from the live offset so it composes with
+variable-length predecessors), **const on fixed-length strings** (`3c1cb4e`,
+tag/magic shapes routed through the normal string-encode path so framing +
+transcoding apply; const/computed `[]const u8` members default to `""`),
+**varlength computed length_of/count_of** (`8210ec2`, the synchronous DER/LEB128
+length-prefix path — value from `self.<target>.len`, written with the varlength
+method; covered by a new standalone `computed/varlength-length-of` suite verified
+across all five languages). Still pending: compression/back-reference (DNS),
+`instances` (random access), kerberos SEQUENCE types (varlength
+measure-then-patch + `from_after_field` with parent refs), DU variants that
+aren't structs (DNS), `variant_terminated` + `terminal_variants` (union arrays),
+`field_id_delta` computed+conditional, parity sweep.
 
-**Latest harness numbers:** 303/365 suites generate, 733/733 cases pass, 0
-errored, 0 failed; runtime unit tests 26/26; TS reference 1189/1189 unchanged.
-Update on each landing.
+**Latest harness numbers:** 314/366 suites generate, 749/749 cases pass, 0
+errored, 0 failed; runtime unit tests 26/26; TS reference 1192/1192 (3 new cases
+from the varlength-length-of suite; no existing bytes edited). Update on each
+landing.
 
 ---
 

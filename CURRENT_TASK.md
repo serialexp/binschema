@@ -1,6 +1,6 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** six slices landed —
+> **Latest (Phase 5, in progress):** nine slices landed —
 > **length_prefixed_items** (`a614b18`: outer count + per-item byte-length framing
 > via placeholder/patch), **conditional fields** (`3a82850`: `?T` + `if`-guarded
 > encode/decode; schema-aware condition translator that unwraps optional
@@ -13,16 +13,26 @@
 > placeholder/patch, packed_count Thrift header), **latin1 & utf16 string
 > encodings** (`9532624`: new `zig/runtime/strenc.zig` transcoding module —
 > latin1 1:1 bytes, utf16 code units + endianness + surrogate pairs; in-memory is
-> UTF-8 `[]const u8`, framing measures BYTES). Zig harness now **303/365 suites
-> generate, 733/733 cases pass, 0 errored, 0 failed**; runtime 26/26; TS reference
-> unchanged at 1189/1189.
+> UTF-8 `[]const u8`, framing measures BYTES), **alignment padding** (`b95fa83`:
+> `type: "padding"` + `align_to` — memberless wire spacer writing/consuming zeros
+> to align the byte offset; count from the live offset, composes with var-length
+> predecessors; harness value constructor also skips padding), **const on
+> fixed-length strings** (`3c1cb4e`: const literal routed through the normal
+> string-encode path so framing + transcoding apply; const/computed `[]const u8`
+> members default to `""`), **varlength computed length_of/count_of** (`8210ec2`:
+> the synchronous DER/LEB128 length-prefix path — value from `self.<target>.len`,
+> written with the varlength method; placeholder-needing kinds stay integer-only;
+> new standalone `computed/varlength-length-of` suite verified across all five
+> languages). Zig harness now **314/366 suites generate, 749/749 cases pass, 0
+> errored, 0 failed**; runtime 26/26; TS reference **1192/1192** (3 new cases from
+> the varlength-length-of suite; no existing bytes edited).
 >
 > **Phase 5 still pending** (pick next via `ZIG_TEST_REPORT=skips`, run from
 > project root): `instances` (random access, ~21 suites), DU variants that aren't
-> structs (DNS, ~13), `unresolved field type` incl. alignment padding (~12),
-> kerberos non-integer computed (~7), const-non-primitive defaults / string_const
-> (~3), `variant_terminated` + `terminal_variants` (union arrays),
-> `field_id_delta` (computed+conditional), compression/back-reference, full
+> structs (DNS, ~13), kerberos SEQUENCE types (varlength measure-then-patch +
+> `from_after_field` with parent refs, ~7), compression/back-reference (DNS, 4),
+> `variant_terminated` + `terminal_variants` (union arrays, 3), `field_id_delta`
+> (computed+conditional, 1), `optional_builtin_bit` (bit-presence, 1), full
 > parity sweep.
 >
 > Doc `docs/ADDING_A_LANGUAGE.md` has the live status appendix + a "Pitfalls &
