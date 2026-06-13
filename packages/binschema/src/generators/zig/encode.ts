@@ -10,6 +10,7 @@ import {
   classifyTypeDef,
   varlengthWriteMethod,
   translateConditional,
+  zigDeclaredType,
 } from "./types.js";
 import {
   emitComputedEncode,
@@ -250,7 +251,9 @@ function emitFixedBlobEncode(value: string, len: number, indent: string): string
 // ---------------------------------------------------------------------------
 
 function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string): string[] {
-  if (field.transform) throw new ZigNotImplemented(`array transform '${field.transform}' (Phase 5)`);
+  if (field.transform && field.transform !== "delta") {
+    throw new ZigNotImplemented(`array transform '${field.transform}' (Phase 5)`);
+  }
   const kind = field.kind;
   const items = field.items;
   const lines: string[] = [];
@@ -283,6 +286,25 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
   const itemVar = uniqueVar("_item");
   const itemField = typeof items === "string" ? { type: items } : { ...items };
   delete (itemField as any).name;
+
+  // Delta transform: a pure wire transform on array elements. The logical array
+  // is absolutes on both sides; on the wire we write value[i] - prev using the
+  // item's own encoding (a loop-local accumulator starting at 0). Negative deltas
+  // require a signed item encoding (e.g. zigzag varlength); on a plain unsigned
+  // item it only round-trips for monotonic data (the author's responsibility).
+  if (field.transform === "delta") {
+    const itemType = zigDeclaredType(itemField, ctx.schema);
+    const prevVar = uniqueVar("_delta_prev");
+    const deltaVar = uniqueVar("_delta");
+    lines.push(`${indent}var ${prevVar}: ${itemType} = 0;`);
+    lines.push(`${indent}for (${value}) |${itemVar}| {`);
+    lines.push(`${indent}    const ${deltaVar}: ${itemType} = ${itemVar} - ${prevVar};`);
+    lines.push(`${indent}    ${prevVar} = ${itemVar};`);
+    lines.push(...emitEncodeValue(itemField, deltaVar, ctx, indent + "    "));
+    lines.push(`${indent}}`);
+    return lines;
+  }
+
   const itemEncode = emitEncodeValue(itemField, itemVar, ctx, indent + "    ");
 
   // If a computed field selects into this array (first/last/corresponding), the

@@ -225,7 +225,9 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
 // ---------------------------------------------------------------------------
 
 function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: string, indent: string): string[] {
-  if (field.transform) throw new ZigNotImplemented(`array transform '${field.transform}' (Phase 5)`);
+  if (field.transform && field.transform !== "delta") {
+    throw new ZigNotImplemented(`array transform '${field.transform}' (Phase 5)`);
+  }
   const kind = field.kind;
   const items = field.items;
   const itemType = zigItemType(items, ctx.schema);
@@ -285,6 +287,24 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
   }
 
   const buf = uniqueVar("_buf");
+
+  // Delta transform: each wire element is a delta; reconstruct the absolute via a
+  // loop-local running accumulator (starting at 0) and store the running sum.
+  if (field.transform === "delta") {
+    const runVar = uniqueVar("_delta_run");
+    const it = uniqueVar("_dit");
+    lines.push(`${indent}var ${runVar}: ${itemType} = 0;`);
+    lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, ${countExpr});`);
+    lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
+    lines.push(`${indent}    var ${it}: ${itemType} = undefined;`);
+    lines.push(...emitDecodeValue(itemField, ctx, it, structVar, indent + "    "));
+    lines.push(`${indent}    ${runVar} += ${it};`);
+    lines.push(`${indent}    ${buf}[${i}] = ${runVar};`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = ${buf};`);
+    return lines;
+  }
+
   lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, ${countExpr});`);
   lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
   lines.push(...emitDecodeValue(itemField, ctx, `${buf}[${i}]`, structVar, indent + "    "));
