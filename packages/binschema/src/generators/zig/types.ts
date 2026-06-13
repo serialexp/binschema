@@ -151,6 +151,13 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
     case "discriminated_union":
     case "choice":
       return zigUnionType(field, schema);
+    case "compressed": {
+      // A compressed region is a pure wire transform: the logical value (both
+      // sides) is the inner `value_type`. The framing is consumed, not stored.
+      const vt = field.value_type;
+      const inner = typeof vt === "object" ? vt : { type: vt };
+      return zigDeclaredType(inner, schema);
+    }
   }
 
   // Type reference: resolve through alias chains.

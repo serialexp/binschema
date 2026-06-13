@@ -19,6 +19,7 @@ import { emitEnumDecode } from "./enum.js";
 import { emitBitfieldDecode } from "./bitfield.js";
 import { emitOptionalDecode } from "./optional.js";
 import { emitChoiceDecode, emitDuDecode } from "./union.js";
+import { emitCompressedDecode } from "./compression.js";
 
 /**
  * Emit statements to decode a single named field of `target` (e.g. "result")
@@ -102,6 +103,7 @@ export function emitDecodeValue(
     case "bitfield": return emitBitfieldDecode(field, lhs, indent);
     case "discriminated_union": return emitDuDecode(field, ctx, lhs, structVar, indent);
     case "choice": return emitChoiceDecode(field, ctx, lhs, indent);
+    case "compressed": return emitCompressedDecode(field, ctx, lhs, indent);
   }
 
   const resolved = resolveAlias(ctx.schema, field.type);

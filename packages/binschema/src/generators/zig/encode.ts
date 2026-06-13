@@ -27,6 +27,7 @@ import { emitEnumEncode } from "./enum.js";
 import { emitBitfieldEncode } from "./bitfield.js";
 import { emitOptionalEncode } from "./optional.js";
 import { emitChoiceEncode, emitDuEncode, unionTypeSwitchExpr } from "./union.js";
+import { emitCompressedEncode } from "./compression.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -157,6 +158,7 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "bitfield": return emitBitfieldEncode(field, value, indent);
     case "discriminated_union": return emitDuEncode(field, value, indent);
     case "choice": return emitChoiceEncode(field, value, indent);
+    case "compressed": return emitCompressedEncode(field, value, ctx, indent);
   }
 
   // Type reference: resolve alias chains and dispatch on the concrete shape.

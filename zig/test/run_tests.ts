@@ -160,6 +160,7 @@ function zigValueType(field: any, schema: any, alias: string): string {
     case "optional": return `?${zigValueType(optionalInner(field), schema, alias)}`;
     case "varlength": return varlengthIsSigned(field) ? "i64" : "u64";
     case "choice": case "discriminated_union": return `${alias}.${unionTypeName(field)}`;
+    case "compressed": return zigValueType(compressedInner(field), schema, alias);
   }
   const resolved = resolveAlias(schema, field.type);
   const cls = classifyTypeDef(resolved);
@@ -186,6 +187,12 @@ function enumReprType(typeDef: any): string {
 function itemField(items: any): any {
   if (items == null) throw new UnsupportedValue("array without items");
   return typeof items === "string" ? { type: items } : items;
+}
+
+/** The inner value field of a compressed region (`value_type` as a field object). */
+function compressedInner(field: any): any {
+  const vt = field.value_type;
+  return typeof vt === "string" ? { type: vt } : { ...vt };
 }
 
 /** The inner value field of an optional (`value_type` as a field object). */
@@ -223,6 +230,9 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
   }
   if (field.type === "choice") return choiceValue(field, value, schema, alias);
   if (field.type === "discriminated_union") return duValue(field, value, schema, alias);
+  // A compressed region's value is the inner type on both sides (the framing is
+  // consumed, never in the value), so construct the inner value directly.
+  if (field.type === "compressed") return valueExpr(compressedInner(field), value, schema, alias);
 
   // Type reference.
   const resolved = resolveAlias(schema, field.type);
@@ -427,9 +437,18 @@ function main() {
       block.push(`    const v = ${valueExprStr};`);
       block.push(`    const bytes = try ${encodeCall};`);
       block.push(`    defer a.free(bytes);`);
-      block.push(`    const expected = ${byteArrayLiteral(expected)};`);
-      block.push(`    try std.testing.expectEqualSlices(u8, &expected, bytes);`);
-      if (!tc.round_trip_only) {
+      if (tc.round_trip_only) {
+        // No byte pinning (output not stable across impls, e.g. real deflate):
+        // assert encode -> decode -> re-encode reproduces the first encoding.
+        block.push(`    var arena = std.heap.ArenaAllocator.init(a);`);
+        block.push(`    defer arena.deinit();`);
+        block.push(`    const decoded = try ${decodeCall};`);
+        block.push(`    const rebytes = try ${reencodeCall};`);
+        block.push(`    defer a.free(rebytes);`);
+        block.push(`    try std.testing.expectEqualSlices(u8, bytes, rebytes);`);
+      } else {
+        block.push(`    const expected = ${byteArrayLiteral(expected)};`);
+        block.push(`    try std.testing.expectEqualSlices(u8, &expected, bytes);`);
         // Arena owns any slices the decoder allocates (arrays); freed wholesale.
         block.push(`    var arena = std.heap.ArenaAllocator.init(a);`);
         block.push(`    defer arena.deinit();`);
