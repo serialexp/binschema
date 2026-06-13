@@ -266,6 +266,27 @@ export function fieldEndVar(name: string): string {
   return `_field_end_${zigFieldName(name)}`;
 }
 
+/**
+ * Does a same-struct `length_of <target>` need a measure-then-patch (a u32
+ * placeholder back-patched with the target's encoded byte span) rather than the
+ * synchronous `.len` write? True when the target is a struct or a
+ * discriminated_union / choice — none of which expose a Zig `.len`, and whose
+ * encoded byte length isn't known until they're written. Slice-shaped targets
+ * (string / bytes / array, inline or via alias) keep the `.len` fast path; plain
+ * scalars keep their existing behaviour.
+ */
+export function lengthOfNeedsMeasure(target: string, schema: any, fields: any[] | undefined): boolean {
+  if (!fields) return false;
+  const tf = fields.find((f) => f.name === target);
+  if (!tf) return false;
+  if (tf.type === "discriminated_union" || tf.type === "choice") return true;
+  if (tf.type === "string" || tf.type === "bytes" || tf.type === "array") return false;
+  if (zigPrimitiveType(tf) !== null) return false;
+  const resolved = resolveAlias(schema, tf.type);
+  const cls = classifyTypeDef(resolved);
+  return cls === "struct" || cls === "discriminated_union" || cls === "choice";
+}
+
 /** Emit a write of a computed integer VALUE (`expr`) as the field's int type. */
 function emitIntWrite(intType: string, expr: string, e: string, indent: string): string[] {
   switch (intType) {
@@ -327,6 +348,12 @@ export function emitComputedEncode(field: any, ctx: EmitCtx, indent: string): st
     }
     if (isParentRef(target)) {
       throw new ZigNotImplemented(`${t} target '${target}' (dotted/_root parent ref, later phase)`);
+    }
+    // length_of a struct / discriminated_union / choice has no synchronous `.len`:
+    // reserve a fixed-width slot now and back-patch it with the target's encoded
+    // byte span once it has been written (emitComputedBackpatch).
+    if (t === "length_of" && lengthOfNeedsMeasure(target, ctx.schema, ctx.fields)) {
+      return [`${indent}const ${placeholderVar(field.name)} = try ${ENC}.placeholder${PLACEHOLDER_SUFFIX[intType]}();`];
     }
     // Same-struct: string/bytes -> byte length; array -> element count. Both map
     // to the Zig slice `.len`, and the value is known from the input directly.
@@ -477,22 +504,26 @@ function emitSelectorFramePatch(
   ];
 }
 
-/** Field names that are same-struct position_of / crc32_of targets. */
+/** Field names that are same-struct position_of / crc32_of / measured-length targets. */
 export interface ComputedTargets {
   posTargets: Set<string>;
   crcTargets: Set<string>;
+  /** length_of targets that need a measured byte span (struct / union targets). */
+  lenTargets: Set<string>;
 }
 
-export function computedTargets(fields: any[]): ComputedTargets {
+export function computedTargets(fields: any[], schema?: any): ComputedTargets {
   const posTargets = new Set<string>();
   const crcTargets = new Set<string>();
+  const lenTargets = new Set<string>();
   for (const f of fields) {
     const c = f.computed;
     if (!c || !c.target || isParentRef(c.target) || isSelector(c.target)) continue;
     if (c.type === "position_of") posTargets.add(c.target);
     if (c.type === "crc32_of") crcTargets.add(c.target);
+    if (c.type === "length_of" && lengthOfNeedsMeasure(c.target, schema, fields)) lenTargets.add(c.target);
   }
-  return { posTargets, crcTargets };
+  return { posTargets, crcTargets, lenTargets };
 }
 
 /**
@@ -522,6 +553,12 @@ export function emitComputedBackpatch(fields: any[], ctx: EmitCtx, indent: strin
       lines.push(
         `${indent}${ENC}.patch(${placeholderVar(f.name)}, ` +
           `${RT}.computeCrc32(${ENC}.view()[${fieldOffVar(c.target)}..${fieldEndVar(c.target)}]), ${e});`,
+      );
+    } else if (c.type === "length_of" && lengthOfNeedsMeasure(c.target, ctx.schema, ctx.fields)) {
+      // Measured byte span: end - start of the target field's encoded bytes.
+      lines.push(
+        `${indent}${ENC}.patch(${placeholderVar(f.name)}, ` +
+          `@intCast(${fieldEndVar(c.target)} - ${fieldOffVar(c.target)}), ${e});`,
       );
     }
   }

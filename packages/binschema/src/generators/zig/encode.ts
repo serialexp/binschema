@@ -19,6 +19,7 @@ import {
 import { emitEnumEncode } from "./enum.js";
 import { emitBitfieldEncode } from "./bitfield.js";
 import { emitOptionalEncode } from "./optional.js";
+import { emitChoiceEncode, emitDuEncode } from "./union.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -34,6 +35,8 @@ export interface EmitCtx {
   bitOrder: string;
   /** Access expression for the value being encoded, e.g. "self.foo". */
   selfPath: string;
+  /** The sibling field list of the struct being emitted (for target lookups). */
+  fields?: any[];
 }
 
 /**
@@ -81,8 +84,8 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
       return [`${indent}try ${ENC}.${varlengthWriteMethod(field)}(@intCast(${value}));`];
     case "optional": return emitOptionalEncode(field, value, ctx, indent, emitEncodeValue);
     case "bitfield": return emitBitfieldEncode(field, value, indent);
-    case "discriminated_union": throw new ZigNotImplemented("discriminated_union fields");
-    case "choice": throw new ZigNotImplemented("choice fields");
+    case "discriminated_union": return emitDuEncode(field, value, indent);
+    case "choice": return emitChoiceEncode(field, value, indent);
   }
 
   // Type reference: resolve alias chains and dispatch on the concrete shape.
@@ -100,9 +103,9 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "enum":
       return emitEnumEncode(resolved, value, field.endianness, ctx.endianness, indent);
     case "discriminated_union":
-      throw new ZigNotImplemented(`discriminated_union type '${field.type}' (Phase 4)`);
+      return emitDuEncode(resolved, value, indent);
     case "choice":
-      throw new ZigNotImplemented(`choice type '${field.type}' (Phase 4)`);
+      return emitChoiceEncode(resolved, value, indent);
     default:
       throw new ZigNotImplemented(`field type '${field.type}' (type reference)`);
   }

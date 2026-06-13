@@ -213,6 +213,8 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
     if (value == null) return "null";
     return valueExpr(optionalInner(field), value, schema, alias);
   }
+  if (field.type === "choice") return choiceValue(field, value, schema, alias);
+  if (field.type === "discriminated_union") return duValue(field, value, schema, alias);
 
   // Type reference.
   const resolved = resolveAlias(schema, field.type);
@@ -223,8 +225,36 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
     case "array": return arrayValue(resolved.items, value, schema, alias);
     case "struct": return structValue(field.type, resolved, value, schema, alias);
     case "enum": return intLiteral(value);
+    case "choice": return choiceValue(resolved, value, schema, alias);
+    case "discriminated_union": return duValue(resolved, value, schema, alias);
     default: throw new UnsupportedValue(`value for type '${field.type}'`);
   }
+}
+
+/** Anonymous tagged-union literal for a `choice` value: `.{ .Variant = payload }`.
+ *  Choice values are flat (the variant struct's fields spread next to `type`). */
+function choiceValue(field: any, value: any, schema: any, alias: string): string {
+  if (value == null || typeof value !== "object" || !value.type) {
+    throw new UnsupportedValue(`choice value ${JSON.stringify(value)}`);
+  }
+  const variantType = value.type;
+  const def = resolveAlias(schema, variantType);
+  if (!def || !def.sequence) throw new UnsupportedValue(`choice variant '${variantType}' not a struct`);
+  const payload = structValue(variantType, def, value, schema, alias);
+  return `.{ .${zigTypeName(variantType)} = ${payload} }`;
+}
+
+/** Anonymous tagged-union literal for a discriminated_union value:
+ *  `.{ .Variant = payload }` where payload is built from `value.value`. */
+function duValue(field: any, value: any, schema: any, alias: string): string {
+  if (value == null || typeof value !== "object" || !value.type) {
+    throw new UnsupportedValue(`discriminated_union value ${JSON.stringify(value)}`);
+  }
+  const variantType = value.type;
+  const def = resolveAlias(schema, variantType);
+  if (!def || !def.sequence) throw new UnsupportedValue(`DU variant '${variantType}' not a struct`);
+  const payload = structValue(variantType, def, value.value ?? {}, schema, alias);
+  return `.{ .${zigTypeName(variantType)} = ${payload} }`;
 }
 
 /** Anonymous Zig struct type for a bitfield field (one uN per sub-field). */

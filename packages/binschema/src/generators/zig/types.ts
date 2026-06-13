@@ -6,6 +6,7 @@ import { zigTypeName } from "./naming.js";
 import { ZigNotImplemented } from "./encode.js";
 import { zigBitfieldType } from "./bitfield.js";
 import { zigOptionalType } from "./optional.js";
+import { zigUnionType } from "./union.js";
 
 /** Map a BinSchema endianness to the Zig runtime enum literal. */
 export function zigEndianness(endianness: string | undefined, fallback: string): string {
@@ -138,9 +139,8 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
     case "bitfield":
       return zigBitfieldType(field);
     case "discriminated_union":
-      throw new ZigNotImplemented("discriminated_union fields (Phase 4)");
     case "choice":
-      throw new ZigNotImplemented("choice fields (Phase 4)");
+      return zigUnionType(field, schema);
   }
 
   // Type reference: resolve through alias chains.
@@ -158,9 +158,10 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
       // Enums are represented as their repr integer at the API boundary.
       return enumReprZigTypeFor(resolved);
     case "discriminated_union":
-      throw new ZigNotImplemented(`discriminated_union type '${field.type}' (Phase 4)`);
     case "choice":
-      throw new ZigNotImplemented(`choice type '${field.type}' (Phase 4)`);
+      // Named DU/choice types are resolved inline to an anonymous union at each
+      // field site (they have no standalone Zig representation).
+      return zigUnionType(resolved, schema);
     default:
       throw new ZigNotImplemented(`unresolved field type '${field.type}'`);
   }

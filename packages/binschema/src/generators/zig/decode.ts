@@ -15,6 +15,7 @@ import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { emitEnumDecode } from "./enum.js";
 import { emitBitfieldDecode } from "./bitfield.js";
 import { emitOptionalDecode } from "./optional.js";
+import { emitChoiceDecode, emitDuDecode } from "./union.js";
 
 /**
  * Emit statements to decode a single named field of `target` (e.g. "result")
@@ -60,8 +61,8 @@ export function emitDecodeValue(
       return [`${indent}${lhs} = try ${DEC}.${varlengthReadMethod(field)}();`];
     case "optional": return emitOptionalDecode(field, ctx, lhs, structVar, indent, emitDecodeValue);
     case "bitfield": return emitBitfieldDecode(field, lhs, indent);
-    case "discriminated_union": throw new ZigNotImplemented("discriminated_union fields");
-    case "choice": throw new ZigNotImplemented("choice fields");
+    case "discriminated_union": return emitDuDecode(field, ctx, lhs, structVar, indent);
+    case "choice": return emitChoiceDecode(field, ctx, lhs, indent);
   }
 
   const resolved = resolveAlias(ctx.schema, field.type);
@@ -78,9 +79,9 @@ export function emitDecodeValue(
     case "enum":
       return emitEnumDecode(resolved, lhs, field.endianness, ctx.endianness, indent);
     case "discriminated_union":
-      throw new ZigNotImplemented(`discriminated_union type '${field.type}' (Phase 4)`);
+      return emitDuDecode(resolved, ctx, lhs, structVar, indent);
     case "choice":
-      throw new ZigNotImplemented(`choice type '${field.type}' (Phase 4)`);
+      return emitChoiceDecode(resolved, ctx, lhs, indent);
     default:
       throw new ZigNotImplemented(`field type '${field.type}' (type reference)`);
   }

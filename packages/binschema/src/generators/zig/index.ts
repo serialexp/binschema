@@ -81,8 +81,10 @@ export function generateZig(
       lines.push(...generateStructCode(name, typeDef as any, schema, defaultEndianness, defaultBitOrder));
     } else if (isEnumType(typeDef as any)) {
       lines.push(...generateEnumCode(name, typeDef as any, defaultEndianness, defaultBitOrder));
-    } else if ((typeDef as any).type === "discriminated_union") {
-      throw new ZigNotImplemented(`discriminated_union type '${name}' (Phase 4)`);
+    } else if ((typeDef as any).type === "discriminated_union" || (typeDef as any).type === "choice") {
+      // Named DU/choice types have no standalone Zig representation — they are
+      // resolved inline (to an anonymous tagged union) at each referencing field
+      // site, with encode/decode inlined into the parent. Nothing to emit here.
     } else if (
       (typeDef as any).type === "string" ||
       (typeDef as any).type === "bytes" ||
@@ -115,7 +117,7 @@ function generateStructCode(
   const fields = typeDef.sequence || [];
   const bo = zigBitOrder(bitOrder, "msb_first");
 
-  const emit: EmitCtx = { schema, endianness, bitOrder, selfPath: "self" };
+  const emit: EmitCtx = { schema, endianness, bitOrder, selfPath: "self", fields };
   // When the schema uses any `../` parent reference, every struct pushes a
   // parent frame and records its fields' lengths/ranges so descendant computed
   // fields can resolve cross-struct references. Schemas with no such ref keep
@@ -161,7 +163,7 @@ function generateStructCode(
   // particular struct's body doesn't reference, so the generated Zig compiles
   // without "unused parameter" errors regardless of feature mix.
   lines.push(`    pub fn encodeInto(self: ${typeNameZ}, ${encodeParams()}) ${ERR}!void {`);
-  const { posTargets, crcTargets } = computedTargets(fields);
+  const { posTargets, crcTargets, lenTargets } = computedTargets(fields, schema);
   const encBody: string[] = [];
   const faIdx = fields.findIndex((f: any) => f.computed?.from_after_field);
   if (faIdx >= 0) {
@@ -169,8 +171,8 @@ function generateStructCode(
     // trailing content to a temp encoder, measure it, then write the varlength
     // length + the content. Keep this path simple — it can't currently combine
     // with parent frames or same-struct position/crc targets.
-    if (framesOn || posTargets.size > 0 || crcTargets.size > 0) {
-      throw new ZigNotImplemented("from_after_field combined with parent refs / position / crc");
+    if (framesOn || posTargets.size > 0 || crcTargets.size > 0 || lenTargets.size > 0) {
+      throw new ZigNotImplemented("from_after_field combined with parent refs / position / crc / measured length");
     }
     for (let i = 0; i < faIdx; i++) encBody.push(...generateFieldEncode(fields[i], emit));
     encBody.push(...emitFromAfterFieldEncode(fields[faIdx], fields.slice(faIdx + 1), emit));
@@ -183,7 +185,7 @@ function generateStructCode(
       encBody.push(...emitFrameLengthRegistration(fields, emit, "_frame", "        "));
     }
     for (const field of fields) {
-      const tracked = field.name && (posTargets.has(field.name) || crcTargets.has(field.name));
+      const tracked = field.name && (posTargets.has(field.name) || crcTargets.has(field.name) || lenTargets.has(field.name));
       if (tracked) {
         encBody.push(`        const ${fieldOffVar(field.name)} = ${ENC}.byteOffset();`);
       }
@@ -191,7 +193,7 @@ function generateStructCode(
         encBody.push(`        const ${frameStartVar(field.name)} = ${ENC}.byteOffset();`);
       }
       encBody.push(...generateFieldEncode(field, emit));
-      if (field.name && crcTargets.has(field.name)) {
+      if (field.name && (crcTargets.has(field.name) || lenTargets.has(field.name))) {
         encBody.push(`        const ${fieldEndVar(field.name)} = ${ENC}.byteOffset();`);
       }
       if (framesOn && field.name) {
@@ -204,7 +206,7 @@ function generateStructCode(
     }
     encBody.push(...emitComputedBackpatch(fields, emit, "        "));
   }
-  lines.push(...discardsFor(encBody, [["self", "self"], [CTX, CTX]]));
+  lines.push(...discardsFor(encBody, [["self", "self"], [ENC, ENC], [CTX, CTX]]));
   lines.push(...encBody);
   lines.push(`    }`);
   lines.push(``);
@@ -223,7 +225,10 @@ function generateStructCode(
     decBody.push(...generateFieldDecode(field, emit, "result"));
   }
   lines.push(...discardsFor(decBody, [[ALLOC, ALLOC], [DEC, DEC], [ROOT, ROOT]]));
-  lines.push(`        var result: ${typeNameZ} = undefined;`);
+  // An empty struct (no field decodes) never mutates `result`; Zig rejects an
+  // unmutated `var`, so declare it `const` in that case.
+  const resultDecl = decBody.length === 0 ? "const" : "var";
+  lines.push(`        ${resultDecl} result: ${typeNameZ} = undefined;`);
   lines.push(...decBody);
   lines.push(`        return result;`);
   lines.push(`    }`);
