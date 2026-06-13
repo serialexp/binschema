@@ -6,12 +6,25 @@ default: test
 
 # ========== Testing ==========
 
-# Run all tests (TypeScript and Go)
-test: test-ts test-go
+# Run all tests (TypeScript, generated-output tsc gate, and Go)
+test: test-ts test-ts-tsc test-go
 
 # Run TypeScript/Bun tests
 test-ts:
     bun test
+
+# Strict-tsc gate over generated TypeScript output (ratchet against
+# typecheck-baseline.json — fails on new failures or unexpected passes).
+# Pass `verbose` to print the error-code histogram.
+#   just test-ts-tsc
+#   just test-ts-tsc verbose
+test-ts-tsc verbose="":
+    cd packages/binschema && bun src/test-runner/typecheck-output.ts {{ if verbose == "verbose" { "--verbose" } else { "" } }}
+
+# Re-record the strict-tsc baseline (run after intentionally changing the set
+# of suites that pass/fail strict tsc).
+test-ts-tsc-update:
+    cd packages/binschema && bun src/test-runner/typecheck-output.ts --update
 
 # Run Go tests with batched compilation
 # Examples:

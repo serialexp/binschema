@@ -267,119 +267,17 @@ export function generateFieldSizeCalculation(
     }
 
     case "array": {
-      const arrayKind = fieldAny.kind;
-      const items = fieldAny.items;
+      code += generateArrayLikeSizeCalc(fieldAny, fieldAny.items, fieldName, indent, valuePrefix);
+      break;
+    }
 
-      code += `${indent}// ${fieldName}: array (kind: ${arrayKind})\n`;
-
-      // For byte_length_prefixed arrays, we need to account for the length prefix itself
-      if (arrayKind === "byte_length_prefixed") {
-        const lengthType = fieldAny.length_type;
-        const lengthEncoding = fieldAny.length_encoding;
-
-        // First, calculate size of array items and store in temp variable
-        // Use unique suffix to avoid collisions when same field appears in encode() and calculateSize()
-        const uniqueSuffix = `_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-        const itemsSizeVar = `${fieldName}_items_size${uniqueSuffix}`;
-        code += `${indent}let ${itemsSizeVar} = 0;\n`;
-
-        // Calculate item sizes
-        if (items) {
-          if (items.type === "uint8") {
-            code += `${indent}${itemsSizeVar} += ${valuePrefix}${fieldName}.length;\n`;
-          } else if (items.type === "choice") {
-            // Choice array: determine type and calculate size accordingly
-            const choices = (items as any).choices || [];
-            code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
-            for (let i = 0; i < choices.length; i++) {
-              const choice = choices[i];
-              const ifKeyword = i === 0 ? "if" : "} else if";
-              code += `${indent}  ${ifKeyword} (item.type === '${choice.type}') {\n`;
-              code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
-              code += `${indent}    ${itemsSizeVar} += itemEncoder.calculateSize(item as ${choice.type});\n`;
-            }
-            if (choices.length > 0) {
-              code += `${indent}  } else {\n`;
-              code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
-              code += `${indent}  }\n`;
-            }
-            code += `${indent}}\n`;
-          } else {
-            const itemTypeName = items.type;
-            code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
-            if (isBuiltInType(itemTypeName)) {
-              code += `${indent}  ${itemsSizeVar} += ${getBuiltInTypeSize(itemTypeName)};\n`;
-            } else {
-              code += `${indent}  const ${fieldName}_itemEncoder = new ${itemTypeName}Encoder();\n`;
-              code += `${indent}  ${itemsSizeVar} += ${fieldName}_itemEncoder.calculateSize(item);\n`;
-            }
-            code += `${indent}}\n`;
-          }
-        }
-
-        // Now add the size of the length prefix itself
-        if (lengthType === "uint8") {
-          code += `${indent}size += 1; // length prefix (uint8)\n`;
-        } else if (lengthType === "uint16") {
-          code += `${indent}size += 2; // length prefix (uint16)\n`;
-        } else if (lengthType === "uint32") {
-          code += `${indent}size += 4; // length prefix (uint32)\n`;
-        } else if (lengthType === "uint64") {
-          code += `${indent}size += 8; // length prefix (uint64)\n`;
-        } else if (lengthType === "varlength") {
-          const encoding = lengthEncoding || "der";
-          if (encoding === "der") {
-            code += `${indent}size += ${generateDERLengthSizeCalculation(itemsSizeVar)}; // length prefix (DER)\n`;
-          } else {
-            code += `${indent}throw new Error("Size calculation for ${encoding} varlength not yet implemented");\n`;
-          }
-        }
-
-        // Add the items size
-        code += `${indent}size += ${itemsSizeVar}; // array items\n`;
-      } else {
-        // For other array kinds, just calculate item sizes
-        if (items) {
-          if (items.type === "uint8") {
-            // Array of bytes - just the length
-            code += `${indent}size += ${valuePrefix}${fieldName}.length;\n`;
-          } else if (items.type === "choice") {
-            // Choice array: determine type and calculate size accordingly
-            const choices = (items as any).choices || [];
-            code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
-            for (let i = 0; i < choices.length; i++) {
-              const choice = choices[i];
-              const ifKeyword = i === 0 ? "if" : "} else if";
-              code += `${indent}  ${ifKeyword} (item.type === '${choice.type}') {\n`;
-              code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
-              code += `${indent}    size += itemEncoder.calculateSize(item as ${choice.type});\n`;
-            }
-            if (choices.length > 0) {
-              code += `${indent}  } else {\n`;
-              code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
-              code += `${indent}  }\n`;
-            }
-            code += `${indent}}\n`;
-          } else {
-            // Array of composite types - need to recursively calculate
-            const itemTypeName = items.type;
-            code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
-
-            // Check if this is a built-in type or custom type
-            if (isBuiltInType(itemTypeName)) {
-              code += `${indent}  size += ${getBuiltInTypeSize(itemTypeName)};\n`;
-            } else {
-              // Custom type - need to call its encoder's calculateSize
-              code += `${indent}  const ${fieldName}_itemEncoder = new ${itemTypeName}Encoder();\n`;
-              code += `${indent}  size += ${fieldName}_itemEncoder.calculateSize(item);\n`;
-            }
-
-            code += `${indent}}\n`;
-          }
-        } else {
-          code += `${indent}throw new Error("Array items not defined for ${fieldName}");\n`;
-        }
-      }
+    case "bytes": {
+      // `bytes` is sugar for array<uint8>. Reuse the array size logic so encode
+      // (which delegates bytes to the array encoder with implicit uint8 items —
+      // see generateEncodeFieldCore) and calculateSize stay in lockstep, instead
+      // of falling through to the composite-type `new <Type>Encoder()` default
+      // and emitting a non-existent `bytesEncoder`.
+      code += generateArrayLikeSizeCalc(fieldAny, { type: "uint8" }, fieldName, indent, valuePrefix);
       break;
     }
 
@@ -410,6 +308,18 @@ export function generateFieldSizeCalculation(
       break;
     }
 
+    case "padding": {
+      // Alignment padding writes zero bytes to reach an `align_to` boundary; it
+      // has no value field, so size is derived from the current position rather
+      // than from input. Mirrors generateEncodeFieldCore's padding case. Uses
+      // the accumulated `size` as the position — exact when the struct starts on
+      // an aligned boundary (the common case), which is all the relative size
+      // model can express.
+      const alignTo = fieldAny.align_to;
+      code += `${indent}size += (${alignTo} - (size % ${alignTo})) % ${alignTo}; // ${fieldName} (alignment padding)\n`;
+      break;
+    }
+
     default: {
       // Assume this is a custom composite type
       // Call its encoder's calculateSize method
@@ -429,6 +339,157 @@ export function generateFieldSizeCalculation(
   if (fieldAny.if) {
     indent = indent.substring(2);
     code += `${indent}}\n`;
+  }
+
+  return code;
+}
+
+/**
+ * Emit `size += <prefix bytes>` for an inline element-count length prefix of the
+ * given length_type. Shared by every array-like kind that writes one.
+ */
+function emitCountPrefixSize(
+  lengthType: string | undefined,
+  lengthEncoding: string | undefined,
+  countExpr: string,
+  indent: string
+): string {
+  switch (lengthType) {
+    case "uint8":
+      return `${indent}size += 1; // length prefix (uint8)\n`;
+    case "uint16":
+      return `${indent}size += 2; // length prefix (uint16)\n`;
+    case "uint32":
+      return `${indent}size += 4; // length prefix (uint32)\n`;
+    case "uint64":
+      return `${indent}size += 8; // length prefix (uint64)\n`;
+    case "varlength": {
+      const encoding = lengthEncoding || "der";
+      if (encoding === "der") {
+        return `${indent}size += ${generateDERLengthSizeCalculation(countExpr)}; // length prefix (DER)\n`;
+      }
+      return `${indent}throw new Error("Size calculation for ${encoding} varlength length prefix not yet implemented");\n`;
+    }
+    default:
+      return "";
+  }
+}
+
+/**
+ * Generate size-calculation code for an array-like field (`array` or its sugar
+ * `bytes`, which is array<uint8>). `items` is the element descriptor — explicit
+ * for `array`, `{ type: "uint8" }` for `bytes`.
+ *
+ * Kept as one routine so `array` and `bytes` compute identical sizes for the
+ * same wire format and cannot drift apart (the prior `bytes` fall-through into
+ * the composite default emitted a non-existent `<type>Encoder`).
+ */
+function generateArrayLikeSizeCalc(
+  fieldAny: any,
+  items: any,
+  fieldName: string,
+  indent: string,
+  valuePrefix: string
+): string {
+  const arrayKind = fieldAny.kind;
+  const label = fieldAny.type === "bytes" ? "bytes" : "array";
+  let code = `${indent}// ${fieldName}: ${label} (kind: ${arrayKind})\n`;
+
+  // byte_length_prefixed: the prefix stores the byte length of the items, so we
+  // tally items into a temp first (the DER prefix width depends on that tally).
+  if (arrayKind === "byte_length_prefixed") {
+    const lengthType = fieldAny.length_type;
+    const lengthEncoding = fieldAny.length_encoding;
+
+    // Unique suffix avoids collisions when the same field appears in encode() and calculateSize().
+    const uniqueSuffix = `_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+    const itemsSizeVar = `${fieldName}_items_size${uniqueSuffix}`;
+    code += `${indent}let ${itemsSizeVar} = 0;\n`;
+
+    if (items) {
+      if (items.type === "uint8") {
+        code += `${indent}${itemsSizeVar} += ${valuePrefix}${fieldName}.length;\n`;
+      } else if (items.type === "choice") {
+        const choices = (items as any).choices || [];
+        code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
+        for (let i = 0; i < choices.length; i++) {
+          const choice = choices[i];
+          const ifKeyword = i === 0 ? "if" : "} else if";
+          code += `${indent}  ${ifKeyword} (item.type === '${choice.type}') {\n`;
+          code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
+          code += `${indent}    ${itemsSizeVar} += itemEncoder.calculateSize(item as ${choice.type});\n`;
+        }
+        if (choices.length > 0) {
+          code += `${indent}  } else {\n`;
+          code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
+          code += `${indent}  }\n`;
+        }
+        code += `${indent}}\n`;
+      } else {
+        const itemTypeName = items.type;
+        code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
+        if (isBuiltInType(itemTypeName)) {
+          code += `${indent}  ${itemsSizeVar} += ${getBuiltInTypeSize(itemTypeName)};\n`;
+        } else {
+          code += `${indent}  const ${fieldName}_itemEncoder = new ${itemTypeName}Encoder();\n`;
+          code += `${indent}  ${itemsSizeVar} += ${fieldName}_itemEncoder.calculateSize(item);\n`;
+        }
+        code += `${indent}}\n`;
+      }
+    }
+
+    // The byte_length_prefixed prefix counts the byte length (itemsSizeVar).
+    code += emitCountPrefixSize(lengthType, lengthEncoding, itemsSizeVar, indent);
+    code += `${indent}size += ${itemsSizeVar}; // array items\n`;
+    return code;
+  }
+
+  // All other kinds: tally the items directly into `size`.
+  if (items) {
+    if (items.type === "uint8") {
+      code += `${indent}size += ${valuePrefix}${fieldName}.length;\n`;
+    } else if (items.type === "choice") {
+      const choices = (items as any).choices || [];
+      code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
+      for (let i = 0; i < choices.length; i++) {
+        const choice = choices[i];
+        const ifKeyword = i === 0 ? "if" : "} else if";
+        code += `${indent}  ${ifKeyword} (item.type === '${choice.type}') {\n`;
+        code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
+        code += `${indent}    size += itemEncoder.calculateSize(item as ${choice.type});\n`;
+      }
+      if (choices.length > 0) {
+        code += `${indent}  } else {\n`;
+        code += `${indent}    throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown choice type: \${(item as any).type}\`);\n`;
+        code += `${indent}  }\n`;
+      }
+      code += `${indent}}\n`;
+    } else {
+      const itemTypeName = items.type;
+      code += `${indent}for (const item of ${valuePrefix}${fieldName}) {\n`;
+      if (isBuiltInType(itemTypeName)) {
+        code += `${indent}  size += ${getBuiltInTypeSize(itemTypeName)};\n`;
+      } else {
+        code += `${indent}  const ${fieldName}_itemEncoder = new ${itemTypeName}Encoder();\n`;
+        code += `${indent}  size += ${fieldName}_itemEncoder.calculateSize(item);\n`;
+      }
+      code += `${indent}}\n`;
+    }
+  } else {
+    code += `${indent}throw new Error("Array items not defined for ${fieldName}");\n`;
+  }
+
+  // length_prefixed writes an inline element-count prefix that the encoder emits
+  // but the item tally above does not account for. (field_referenced/fixed read
+  // their length elsewhere; null/signature_terminated add terminators, not a
+  // count prefix — handled by their own encode paths, out of scope here.)
+  if (arrayKind === "length_prefixed") {
+    code += emitCountPrefixSize(
+      fieldAny.length_type,
+      fieldAny.length_encoding,
+      `${valuePrefix}${fieldName}.length`,
+      indent
+    );
   }
 
   return code;

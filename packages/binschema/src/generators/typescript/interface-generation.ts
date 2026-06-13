@@ -46,6 +46,13 @@ function generateInlineDiscriminatedUnionType(unionDef: { discriminator: any; va
 function isInputField(field: Field): boolean {
   const fieldAny = field as any;
 
+  // Exclude structural pseudo-fields that carry no value (e.g. alignment
+  // `padding`, which the encoder synthesizes as zero bytes and the decoder
+  // skips — it has no place in the Input/Output object).
+  if (isStructuralField(field)) {
+    return false;
+  }
+
   // Exclude computed fields - they are calculated during encoding
   if (fieldAny.computed) {
     return false;
@@ -63,8 +70,19 @@ function isInputField(field: Field): boolean {
  * Determines if a field should be included in the Output interface (from decoding)
  */
 function isOutputField(field: Field): boolean {
-  // Output includes ALL fields (const, computed, and regular)
-  return true;
+  // Output includes ALL fields (const, computed, and regular) EXCEPT structural
+  // pseudo-fields with no value (alignment padding): the decoder never writes
+  // them into the result object.
+  return !isStructuralField(field);
+}
+
+/**
+ * Structural pseudo-fields occupy wire space but carry no value in the decoded
+ * object (so they belong in neither the Input nor Output interface). Currently
+ * just alignment `padding`.
+ */
+function isStructuralField(field: Field): boolean {
+  return (field as any).type === "padding";
 }
 
 /**
