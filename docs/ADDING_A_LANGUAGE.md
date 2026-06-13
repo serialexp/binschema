@@ -249,16 +249,33 @@ transcoding apply; const/computed `[]const u8` members default to `""`),
 **varlength computed length_of/count_of** (`8210ec2`, the synchronous DER/LEB128
 length-prefix path — value from `self.<target>.len`, written with the varlength
 method; covered by a new standalone `computed/varlength-length-of` suite verified
-across all five languages). Still pending: compression/back-reference (DNS),
-`instances` (random access), kerberos SEQUENCE types (varlength
-measure-then-patch + `from_after_field` with parent refs), DU variants that
-aren't structs (DNS), `variant_terminated` + `terminal_variants` (union arrays),
-`field_id_delta` computed+conditional, parity sweep.
+across all five languages), **compressed wire-transform regions** (`73183ec`,
+store/deflate/gzip codecs in `zig/runtime/codecs.zig` wired to
+`std.compress.flate`; inner value encoded to a self-contained buffer, framed as
+`[uncompressed_size][compressed_length][bytes]` — a fresh top-level pass that
+composes with the outer two-pass without sharing context),
+**validation-suite accounting** (`b7fd8c6`, the 12 `schema_validation_error`
+suites are TS-validator negative tests the Zig generator correctly refuses; they
+are now classified out of the codegen denominator rather than counted as
+phantom skips), **`variant_terminated` arrays** (`92c6fa6`, read union items
+until a decoded item's active variant is in `terminal_variants`; the marker is
+the array's last element so encode just writes every item, decode
+appends-then-breaks via a switch over the active tag), **`field_id_delta`
+computed+conditional** (`204e8f6`, Thrift-style stateful field-id deltas: a
+struct-scoped `u64` accumulator holds the last emitted absolute id, advanced
+only inside the field's conditional guard so a dropped optional makes the next
+delta jump across it). Still pending (all large structural buckets):
+compression/back-reference for DNS label pointers (`back_reference` type + a
+runtime compression dictionary; gates DU variants that aren't structs, ~13
+suites), `instances` (random access — lazy position-based read getters + a
+seekable decode path; encode is decode-oriented in the harness, ~21 suites),
+kerberos SEQUENCE types (varlength measure-then-patch + `from_after_field` with
+parent refs, ~7 suites), and `optional_builtin_bit` (1 suite, a documented
+bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not replicate).
 
-**Latest harness numbers:** 314/366 suites generate, 749/749 cases pass, 0
-errored, 0 failed; runtime unit tests 26/26; TS reference 1192/1192 (3 new cases
-from the varlength-length-of suite; no existing bytes edited). Update on each
-landing.
+**Latest harness numbers:** 312/354 codegen suites generate (+12 validation-only,
+not codegen targets), 766/766 cases pass, 0 errored, 0 failed; runtime unit tests
+28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---
 

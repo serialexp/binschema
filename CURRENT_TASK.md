@@ -1,6 +1,41 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** nine slices landed —
+> **Latest (Phase 5, in progress):** thirteen slices landed. The four most recent —
+> **compressed wire-transform regions** (`73183ec`: store/deflate/gzip codecs in
+> `zig/runtime/codecs.zig` wired to `std.compress.flate`; inner value encoded to a
+> self-contained buffer, framed `[uncompressed_size][compressed_length][bytes]`;
+> a fresh top-level pass that composes with the outer two-pass without sharing
+> context), **validation-suite accounting** (`b7fd8c6`: the 12
+> `schema_validation_error` suites are TS-validator negative tests the Zig
+> generator correctly refuses — now classified out of the codegen denominator
+> instead of counted as phantom skips; resolved the
+> `error_choice_missing_const_value` skip), **`variant_terminated` arrays**
+> (`92c6fa6`: read union items until a decoded item's active variant is in
+> `terminal_variants`; the marker is the array's last element so encode writes
+> every item, decode appends-then-breaks via a switch over the active tag),
+> **`field_id_delta` computed+conditional** (`204e8f6`: Thrift-style stateful
+> field-id deltas — a struct-scoped `u64` accumulator holds the last emitted
+> absolute id, advanced only inside the field's conditional guard so a dropped
+> optional makes the next delta jump across it). Zig harness now **312/354 codegen
+> suites generate (+12 validation-only), 766/766 cases pass, 0 errored, 0 failed**;
+> runtime 28/28; TS reference **1192/1192** (no existing bytes edited).
+>
+> **Phase 5 still pending — all large structural buckets** (pick via
+> `ZIG_TEST_REPORT=skips`, run from project root): `instances` (random access —
+> lazy position-based read getters + a seekable decode path; encode is
+> decode-oriented in the harness, ~21 suites), DU variants that aren't structs +
+> `back_reference` for DNS label pointers (needs a runtime compression dictionary,
+> ~13 suites), kerberos SEQUENCE types (varlength measure-then-patch +
+> `from_after_field` with parent refs — the content-first/placeholder composition
+> gap, ~7), `optional_builtin_bit` (1 suite — a documented bit/byte-overlap
+> runtime quirk the byte-oriented Zig runtime does not replicate). The clean,
+> self-contained skip buckets are now exhausted; what remains each needs runtime
+> and/or struct-shape work. **Awaiting Bart's steer on which big bucket to take
+> next.**
+>
+> ---
+>
+> **Earlier Phase 5 slices (nine):**
 > **length_prefixed_items** (`a614b18`: outer count + per-item byte-length framing
 > via placeholder/patch), **conditional fields** (`3a82850`: `?T` + `if`-guarded
 > encode/decode; schema-aware condition translator that unwraps optional
@@ -23,17 +58,8 @@
 > the synchronous DER/LEB128 length-prefix path — value from `self.<target>.len`,
 > written with the varlength method; placeholder-needing kinds stay integer-only;
 > new standalone `computed/varlength-length-of` suite verified across all five
-> languages). Zig harness now **314/366 suites generate, 749/749 cases pass, 0
-> errored, 0 failed**; runtime 26/26; TS reference **1192/1192** (3 new cases from
-> the varlength-length-of suite; no existing bytes edited).
->
-> **Phase 5 still pending** (pick next via `ZIG_TEST_REPORT=skips`, run from
-> project root): `instances` (random access, ~21 suites), DU variants that aren't
-> structs (DNS, ~13), kerberos SEQUENCE types (varlength measure-then-patch +
-> `from_after_field` with parent refs, ~7), compression/back-reference (DNS, 4),
-> `variant_terminated` + `terminal_variants` (union arrays, 3), `field_id_delta`
-> (computed+conditional, 1), `optional_builtin_bit` (bit-presence, 1), full
-> parity sweep.
+> languages). (Harness numbers and the pending list are in the top block above —
+> this block is the historical record of the first nine slices.)
 >
 > Doc `docs/ADDING_A_LANGUAGE.md` has the live status appendix + a "Pitfalls &
 > lessons learned" appendix — keep both current as slices land.
