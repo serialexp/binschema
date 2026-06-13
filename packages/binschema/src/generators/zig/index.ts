@@ -150,7 +150,7 @@ function generateStructCode(
     // struct member (it's neither supplied on encode nor surfaced on decode).
     if (field.type === "padding") continue;
     const ftype = structFieldType(field, schema);
-    const def = fieldDefault(field);
+    const def = fieldDefault(field, schema);
     lines.push(`    ${zigFieldName(field.name)}: ${ftype}${def},`);
   }
   lines.push(``);
@@ -316,12 +316,15 @@ function structFieldType(field: any, schema: BinarySchema): string {
  * / are computed on encode), so they need a default so the Zig struct can be
  * built without them.
  */
-function fieldDefault(field: any): string {
+function fieldDefault(field: any, schema: BinarySchema): string {
   // Optional fields default to null so a struct can be built with them absent.
   if (field.type === "optional") return " = null";
   if (!field.computed && field.const === undefined) return "";
   if (field.type === "bool") return " = false";
   if (field.type === "varlength") return " = 0";
+  // A const/computed string or bytes field is stored as `[]const u8`; an empty
+  // string literal is a valid placeholder (always overwritten on decode).
+  if (zigDeclaredType(field, schema) === "[]const u8") return ` = ""`;
   const prim = zigPrimitiveType(field);
   if (prim === null) {
     throw new ZigNotImplemented(`default for computed/const non-primitive field '${field.name}'`);

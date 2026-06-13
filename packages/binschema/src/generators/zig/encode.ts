@@ -104,10 +104,36 @@ function emitPaddingEncode(field: any, indent: string): string[] {
  */
 function emitConstEncode(field: any, ctx: EmitCtx, indent: string): string[] {
   const prim = zigPrimitiveType(field);
-  if (prim === null) throw new ZigNotImplemented(`const non-primitive field '${field.name}'`);
-  const e = zigEndianness(field.endianness, ctx.endianness);
-  const lit = field.type === "bool" ? (field.const ? "true" : "false") : String(field.const);
-  return emitPrimitiveEncode(field, lit, e, indent);
+  if (prim !== null) {
+    const e = zigEndianness(field.endianness, ctx.endianness);
+    const lit = field.type === "bool" ? (field.const ? "true" : "false") : String(field.const);
+    return emitPrimitiveEncode(field, lit, e, indent);
+  }
+  // A const string field writes its fixed value on encode. Route the literal
+  // through the normal string-encode path so framing (fixed/length-prefixed/
+  // terminated) and transcoding (latin1/utf16) all apply uniformly — the
+  // in-memory representation is UTF-8, exactly what a Zig string literal is.
+  const resolved = field.type === "string" ? field : resolveAlias(ctx.schema, field.type);
+  if (typeof field.const === "string" && classifyTypeDef(resolved) === "string") {
+    return emitStringEncode(resolved, zigStringLiteral(field.const), ctx, indent);
+  }
+  throw new ZigNotImplemented(`const non-primitive field '${field.name}'`);
+}
+
+/** A double-quoted Zig string literal with byte-precise escaping. */
+function zigStringLiteral(s: string): string {
+  let out = '"';
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    if (ch === "\\") out += "\\\\";
+    else if (ch === '"') out += '\\"';
+    else if (c === 0x0a) out += "\\n";
+    else if (c === 0x0d) out += "\\r";
+    else if (c === 0x09) out += "\\t";
+    else if (c < 0x20 || c === 0x7f) out += `\\x${c.toString(16).padStart(2, "0")}`;
+    else out += ch;
+  }
+  return out + '"';
 }
 
 /**
