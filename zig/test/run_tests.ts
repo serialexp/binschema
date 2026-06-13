@@ -76,6 +76,9 @@ interface Suite {
   schema: any;
   test_type: string;
   test_cases: TestCase[];
+  /** The schema is intentionally invalid; this is a TS-validator test, not a
+   *  codegen target. The Zig generator is not expected to produce code for it. */
+  schemaValidationError?: boolean;
 }
 
 function bitsToBytes(bits: number[], bitOrder: string): number[] {
@@ -102,7 +105,13 @@ function loadSuite(path: string): Suite | null {
     }
   }
   if (!raw.test_type || !raw.schema) return null;
-  return { name, schema: raw.schema, test_type: raw.test_type, test_cases: cases };
+  return {
+    name,
+    schema: raw.schema,
+    test_type: raw.test_type,
+    test_cases: cases,
+    schemaValidationError: raw.schema_validation_error === true,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +360,7 @@ function byteArrayLiteral(bytes: number[]): string {
 
 interface SuiteResult {
   name: string;
-  status: "ok" | "codegen_skip" | "error";
+  status: "ok" | "codegen_skip" | "error" | "validation";
   reason?: string;
   cases: number;
   emittedCases: number;
@@ -380,6 +389,13 @@ function main() {
 
   let suiteIdx = 0;
   for (const suite of suites) {
+    // Suites whose schema is intentionally invalid are TS-validator tests, not
+    // codegen targets — the Zig generator legitimately may refuse them. Don't
+    // attempt generation or count them as a feature gap.
+    if (suite.schemaValidationError) {
+      results.push({ name: suite.name, status: "validation", cases: suite.test_cases.length, emittedCases: 0 });
+      continue;
+    }
     let code: string;
     try {
       code = generateZig(suite.schema, suite.test_type).code;
@@ -519,12 +535,16 @@ function report(results: SuiteResult[], output: string, exitCode: number) {
   const ok = results.filter((r) => r.status === "ok");
   const skipped = results.filter((r) => r.status === "codegen_skip");
   const errored = results.filter((r) => r.status === "error");
+  const validation = results.filter((r) => r.status === "validation");
+  // Validation-only suites are not codegen targets; exclude them from the
+  // generated/skip denominator so the numbers reflect real feature coverage.
+  const codegenTotal = results.length - validation.length;
   const emittedCases = ok.reduce((n, r) => n + r.emittedCases, 0);
   const { passed, failed, failNames, compiled } = parseZigOutput(output);
 
   if (REPORT === "json") {
     console.log(JSON.stringify({
-      suites: { total: results.length, ok: ok.length, codegen_skip: skipped.length, error: errored.length },
+      suites: { total: results.length, codegenTotal, ok: ok.length, codegen_skip: skipped.length, error: errored.length, validation: validation.length },
       cases: { emitted: emittedCases, passed, failed },
       compiled,
       exitCode,
@@ -533,7 +553,8 @@ function report(results: SuiteResult[], output: string, exitCode: number) {
     return;
   }
 
-  console.log(`\nZig harness: ${results.length} suites — ${ok.length} generated, ${skipped.length} codegen-skipped, ${errored.length} errored`);
+  const validationNote = validation.length > 0 ? ` (+${validation.length} validation-only, not codegen targets)` : "";
+  console.log(`\nZig harness: ${codegenTotal} codegen suites — ${ok.length} generated, ${skipped.length} codegen-skipped, ${errored.length} errored${validationNote}`);
   console.log(`Test cases: ${emittedCases} emitted, ${passed} passed, ${failed} failed (zig exit ${exitCode})`);
 
   if (REPORT === "coverage") {
