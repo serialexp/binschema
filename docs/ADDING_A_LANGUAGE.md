@@ -230,12 +230,16 @@ the full budget — RIFF), and **measured `length_of`** of a struct/union target
 new pitfalls below for the three traps this phase surfaced (distinct anonymous
 unions, occurrence-at-encode-time, occurrence-in-own-array).
 
-**Phase 5 — PENDING.** Remaining varlength (signed/zigzag/sleb128),
-compression/back-reference (DNS), conditional fields, utf16/latin1,
-array transforms (delta), alignment padding, `instances` (random access),
-length_prefixed_items, kerberos non-integer computed fields, parity sweep.
+**Phase 5 — IN PROGRESS.** Landed so far: **length_prefixed_items** (`a614b18`,
+outer count + per-item byte-length framing via placeholder/patch),
+**conditional fields** (`3a82850`, `?T` + `if`-guarded encode/decode, schema-aware
+condition translator that unwraps optional intermediates), **signed varlength**
+zigzag/SLEB128 (`deaed0c`, stored i64). Still pending: compression/back-reference
+(DNS), utf16/latin1, array transforms (delta), alignment padding, `instances`
+(random access), kerberos non-integer computed fields, DU variants that aren't
+structs (DNS), `field_id_delta` computed+conditional, parity sweep.
 
-**Latest harness numbers:** 255/365 suites generate, 530/530 cases pass, 0
+**Latest harness numbers:** 279/365 suites generate, 670/670 cases pass, 0
 errored, 0 failed; runtime unit tests 21/21; TS reference 1189/1189 unchanged.
 Update on each landing.
 
@@ -337,3 +341,18 @@ Update on each landing.
 11. **The test-export step writes JSON but does not prune orphans.** Delete a
     suite and its stale `.generated/tests-json/**/<name>.json` lingers and keeps
     "failing" as a ghost — remove it by hand. (Also noted in the harness section.)
+
+12. **"Generated" is not "tested" — watch `constructSkips`.** A suite can
+    generate code cleanly *and* contribute zero executed cases if the harness
+    can't build the test *value* for the field shape. The batched harness counts
+    these as `constructSkips` (visible under `<LANG>_TEST_REPORT=coverage` as
+    "N case(s) not constructible"), and the suite still shows up green-ish in the
+    suite count. Concrete bite: Zig varlength fields generated encode/decode from
+    Phase 3c but the harness had no varlength *value* constructor, so every
+    varlength suite emitted 0 cases — the codepath compiled (Zig only
+    instantiates referenced functions, so even a latent `@intCast` bug stayed
+    hidden) but was never actually exercised until `deaed0c` added value
+    construction. Lesson: when you add a field *type* to the generator, add its
+    *value constructor* to the harness in the same change, and check the coverage
+    report shows the cases emitting — a rising suite count with a flat case count
+    is the tell.

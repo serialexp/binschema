@@ -1,9 +1,85 @@
-# Zig Generator — Phase 3 (implementable bulk) complete
+# Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest:** Phase 3 a/b/c + computed_count landed (commits `2ab6ff7`, `fe19083`,
-> `26b040c`, + computed_count). **Mandated trio passes** (from_after_field,
-> position_of-to-a-later-field, `../` parent ref). Zig harness now **174/363
-> suites generate, 403/403 cases pass, 0 errored**; runtime unit tests 15/15.
+> **Latest (Phase 5, in progress):** three slices landed —
+> **length_prefixed_items** (`a614b18`: outer count + per-item byte-length framing
+> via placeholder/patch), **conditional fields** (`3a82850`: `?T` + `if`-guarded
+> encode/decode; schema-aware condition translator that unwraps optional
+> intermediates and AND-guards `!= null`), **signed varlength** zigzag/SLEB128
+> (`deaed0c`: stored i64; also closed a harness gap where varlength fields were
+> generated-but-untested — no value constructor meant 0 emitted cases). Zig
+> harness now **279/365 suites generate, 670/670 cases pass, 0 errored, 0 failed**;
+> runtime 21/21; TS reference unchanged at 1189/1189.
+>
+> **Phase 5 still pending** (pick next via `ZIG_TEST_REPORT=skips`, run from
+> project root): `instances` (random access, ~21 suites), DU variants that aren't
+> structs (DNS, ~13), `unresolved field type` incl. alignment padding (~12),
+> utf16/latin1 strings (~10), kerberos non-integer computed (~7), array transform
+> delta (~3), const-non-primitive defaults (~3), `field_id_delta`
+> (computed+conditional), compression/back-reference, full parity sweep.
+>
+> Doc `docs/ADDING_A_LANGUAGE.md` has the live status appendix + a "Pitfalls &
+> lessons learned" appendix (added this session) — keep both current as slices land.
+
+> **Phase 4 follow-on (#24, DONE):** named union types + first/last over
+> polymorphic arrays (`67e6a79`), **sum_of_type_sizes + sum_of_sizes** (`44a7aa1`),
+> and **corresponding<T> with per-element occurrence capture** (`381f7b3`) all
+> landed. Zig harness was **255/365 suites generate, 530/530 cases pass, 0 errored,
+> 0 failed**; runtime unit tests 21/21; TS reference unchanged at 1189/1189.
+>
+> ### What the #24 follow-on delivered (each its own commit)
+> - **named union types + first/last selectors over polymorphic (choice/DU)
+>   arrays** (`67e6a79`): anonymous `union(enum){…}` literals at different sites
+>   are *distinct* Zig types, so choice/DU now emit one shared named union
+>   (`collectUnionTypes`); array recording captures each element's actual variant
+>   type via a runtime tag switch (`unionTypeSwitchExpr`) so `first<T>`/`last<T>`
+>   filter correctly.
+> - **sum_of_type_sizes + sum_of_sizes** (`44a7aa1`): `PositionEntry` gains an
+>   `end` offset; `selector_sum` patch sums matching elements' `end-offset`;
+>   `parent_sum` patch sums an explicit set of `../field` byte ranges.
+> - **corresponding<T>** (`381f7b3`): occurrence index captured at ENCODE time onto
+>   the patch (`occurrence` field) instead of reading aggregate state. New
+>   `current_arrays` stack + `selfOccurrence` count the referencer within its OWN
+>   array (same-array=ZIP, cross-array=sibling). Closed the 14-suite skip.
+>
+> **Earlier (Phase 4):** enum/alias (`a37640a`), bitfield (`be0b893`), optional
+> (`ede6faf`), and **discriminated_union + choice + byte_budget + measured
+> length_of** (`c3d4614`).
+>
+> ### What Phase 4 delivered (each its own commit)
+> - **enum / alias** (`enum.ts`): enums are their repr integer (u8/u16/u32) at the
+>   API; decode validates the variant set (`else => error.InvalidValue`).
+> - **bitfield** (`bitfield.ts`): anonymous `struct { sub: uN, ... }`; encode via
+>   ordered `writeBits`, decode assigns sub-fields in statement order.
+> - **optional** (`optional.ts`): `?T` with a uint8 presence byte. Bit-presence
+>   optionals are a clean skip (reference runtime has a bit/byte-overlap quirk;
+>   also a known Rust gap) — only `optional_builtin_bit` skips for this reason.
+> - **choice / discriminated_union** (`union.ts`): anonymous
+>   `union(enum) { Variant: VariantStruct, ... }`. choice peeks each variant's
+>   first const field (flat `{type,...}` value); DU uses explicit `{field}` /
+>   `{peek}` discriminator (nested `{type,value}`), with a `when`-less variant as
+>   the catch-all `else`. **byte_budget** decodes the active variant from a
+>   bounded sub-slice then advances the parent by the full budget (RIFF). DU/choice
+>   as a *direct field* relies on anonymous-union literal coercion; named DU/choice
+>   types emit nothing standalone (resolved inline at each field site).
+> - **measured `length_of`** (computed.ts): `length_of` of a struct/union target
+>   now reserves a u32 placeholder and back-patches it with the target's encoded
+>   byte span (`_field_end_* - _field_off_*`) instead of the `.len` fast path
+>   (unions have no `.len`). New `lenTargets` set in `computedTargets`.
+>
+> ### Remaining (Phase 5 #22)
+> - **#24 Phase-4 follow-on: DONE** (see Latest above). Note: `length_of arr[sel<T>]`
+>   *without* a sub-field (whole-element byte size) still throws a clean skip —
+>   `sum_of_type_sizes` covers the aggregate case; the single-element variant has
+>   no corpus suite yet.
+> - **#22 Phase 5:** length_prefixed_items array kind, signed varlength
+>   (leb128_signed/zigzag), array transforms (delta), back_reference/compression
+>   (DNS), conditional fields, utf16/latin1 strings, alignment padding,
+>   instances (random access), kerberos non-integer computed fields.
+
+> **Earlier (Phase 3):** Phase 3 a/b/c + computed_count landed (commits `2ab6ff7`,
+> `fe19083`, `26b040c`, + computed_count). **Mandated trio passes**
+> (from_after_field, position_of-to-a-later-field, `../` parent ref). Zig harness
+> was **174/363 suites generate, 403/403 cases pass, 0 errored**.
 >
 > **Key finding — selectors are gated on Phase 4.** Every corpus suite using a
 > `first<T>`/`last<T>`/`corresponding<T>` selector also uses
