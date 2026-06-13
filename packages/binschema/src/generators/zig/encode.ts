@@ -276,6 +276,13 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
       // No length prefix on the wire — count is fixed / external / implicit /
       // recomputed on decode from an expression.
       break;
+    case "signature_terminated":
+    case "null_terminated":
+    case "byte_length_prefixed":
+    case "packed_count":
+      // Framed/terminated kinds: any wire framing is emitted by the dedicated
+      // branch below (after the item encoder is built), not an up-front prefix.
+      break;
     case "length_prefixed":
       lines.push(...emitLengthPrefixEncode(field.length_type || "uint8", `${value}.len`, ctx, indent));
       break;
@@ -306,6 +313,55 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
   }
 
   const itemEncode = emitEncodeValue(itemField, itemVar, ctx, indent + "    ");
+
+  // null_terminated: write every item, then a terminator byte. (`terminal_variants`
+  // — where the chain ends implicitly on a terminal union arm, e.g. DNS label
+  // pointers — needs union arrays and is handled with that bucket.)
+  if (kind === "null_terminated") {
+    if (field.terminal_variants?.length) {
+      throw new ZigNotImplemented("null_terminated array with terminal_variants");
+    }
+    const term = field.terminator !== undefined ? field.terminator : 0;
+    lines.push(`${indent}for (${value}) |${itemVar}| {`);
+    lines.push(...itemEncode);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}try ${ENC}.writeUint8(${term});`);
+    return lines;
+  }
+
+  // byte_length_prefixed: a length prefix counting the encoded BYTES of the
+  // elements (not the element count). Reserve the prefix, encode the items into
+  // the same buffer, then back-patch the byte span — the two-pass primitive.
+  if (kind === "byte_length_prefixed") {
+    const suffix = PLACEHOLDER_SUFFIX[field.length_type || "uint8"];
+    if (!suffix) throw new ZigNotImplemented(`length prefix type '${field.length_type}'`);
+    const e = zigEndianness(undefined, ctx.endianness);
+    const ph = uniqueVar("_bph");
+    const start = uniqueVar("_bstart");
+    lines.push(`${indent}const ${ph} = try ${ENC}.placeholder${suffix}();`);
+    lines.push(`${indent}const ${start} = ${ENC}.byteOffset();`);
+    lines.push(`${indent}for (${value}) |${itemVar}| {`);
+    lines.push(...itemEncode);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${ENC}.patch(${ph}, @intCast(${ENC}.byteOffset() - ${start}), ${e});`);
+    return lines;
+  }
+
+  // packed_count: Thrift packed-collection header — (count<<4)|element_type_tag,
+  // with a 0xF nibble escape + unsigned LEB128 count when count >= 15.
+  if (kind === "packed_count") {
+    const tag = (field.element_type_tag ?? 0) & 0xF;
+    lines.push(`${indent}if (${value}.len < 15) {`);
+    lines.push(`${indent}    try ${ENC}.writeUint8(@intCast((${value}.len << 4) | ${tag}));`);
+    lines.push(`${indent}} else {`);
+    lines.push(`${indent}    try ${ENC}.writeUint8(0xF0 | ${tag});`);
+    lines.push(`${indent}    try ${ENC}.writeVarlengthLeb128(@intCast(${value}.len));`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}for (${value}) |${itemVar}| {`);
+    lines.push(...itemEncode);
+    lines.push(`${indent}}`);
+    return lines;
+  }
 
   // If a computed field selects into this array (first/last/corresponding), the
   // parent records each element's absolute start offset + type as it encodes,

@@ -270,6 +270,90 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
 
+  // null_terminated: read items until a terminator byte is peeked (and consumed).
+  if (kind === "null_terminated") {
+    if (field.terminal_variants?.length) {
+      throw new ZigNotImplemented("null_terminated array with terminal_variants");
+    }
+    const term = field.terminator !== undefined ? field.terminator : 0;
+    lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
+    lines.push(`${indent}while (true) {`);
+    lines.push(`${indent}    if (!${DEC}.hasMore()) break;`);
+    lines.push(`${indent}    if ((try ${DEC}.peekUint8()) == ${term}) {`);
+    lines.push(`${indent}        _ = try ${DEC}.readUint8();`);
+    lines.push(`${indent}        break;`);
+    lines.push(`${indent}    }`);
+    lines.push(`${indent}    var ${item}: ${itemType} = undefined;`);
+    lines.push(...emitDecodeValue(itemField, ctx, item, structVar, indent + "    "));
+    lines.push(`${indent}    try ${list}.append(${ALLOC}, ${item});`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = try ${list}.toOwnedSlice(${ALLOC});`);
+    return lines;
+  }
+
+  // signature_terminated: peek a typed sentinel at the current position; stop when
+  // it matches. The sentinel itself is consumed by a following sibling field, so
+  // we leave it in the stream.
+  if (kind === "signature_terminated") {
+    const tv = field.terminator_value;
+    const tt = field.terminator_type;
+    if (tv === undefined || tt === undefined) {
+      throw new ZigNotImplemented("signature_terminated without terminator_value/type");
+    }
+    const e = zigEndianness(field.terminator_endianness, ctx.endianness);
+    const peek =
+      tt === "uint8" ? `${DEC}.peekUint8()` :
+      tt === "uint16" ? `${DEC}.peekUint16(${e})` :
+      tt === "uint32" ? `${DEC}.peekUint32(${e})` :
+      null;
+    if (peek === null) throw new ZigNotImplemented(`signature terminator type '${tt}'`);
+    lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
+    lines.push(`${indent}while (true) {`);
+    lines.push(`${indent}    if (!${DEC}.hasMore()) break;`);
+    lines.push(`${indent}    if ((try ${peek}) == ${tv}) break;`);
+    lines.push(`${indent}    var ${item}: ${itemType} = undefined;`);
+    lines.push(...emitDecodeValue(itemField, ctx, item, structVar, indent + "    "));
+    lines.push(`${indent}    try ${list}.append(${ALLOC}, ${item});`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = try ${list}.toOwnedSlice(${ALLOC});`);
+    return lines;
+  }
+
+  // byte_length_prefixed: a byte-count prefix bounds the elements. Read items
+  // until the decoder reaches start+len.
+  if (kind === "byte_length_prefixed") {
+    const lenVar = uniqueVar("_blen");
+    const endVar = uniqueVar("_bend");
+    lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
+    lines.push(`${indent}const ${endVar} = ${DEC}.position() + @as(usize, ${lenVar});`);
+    lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
+    lines.push(`${indent}while (${DEC}.position() < ${endVar}) {`);
+    lines.push(`${indent}    var ${item}: ${itemType} = undefined;`);
+    lines.push(...emitDecodeValue(itemField, ctx, item, structVar, indent + "    "));
+    lines.push(`${indent}    try ${list}.append(${ALLOC}, ${item});`);
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = try ${list}.toOwnedSlice(${ALLOC});`);
+    return lines;
+  }
+
+  // packed_count: Thrift header — high nibble is the count (low nibble the element
+  // type tag, ignored here); a 0xF high nibble escapes to a LEB128 count.
+  if (kind === "packed_count") {
+    const hdr = uniqueVar("_phdr");
+    const cnt = uniqueVar("_pcnt");
+    const buf = uniqueVar("_buf");
+    const i = uniqueVar("_i");
+    lines.push(`${indent}const ${hdr} = try ${DEC}.readUint8();`);
+    lines.push(`${indent}var ${cnt}: usize = (@as(usize, ${hdr}) >> 4) & 0x0F;`);
+    lines.push(`${indent}if (${cnt} == 0x0F) ${cnt} = @intCast(try ${DEC}.readVarlengthLeb128());`);
+    lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, ${cnt});`);
+    lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
+    lines.push(...emitDecodeValue(itemField, ctx, `${buf}[${i}]`, structVar, indent + "    "));
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = ${buf};`);
+    return lines;
+  }
+
   // Known count: read N, allocate, fill.
   let countExpr: string;
   if (kind === "fixed" && field.length !== undefined) {
