@@ -234,13 +234,20 @@ unions, occurrence-at-encode-time, occurrence-in-own-array).
 outer count + per-item byte-length framing via placeholder/patch),
 **conditional fields** (`3a82850`, `?T` + `if`-guarded encode/decode, schema-aware
 condition translator that unwraps optional intermediates), **signed varlength**
-zigzag/SLEB128 (`deaed0c`, stored i64). Still pending: compression/back-reference
-(DNS), utf16/latin1, array transforms (delta), alignment padding, `instances`
-(random access), kerberos non-integer computed fields, DU variants that aren't
-structs (DNS), `field_id_delta` computed+conditional, parity sweep.
+zigzag/SLEB128 (`deaed0c`, stored i64), **array transform `delta`** (`e07f023`,
+loop-local accumulator; orthogonal to the item's wire encoding), **terminated &
+framed array kinds** (`6271e45`: null_terminated, signature_terminated,
+byte_length_prefixed via placeholder/patch, packed_count Thrift header),
+**latin1 & utf16 string encodings** (`9532624`, new `zig/runtime/strenc.zig`
+transcoding module: latin1 1:1 byte mapping, utf16 code units + endianness +
+surrogate pairs). Still pending: compression/back-reference (DNS), alignment
+padding (`unresolved field type`), `instances` (random access), kerberos
+non-integer computed fields, DU variants that aren't structs (DNS),
+`variant_terminated` + `terminal_variants` (union arrays), `field_id_delta`
+computed+conditional, string_const defaults, parity sweep.
 
-**Latest harness numbers:** 279/365 suites generate, 670/670 cases pass, 0
-errored, 0 failed; runtime unit tests 21/21; TS reference 1189/1189 unchanged.
+**Latest harness numbers:** 303/365 suites generate, 733/733 cases pass, 0
+errored, 0 failed; runtime unit tests 26/26; TS reference 1189/1189 unchanged.
 Update on each landing.
 
 ---

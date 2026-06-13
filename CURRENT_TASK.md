@@ -1,24 +1,32 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** three slices landed —
+> **Latest (Phase 5, in progress):** six slices landed —
 > **length_prefixed_items** (`a614b18`: outer count + per-item byte-length framing
 > via placeholder/patch), **conditional fields** (`3a82850`: `?T` + `if`-guarded
 > encode/decode; schema-aware condition translator that unwraps optional
 > intermediates and AND-guards `!= null`), **signed varlength** zigzag/SLEB128
 > (`deaed0c`: stored i64; also closed a harness gap where varlength fields were
-> generated-but-untested — no value constructor meant 0 emitted cases). Zig
-> harness now **279/365 suites generate, 670/670 cases pass, 0 errored, 0 failed**;
-> runtime 21/21; TS reference unchanged at 1189/1189.
+> generated-but-untested — no value constructor meant 0 emitted cases),
+> **array transform `delta`** (`e07f023`: loop-local accumulator, orthogonal to
+> the item's wire encoding), **terminated & framed array kinds** (`6271e45`:
+> null_terminated, signature_terminated peek-sentinel, byte_length_prefixed via
+> placeholder/patch, packed_count Thrift header), **latin1 & utf16 string
+> encodings** (`9532624`: new `zig/runtime/strenc.zig` transcoding module —
+> latin1 1:1 bytes, utf16 code units + endianness + surrogate pairs; in-memory is
+> UTF-8 `[]const u8`, framing measures BYTES). Zig harness now **303/365 suites
+> generate, 733/733 cases pass, 0 errored, 0 failed**; runtime 26/26; TS reference
+> unchanged at 1189/1189.
 >
 > **Phase 5 still pending** (pick next via `ZIG_TEST_REPORT=skips`, run from
 > project root): `instances` (random access, ~21 suites), DU variants that aren't
 > structs (DNS, ~13), `unresolved field type` incl. alignment padding (~12),
-> utf16/latin1 strings (~10), kerberos non-integer computed (~7), array transform
-> delta (~3), const-non-primitive defaults (~3), `field_id_delta`
-> (computed+conditional), compression/back-reference, full parity sweep.
+> kerberos non-integer computed (~7), const-non-primitive defaults / string_const
+> (~3), `variant_terminated` + `terminal_variants` (union arrays),
+> `field_id_delta` (computed+conditional), compression/back-reference, full
+> parity sweep.
 >
 > Doc `docs/ADDING_A_LANGUAGE.md` has the live status appendix + a "Pitfalls &
-> lessons learned" appendix (added this session) — keep both current as slices land.
+> lessons learned" appendix — keep both current as slices land.
 
 > **Phase 4 follow-on (#24, DONE):** named union types + first/last over
 > polymorphic arrays (`67e6a79`), **sum_of_type_sizes + sum_of_sizes** (`44a7aa1`),
