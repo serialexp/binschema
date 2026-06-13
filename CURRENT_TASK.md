@@ -1,6 +1,18 @@
 # Zig Generator — Phase 5 IN PROGRESS
 
-> **Latest (Phase 5, in progress):** seventeen slices landed. Most recent —
+> **Latest (Phase 5, in progress):** eighteen slices landed. Most recent —
+> **bare ancestor-scope field refs** (closed `dns_protocol_query`/`_response`).
+> A non-local `length_field`/`count_field` that names a field of the entry (root)
+> type — DNS `DnsQuery.questions` is `length_field: "qdcount"`, where `qdcount`
+> lives in the outer `DnsFrame` header — now resolves on decode via the threaded
+> `root` pointer (the same mechanism `_root.` uses). `computed.ts`
+> `schemaHasAncestorFieldRefs` turns root threading on for such schemas;
+> `EmitCtx.rootFieldNames` carries the entry type's field set; `decode.ts`
+> `siblingRef` casts `root` to the entry type when a bare ref isn't local but is a
+> root field (else still throws the clean cross-struct skip). Harness **352/354 ·
+> 822/822**, 0 errored/0 failed, TS 1192. Only 2 skips remain: `pcf_full`
+> (unresolved field type) and `optional_builtin_bit` (bit/byte-overlap quirk).
+> Before that —
 > **Kerberos ASN.1/DER** (all 7 suites). One recursive **content-first** encoder
 > (`index.ts` `emitContentFirstBody` + `structNeedsContentFirst`) now handles
 > every varlength length prefix whose value is the byte size of a region not yet

@@ -54,6 +54,10 @@ export interface EmitCtx {
    *  reference resolves against this type by casting the threaded `root` pointer.
    *  Only set when the schema actually uses `_root` (decode-side). */
   rootTypeName?: string;
+  /** Zig-mangled field names of the entry (root) type's sequence. A bare
+   *  length/count reference that isn't a local field but IS one of these resolves
+   *  against an ancestor via the threaded `root` pointer (DNS `qdcount`). */
+  rootFieldNames?: Set<string>;
 }
 
 /**

@@ -241,11 +241,11 @@ function emitStringDecode(field: any, ctx: EmitCtx, lhs: string, structVar: stri
     return lines;
   }
   if (kind === "field_referenced" && field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields, ctx.rootFieldNames)}));`);
     return lines;
   }
   if (field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields, ctx.rootFieldNames)}));`);
     return lines;
   }
   // Greedy: consume the rest of the buffer.
@@ -331,7 +331,7 @@ function emitTranscodedStringDecode(
 
   if (field.length_field) {
     const raw = uniqueVar("_raw");
-    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
+    lines.push(`${indent}const ${raw} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields, ctx.rootFieldNames)}));`);
     lines.push(transcode(raw));
     return lines;
   }
@@ -364,7 +364,7 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
   if (kind === "field_referenced" && field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields, ctx.rootFieldNames)}));`);
     return lines;
   }
   if (field.length !== undefined) {
@@ -372,7 +372,7 @@ function emitBytesDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     return lines;
   }
   if (field.length_field) {
-    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields)}));`);
+    lines.push(`${indent}${lhs} = try ${DEC}.readBytesSlice(@intCast(${siblingRef(field.length_field, structVar, ctx.rootTypeName, ctx.fields, ctx.rootFieldNames)}));`);
     return lines;
   }
   const rem = uniqueVar("_rem");
@@ -557,7 +557,7 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
     countExpr = `@as(usize, ${lenVar})`;
   } else if (kind === "field_referenced" && (field.length_field || field.count_field)) {
-    countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar, ctx.rootTypeName, ctx.fields)}))`;
+    countExpr = `@as(usize, @intCast(${siblingRef(field.length_field || field.count_field, structVar, ctx.rootTypeName, ctx.fields, ctx.rootFieldNames)}))`;
   } else if (kind === "computed_count" && field.count_expr) {
     countExpr = translateCountExpr(field.count_expr, structVar);
   } else {
@@ -648,7 +648,13 @@ function translateCountExpr(expr: string, structVar: string): string {
   return `@as(usize, ${translated})`;
 }
 
-function siblingRef(fieldRef: string, structVar: string, rootTypeName?: string, localFields?: any[]): string {
+function siblingRef(
+  fieldRef: string,
+  structVar: string,
+  rootTypeName?: string,
+  localFields?: any[],
+  rootFieldNames?: Set<string>,
+): string {
   if (fieldRef.startsWith("_root")) {
     // `_root.a.b` → read field `a.b` on the decoded entry struct. The threaded
     // `root` pointer is `?*const anyopaque`; cast it back to the entry type. The
@@ -676,6 +682,12 @@ function siblingRef(fieldRef: string, structVar: string, rootTypeName?: string, 
       localFields.filter((f: any) => f && f.name).map((f: any) => zigFieldName(f.name)),
     );
     if (!have.has(segs[0])) {
+      // Not a local field: an ancestor-scope reference. When it names a field of
+      // the entry (root) type, resolve it through the threaded `root` pointer —
+      // the same mechanism `_root.a.b` uses (DNS `qdcount` lives in the header).
+      if (rootTypeName && rootFieldNames?.has(segs[0])) {
+        return `@as(*const ${rootTypeName}, @ptrCast(@alignCast(${ROOT}.?))).${segs.join(".")}`;
+      }
       throw new ZigNotImplemented(`cross-struct field reference '${fieldRef}' (ancestor scope)`);
     }
   }

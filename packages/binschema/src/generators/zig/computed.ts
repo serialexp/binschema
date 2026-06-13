@@ -347,6 +347,40 @@ export function schemaUsesRootDecode(schema: any): boolean {
 }
 
 /**
+ * Does any struct field reference a sibling-length/count field by a *bare* name
+ * that is NOT a field of its own struct? Such a reference resolves against an
+ * ancestor scope — e.g. a DNS payload struct (`DnsQuery`) whose `questions`
+ * array is `length_field: "qdcount"`, where `qdcount` lives in the outer header
+ * (`DnsFrame`). When the ancestor is the schema's entry type, the already-present
+ * `root` decode pointer resolves it (see `siblingRef`), so we turn on the same
+ * root threading that `_root.` uses. `_root.`/`../`-prefixed refs are handled
+ * elsewhere and ignored here.
+ */
+export function schemaHasAncestorFieldRefs(schema: any): boolean {
+  const bareOuter = (ref: any, localNames: Set<string>): boolean => {
+    if (typeof ref !== "string" || !ref) return false;
+    if (ref.startsWith("_root") || ref.startsWith("../")) return false;
+    const head = zigFieldName(ref.split(".")[0]);
+    return !localNames.has(head);
+  };
+  for (const typeDef of Object.values(schema.types || {})) {
+    const seq = (typeDef as any)?.sequence;
+    if (!Array.isArray(seq)) continue;
+    const localNames = new Set<string>(
+      seq.filter((f: any) => f && f.name).map((f: any) => zigFieldName(f.name)),
+    );
+    for (const f of seq) {
+      if (bareOuter(f?.length_field, localNames)) return true;
+      if (bareOuter(f?.count_field, localNames)) return true;
+      if (f?.items && (bareOuter(f.items.length_field, localNames) || bareOuter(f.items.count_field, localNames))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * The `length_of` value a parent should register for a field so a child's
  * `length_of ../field` resolves synchronously: array/string/bytes -> `.len`
  * (element/byte count), integer scalar -> the value itself (matching the

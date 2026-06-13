@@ -298,15 +298,19 @@ encoder, measuring it, writing the varlength prefix, then splicing the bytes
 bare type-reference aliases (`pub const Realm = KerberosString;` so a struct
 alias resolves as a type and a method receiver), and the `offset` modifier on
 `length_of`/`count_of` (e.g. an ASN.1 BIT STRING whose DER length covers a
-leading unused-bits byte). Still pending: `../` parent-stack decode references
-and bare ancestor-scope field refs (a different mechanism from `_root.` — walks
-up N parent scopes; surfaces in `dns_protocol_query`/`_response`, where a payload
-struct's array length references the outer header's `qdcount`), `pcf_full` (an
-unresolved field type), and `optional_builtin_bit` (1 suite, a documented
-bit/byte-overlap runtime quirk the byte-oriented Zig runtime does not replicate).
+leading unused-bits byte). Bare ancestor-scope field refs now resolve too: a
+non-local `length_field`/`count_field` that names a field of the entry (root)
+type — e.g. a DNS payload struct (`DnsQuery`) whose `questions` array is
+`length_field: "qdcount"`, where `qdcount` lives in the outer `DnsFrame` header —
+is resolved on decode through the same threaded `root` pointer that `_root.` uses
+(`schemaHasAncestorFieldRefs` turns root threading on; `siblingRef` casts the
+pointer to the entry type). This closed `dns_protocol_query`/`_response`. Still
+pending: `pcf_full` (an unresolved field type) and `optional_builtin_bit` (1
+suite, a documented bit/byte-overlap runtime quirk the byte-oriented Zig runtime
+does not replicate).
 
-**Latest harness numbers:** 350/354 codegen suites generate (+12 validation-only,
-not codegen targets), 820/820 cases pass, 0 errored, 0 failed; runtime unit tests
+**Latest harness numbers:** 352/354 codegen suites generate (+12 validation-only,
+not codegen targets), 822/822 cases pass, 0 errored, 0 failed; runtime unit tests
 28/28; TS reference 1192/1192 (no existing bytes edited). Update on each landing.
 
 ---
