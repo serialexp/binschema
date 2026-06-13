@@ -13,6 +13,7 @@ import {
 } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 import { emitEnumDecode } from "./enum.js";
+import { emitBitfieldDecode } from "./bitfield.js";
 
 /**
  * Emit statements to decode a single named field of `target` (e.g. "result")
@@ -57,7 +58,7 @@ export function emitDecodeValue(
       // On the wire the varlength prefix is a real field; decode it to u64.
       return [`${indent}${lhs} = try ${DEC}.${varlengthReadMethod(field)}();`];
     case "optional": throw new ZigNotImplemented("optional fields");
-    case "bitfield": throw new ZigNotImplemented("bitfield fields");
+    case "bitfield": return emitBitfieldDecode(field, lhs, indent);
     case "discriminated_union": throw new ZigNotImplemented("discriminated_union fields");
     case "choice": throw new ZigNotImplemented("choice fields");
   }

@@ -154,6 +154,7 @@ function zigValueType(field: any, schema: any, alias: string): string {
   switch (field.type) {
     case "string": case "bytes": return "[]const u8";
     case "array": return `[]const ${zigValueType(itemField(field.items), schema, alias)}`;
+    case "bitfield": return bitfieldType(field);
   }
   const resolved = resolveAlias(schema, field.type);
   const cls = classifyTypeDef(resolved);
@@ -197,6 +198,7 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
   if (field.type === "string") return stringValue(value);
   if (field.type === "bytes") return bytesValue(value);
   if (field.type === "array") return arrayValue(field.items, value, schema, alias);
+  if (field.type === "bitfield") return bitfieldValue(field, value);
 
   // Type reference.
   const resolved = resolveAlias(schema, field.type);
@@ -209,6 +211,21 @@ function valueExpr(field: any, value: any, schema: any, alias: string): string {
     case "enum": return intLiteral(value);
     default: throw new UnsupportedValue(`value for type '${field.type}'`);
   }
+}
+
+/** Anonymous Zig struct type for a bitfield field (one uN per sub-field). */
+function bitfieldType(field: any): string {
+  const parts = (field.fields || []).map((f: any) => `${zigFieldName(f.name)}: u${f.size || 1}`);
+  return `struct { ${parts.join(", ")} }`;
+}
+
+/** Anonymous Zig struct literal for a bitfield value (coerces to the field type). */
+function bitfieldValue(field: any, value: any): string {
+  if (value == null || typeof value !== "object") throw new UnsupportedValue(`bitfield value ${JSON.stringify(value)}`);
+  const parts = (field.fields || []).map(
+    (f: any) => `.${zigFieldName(f.name)} = ${intLiteral(value[f.name])}`,
+  );
+  return parts.length === 0 ? ".{}" : `.{ ${parts.join(", ")} }`;
 }
 
 function stringValue(value: any): string {
