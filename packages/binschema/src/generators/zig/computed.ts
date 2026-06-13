@@ -21,7 +21,7 @@
 // later Phase-3 layers (they need the threaded EncodeContext, not local vars).
 
 import { RT, ENC, CTX, ERR } from "./context.js";
-import { zigFieldName } from "./naming.js";
+import { zigFieldName, uniqueVar } from "./naming.js";
 import { zigEndianness, zigPrimitiveType, resolveAlias, classifyTypeDef, varlengthWriteMethod } from "./types.js";
 import { ZigNotImplemented, type EmitCtx } from "./encode.js";
 
@@ -375,6 +375,44 @@ export function lengthOfNeedsMeasure(target: string, schema: any, fields: any[] 
   const resolved = resolveAlias(schema, tf.type);
   const cls = classifyTypeDef(resolved);
   return cls === "struct" || cls === "discriminated_union" || cls === "choice";
+}
+
+// ---------------------------------------------------------------------------
+// field_id_delta (Thrift-style stateful field-id deltas)
+// ---------------------------------------------------------------------------
+
+/**
+ * Struct-scoped accumulator holding the last EMITTED absolute field id. Declared
+ * once per encode/decode body when the struct has any `field_id_delta` field, and
+ * advanced only by fields that are actually emitted (conditional-true), so a
+ * dropped optional field makes the next delta jump across it.
+ */
+export const FIELD_ID_ACC = "__field_id_acc";
+
+/** True if any field in the sequence is a `field_id_delta` computed field. */
+export function structHasFieldIdDelta(fields: any[]): boolean {
+  return fields.some((f: any) => f?.computed?.type === "field_id_delta");
+}
+
+/**
+ * Encode a `field_id_delta` computed field: write `id - acc` (the gap since the
+ * last emitted id) as the field's int type, then advance the accumulator to `id`.
+ * The caller wraps this in the field's conditional guard when present, so the
+ * accumulator only advances for emitted fields.
+ */
+export function emitFieldIdDeltaEncode(field: any, ctx: EmitCtx, indent: string): string[] {
+  const id = field.computed.id ?? 0;
+  const intType = field.type;
+  if (!(intType in PLACEHOLDER_SUFFIX)) {
+    throw new ZigNotImplemented(`field_id_delta of non-integer type '${intType}'`);
+  }
+  const e = zigEndianness(field.endianness, ctx.endianness);
+  const delta = uniqueVar("_fid_delta");
+  return [
+    `${indent}const ${delta}: u64 = ${id} - ${FIELD_ID_ACC};`,
+    `${indent}${FIELD_ID_ACC} = ${id};`,
+    ...emitIntWrite(intType, delta, e, indent),
+  ];
 }
 
 /** Emit a write of a computed integer VALUE (`expr`) as the field's int type. */

@@ -21,6 +21,7 @@ import {
   emitSelectorArrayRecording,
   schemaHasCorrespondingSelectors,
   emitCorrelationArrayLoop,
+  emitFieldIdDeltaEncode,
   PLACEHOLDER_SUFFIX,
 } from "./computed.js";
 import { emitEnumEncode } from "./enum.js";
@@ -62,14 +63,21 @@ export function generateFieldEncode(field: any, ctx: EmitCtx, indent = "        
   // conditionals (e.g. field_id_delta) interact with running accumulators and
   // are deferred.
   if (field.conditional) {
+    const cond = translateConditional(field.conditional, ctx.selfPath, ctx.fields, ctx.schema);
+    // field_id_delta is the one computed kind that is meaningfully conditional:
+    // the delta + accumulator advance happen only when the field is emitted.
+    if (field.computed?.type === "field_id_delta") {
+      const inner = emitFieldIdDeltaEncode(field, ctx, indent + "    ");
+      return [`${indent}if (${cond}) {`, ...inner, `${indent}}`];
+    }
     if (field.computed) throw new ZigNotImplemented("computed conditional field");
     if (field.const !== undefined) throw new ZigNotImplemented("const conditional field");
-    const cond = translateConditional(field.conditional, ctx.selfPath, ctx.fields, ctx.schema);
     const value = `${ctx.selfPath}.${zigFieldName(field.name)}.?`;
     const inner = emitEncodeValue(field, value, ctx, indent + "    ");
     return [`${indent}if (${cond}) {`, ...inner, `${indent}}`];
   }
   if (field.type === "padding") return emitPaddingEncode(field, indent);
+  if (field.computed?.type === "field_id_delta") return emitFieldIdDeltaEncode(field, ctx, indent);
   if (field.computed) return emitComputedEncode(field, ctx, indent);
   if (field.const !== undefined) return emitConstEncode(field, ctx, indent);
   const fname = zigFieldName(field.name);

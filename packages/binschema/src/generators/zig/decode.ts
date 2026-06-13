@@ -20,6 +20,7 @@ import { emitBitfieldDecode } from "./bitfield.js";
 import { emitOptionalDecode } from "./optional.js";
 import { emitChoiceDecode, emitDuDecode } from "./union.js";
 import { emitCompressedDecode } from "./compression.js";
+import { FIELD_ID_ACC } from "./computed.js";
 
 /**
  * Emit statements to decode a single named field of `target` (e.g. "result")
@@ -41,10 +42,21 @@ export function generateFieldDecode(
   // siblings in `target`) is true; otherwise the `?T` field is null. computed/
   // const conditionals are deferred (mirrors the encode side).
   if (field.conditional) {
-    if (field.computed) throw new ZigNotImplemented("computed conditional field");
-    if (field.const !== undefined) throw new ZigNotImplemented("const conditional field");
     const cond = translateConditional(field.conditional, target, ctx.fields, ctx.schema);
     const lhs = `${target}.${fname}`;
+    // field_id_delta: read the wire delta and reconstruct the absolute id,
+    // advancing the accumulator — only when the field is present.
+    if (field.computed?.type === "field_id_delta") {
+      return [
+        `${indent}if (${cond}) {`,
+        ...emitFieldIdDeltaDecode(field, ctx, lhs, indent + "    "),
+        `${indent}} else {`,
+        `${indent}    ${lhs} = null;`,
+        `${indent}}`,
+      ];
+    }
+    if (field.computed) throw new ZigNotImplemented("computed conditional field");
+    if (field.const !== undefined) throw new ZigNotImplemented("const conditional field");
     const inner = emitDecodeValue(field, ctx, lhs, target, indent + "    ");
     return [
       `${indent}if (${cond}) {`,
@@ -54,9 +66,41 @@ export function generateFieldDecode(
       `${indent}}`,
     ];
   }
+  if (field.computed?.type === "field_id_delta") {
+    return emitFieldIdDeltaDecode(field, ctx, `${target}.${fname}`, indent);
+  }
   // Computed and const fields are present on the wire (they were written during
   // encode), so they decode exactly like their declared primitive type.
   return emitDecodeValue(field, ctx, `${target}.${fname}`, target, indent);
+}
+
+/**
+ * Decode a `field_id_delta` field: read the delta in the field's int type,
+ * reconstruct the absolute id as `acc + delta`, store it, and advance the
+ * accumulator. Mirrors `emitFieldIdDeltaEncode`.
+ */
+function emitFieldIdDeltaDecode(field: any, ctx: EmitCtx, lhs: string, indent: string): string[] {
+  const e = zigEndianness(field.endianness, ctx.endianness);
+  const delta = uniqueVar("_fid_delta");
+  const idv = uniqueVar("_fid_id");
+  const zigInt =
+    field.type === "uint8" ? "u8" :
+    field.type === "uint16" ? "u16" :
+    field.type === "uint32" ? "u32" :
+    field.type === "uint64" ? "u64" :
+    null;
+  if (zigInt === null) throw new ZigNotImplemented(`field_id_delta of non-integer type '${field.type}'`);
+  const read =
+    field.type === "uint8" ? `${DEC}.readUint8()` :
+    field.type === "uint16" ? `${DEC}.readUint16(${e})` :
+    field.type === "uint32" ? `${DEC}.readUint32(${e})` :
+    `${DEC}.readUint64(${e})`;
+  return [
+    `${indent}const ${delta} = try ${read};`,
+    `${indent}const ${idv}: u64 = ${FIELD_ID_ACC} + ${delta};`,
+    `${indent}${lhs} = @as(${zigInt}, @intCast(${idv}));`,
+    `${indent}${FIELD_ID_ACC} = ${idv};`,
+  ];
 }
 
 /**

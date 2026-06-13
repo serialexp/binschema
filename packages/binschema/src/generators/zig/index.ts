@@ -36,6 +36,8 @@ import {
   schemaHasParentRefs,
   schemaHasSelectors,
   emitFrameLengthRegistration,
+  structHasFieldIdDelta,
+  FIELD_ID_ACC,
 } from "./computed.js";
 
 export interface GeneratedZigCode {
@@ -220,6 +222,11 @@ function generateStructCode(
     }
     encBody.push(...emitComputedBackpatch(fields, emit, "        "));
   }
+  // Stateful field-id accumulator (Thrift-style deltas), advanced only by emitted
+  // fields. Declared once at the top of the body when any field needs it.
+  if (structHasFieldIdDelta(fields)) {
+    encBody.unshift(`        var ${FIELD_ID_ACC}: u64 = 0;`);
+  }
   lines.push(...discardsFor(encBody, [["self", "self"], [ENC, ENC], [CTX, CTX]]));
   lines.push(...encBody);
   lines.push(`    }`);
@@ -237,6 +244,9 @@ function generateStructCode(
   const decBody: string[] = [];
   for (const field of fields) {
     decBody.push(...generateFieldDecode(field, emit, "result"));
+  }
+  if (structHasFieldIdDelta(fields)) {
+    decBody.unshift(`        var ${FIELD_ID_ACC}: u64 = 0;`);
   }
   lines.push(...discardsFor(decBody, [[ALLOC, ALLOC], [DEC, DEC], [ROOT, ROOT]]));
   // An empty struct (no field decodes) never mutates `result`; Zig rejects an
