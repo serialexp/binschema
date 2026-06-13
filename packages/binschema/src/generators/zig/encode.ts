@@ -17,6 +17,7 @@ import {
   emitSelectorArrayRecording,
   schemaHasCorrespondingSelectors,
   emitCorrelationArrayLoop,
+  PLACEHOLDER_SUFFIX,
 } from "./computed.js";
 import { emitEnumEncode } from "./enum.js";
 import { emitBitfieldEncode } from "./bitfield.js";
@@ -241,6 +242,16 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
   const items = field.items;
   const lines: string[] = [];
 
+  // length_prefixed_items: an outer count prefix, then EACH element is framed by
+  // its own byte-length prefix. We reserve a placeholder for the per-item length,
+  // encode the item directly into the same encoder, then back-patch the
+  // placeholder with the encoded span (byteOffset delta) — the load-bearing
+  // two-pass primitive. The length is known immediately after the item, so this
+  // is a synchronous patch, not a deferred one.
+  if (kind === "length_prefixed_items") {
+    return emitLengthPrefixedItemsEncode(field, value, ctx, indent);
+  }
+
   switch (kind) {
     case "fixed":
     case "field_referenced":
@@ -287,6 +298,32 @@ function emitArrayEncode(field: any, value: string, ctx: EmitCtx, indent: string
 
   lines.push(`${indent}for (${value}) |${itemVar}| {`);
   lines.push(...itemEncode);
+  lines.push(`${indent}}`);
+  return lines;
+}
+
+function emitLengthPrefixedItemsEncode(field: any, value: string, ctx: EmitCtx, indent: string): string[] {
+  const itemLengthType = field.item_length_type || "uint32";
+  const suffix = PLACEHOLDER_SUFFIX[itemLengthType];
+  if (!suffix) throw new ZigNotImplemented(`item_length_type '${itemLengthType}'`);
+  const e = zigEndianness(undefined, ctx.endianness);
+
+  const lines: string[] = [];
+  // Outer count prefix: number of elements.
+  lines.push(...emitLengthPrefixEncode(field.length_type || "uint8", `${value}.len`, ctx, indent));
+
+  const itemVar = uniqueVar("_item");
+  const itemField = typeof field.items === "string" ? { type: field.items } : { ...field.items };
+  delete (itemField as any).name;
+  const itemEncode = emitEncodeValue(itemField, itemVar, ctx, indent + "    ");
+
+  const ph = uniqueVar("_iph");
+  const start = uniqueVar("_istart");
+  lines.push(`${indent}for (${value}) |${itemVar}| {`);
+  lines.push(`${indent}    const ${ph} = try ${ENC}.placeholder${suffix}();`);
+  lines.push(`${indent}    const ${start} = ${ENC}.byteOffset();`);
+  lines.push(...itemEncode);
+  lines.push(`${indent}    ${ENC}.patch(${ph}, @intCast(${ENC}.byteOffset() - ${start}), ${e});`);
   lines.push(`${indent}}`);
   return lines;
 }

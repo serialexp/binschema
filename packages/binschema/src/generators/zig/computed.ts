@@ -31,7 +31,7 @@ const INT_FIELD_TYPES = new Set([
 ]);
 
 /** Map a computed field's integer storage type to its placeholder method suffix. */
-const PLACEHOLDER_SUFFIX: Record<string, "U8" | "U16" | "U32" | "U64"> = {
+export const PLACEHOLDER_SUFFIX: Record<string, "U8" | "U16" | "U32" | "U64"> = {
   uint8: "U8",
   uint16: "U16",
   uint32: "U32",

@@ -219,6 +219,25 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
   const i = uniqueVar("_i");
   const item = uniqueVar("_it");
 
+  // length_prefixed_items: read the outer count, then for each element consume
+  // its per-item byte-length prefix and decode the (self-describing) item. The
+  // per-item length is informational here — the item's own decode consumes the
+  // exact bytes — so we read and discard it, matching the TS/Python reference.
+  if (kind === "length_prefixed_items") {
+    const lenVar = uniqueVar("_len");
+    lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
+    const buf = uniqueVar("_buf");
+    lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, @as(usize, ${lenVar}));`);
+    const ilen = uniqueVar("_ilen");
+    lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
+    lines.push(...emitLengthPrefixDecode(field.item_length_type || "uint32", ilen, ctx, indent + "    "));
+    lines.push(`${indent}    _ = ${ilen};`);
+    lines.push(...emitDecodeValue(itemField, ctx, `${buf}[${i}]`, structVar, indent + "    "));
+    lines.push(`${indent}}`);
+    lines.push(`${indent}${lhs} = ${buf};`);
+    return lines;
+  }
+
   if (kind === "eof_terminated") {
     // Unknown count: accumulate until the buffer is exhausted.
     lines.push(`${indent}var ${list} = std.ArrayList(${itemType}).empty;`);
