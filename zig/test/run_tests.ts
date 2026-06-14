@@ -14,7 +14,9 @@
 // dependency).
 //
 // Env:
-//   ZIG_TEST_FILTER  substring filter on suite name
+//   ZIG_TEST_FILTER  case-insensitive REGEX matched against the suite name
+//                    (unanchored, so a bare word still works as a substring, and
+//                    `a|b` selects either — matching the Go/Rust/Python harnesses)
 //   ZIG_TEST_REPORT  "" | summary | failing-tests | json
 //   DEBUG_GENERATED  dir to keep generated sources (else tmp-zig is reused/cleaned)
 //   DEBUG_CONSTRUCT  log why a test value was not constructible (construct-skip)
@@ -41,7 +43,20 @@ const REPO_ROOT = resolve(__dirname, "..", "..");
 const TESTS_DIR = join(REPO_ROOT, "packages", "binschema", ".generated", "tests-json");
 const RUNTIME_ROOT = join(REPO_ROOT, "zig", "runtime", "binschema.zig");
 
-const FILTER = process.env.ZIG_TEST_FILTER || "";
+const FILTER_SRC = process.env.ZIG_TEST_FILTER || "";
+// Compile the filter as a case-insensitive regex. Unanchored, so a plain word
+// behaves like the old substring match while `a|b` now selects either suite —
+// parity with the regex filters in the Go/Rust/Python harnesses. An invalid
+// pattern is a hard error rather than a silent "matches nothing".
+let FILTER_RE: RegExp | null = null;
+if (FILTER_SRC) {
+  try {
+    FILTER_RE = new RegExp(FILTER_SRC, "i");
+  } catch (e: any) {
+    console.error(`ZIG_TEST_FILTER is not a valid regex: ${e?.message ?? e}`);
+    process.exit(2);
+  }
+}
 const REPORT = process.env.ZIG_TEST_REPORT || "";
 const DEBUG_DIR = process.env.DEBUG_GENERATED || "";
 const BUILD_DIR = DEBUG_DIR
@@ -394,7 +409,7 @@ function main() {
   for (const f of files) {
     const s = loadSuite(f);
     if (!s) continue;
-    if (FILTER && !s.name.toLowerCase().includes(FILTER.toLowerCase())) continue;
+    if (FILTER_RE && !FILTER_RE.test(s.name)) continue;
     suites.push(s);
   }
 
