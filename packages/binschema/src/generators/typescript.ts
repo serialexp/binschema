@@ -1600,7 +1600,7 @@ function generateDecodeChoice(
     code += `${inner}${ifKeyword} (discriminator === 0x${discriminatorValue.toString(16)}) {\n`;
 
     // Determine the base object for context
-    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+    const baseObject = getOwnerObjectPath(target);
 
     // Choice uses flat structure - decode directly into target without wrapper
     code += `${inner}  const decoder = new ${choice.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
@@ -2191,7 +2191,7 @@ function generateDecodeDiscriminatedUnion(
     let c = "";
     const variantTypeDef = schema.types[variant.type];
     const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
-    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+    const baseObject = getOwnerObjectPath(target);
 
     if (byteBudget) {
       // byte_budget mode: decode from sub-slice, don't advance outer byteOffset
@@ -2215,7 +2215,7 @@ function generateDecodeDiscriminatedUnion(
 
   // If byte_budget, create the sub-slice before variant dispatch
   if (byteBudget) {
-    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+    const baseObject = getOwnerObjectPath(target);
     code += `${indent}const _budget = ${baseObject}.${byteBudget.field};\n`;
     code += `${indent}const _budgetSlice = this.bytes.slice(this.byteOffset, this.byteOffset + _budget);\n`;
   }
@@ -2265,7 +2265,7 @@ function generateDecodeDiscriminatedUnion(
     // Field-based discriminator (SuperChat pattern)
     const discriminatorField = discriminator.field;
 
-    const baseObject = target.includes(".") ? target.split(".")[0] : "value";
+    const baseObject = getOwnerObjectPath(target);
     const discriminatorRef = `${baseObject}.${discriminatorField}`;
 
     // Generate if-else chain for each variant using previously read field
@@ -2445,6 +2445,25 @@ function getTargetPath(fieldName: string): string {
   // Array item variables (ending with ARRAY_ITER_SUFFIX or containing ARRAY_ITER_SUFFIX.) should not be prefixed with 'value.'
   const isArrayItem = fieldName.endsWith(ARRAY_ITER_SUFFIX) || fieldName.includes(ARRAY_ITER_SUFFIX + ".");
   return isArrayItem ? fieldName : `value.${fieldName}`;
+}
+
+/**
+ * The object that OWNS the field at `target`: the target path with its final
+ * segment removed (e.g. `value.key.body` -> `value.key`, `value.body` -> `value`,
+ * `arr__iter.key.body` -> `arr__iter.key`).
+ *
+ * For an inlined discriminated_union / choice, the sibling-field discriminator
+ * (`tag`), a `byte_budget` length field, and the `../` parent context all live on
+ * this same owning object — they are siblings of the union field itself. Taking
+ * only the FIRST path segment (the old behaviour) collapsed `value.key.body` to
+ * `value`, so a union inlined as a named struct field branched on `value.tag`
+ * (undefined) while reading the tag into `value.key.tag`. It happened to work for
+ * top-level fields and direct array elements only because there the owner path
+ * equals the first segment by coincidence. See BUG-nested-union-named-field-ts.md.
+ */
+function getOwnerObjectPath(target: string): string {
+  const lastDot = target.lastIndexOf(".");
+  return lastDot === -1 ? "value" : target.slice(0, lastDot);
 }
 
 /**

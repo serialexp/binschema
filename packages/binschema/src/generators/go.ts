@@ -5232,24 +5232,28 @@ function generateDecodeArray(field: any, fieldName: string, varName: string, end
   // Read length prefix for length_prefixed arrays
   if (kind === "length_prefixed" || kind === "length_prefixed_items") {
     const lengthType = field.length_type || "uint8";
+    // Per-field length var (varName is unique per field): two length-prefixed
+    // arrays in one struct would otherwise both emit `length, err :=` and the
+    // second fails to compile ("no new variables on left side of :=").
+    const lengthVar = `${varName}_length`;
     switch (lengthType) {
       case "uint8":
-        lines.push(`${indent}length, err := decoder.ReadUint8()`);
+        lines.push(`${indent}${lengthVar}, err := decoder.ReadUint8()`);
         break;
       case "uint16":
-        lines.push(`${indent}length, err := decoder.ReadUint16(runtime.${runtimeEndianness})`);
+        lines.push(`${indent}${lengthVar}, err := decoder.ReadUint16(runtime.${runtimeEndianness})`);
         break;
       case "uint32":
-        lines.push(`${indent}length, err := decoder.ReadUint32(runtime.${runtimeEndianness})`);
+        lines.push(`${indent}${lengthVar}, err := decoder.ReadUint32(runtime.${runtimeEndianness})`);
         break;
       case "uint64":
-        lines.push(`${indent}length, err := decoder.ReadUint64(runtime.${runtimeEndianness})`);
+        lines.push(`${indent}${lengthVar}, err := decoder.ReadUint64(runtime.${runtimeEndianness})`);
         break;
     }
     lines.push(`${indent}if err != nil {`);
     lines.push(`${indent}\treturn nil, fmt.Errorf("failed to decode ${field.name} length: %w", err)`);
     lines.push(`${indent}}`);
-    lines.push(`${indent}result.${fieldName} = make([]${itemType}, length)`);
+    lines.push(`${indent}result.${fieldName} = make([]${itemType}, ${lengthVar})`);
 
     // For length_prefixed_items, handle per-item lengths
     if (kind === "length_prefixed_items") {
