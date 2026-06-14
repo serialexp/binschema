@@ -74,6 +74,7 @@ const RUNTIME_FILES = [
   "crc32.ts",
   "errors.ts",
   "expression-evaluator.ts",
+  "expr-helpers.ts",
 ];
 
 function generateProject(): { dir: string; generatedPath: string; code: string } {

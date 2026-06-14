@@ -3,7 +3,6 @@ import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
 import { ARRAY_ITER_SUFFIX } from "./typescript/shared.js";
 import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName } from "./typescript/type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation.js";
-import { generateRuntimeHelpers } from "./typescript/runtime-helpers.js";
 import {
   generateEncodeBitfield,
   generateDecodeBitfield
@@ -98,15 +97,18 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
       streamingCode = streamingBody;
     }
   }
-  code += "\n";
-
-  // Helper utilities for safe conditional evaluation (avoid runtime errors during decode/encode)
-  code += generateRuntimeHelpers();
+  // Build the body first (context interface + types + streaming) so we can
+  // detect which safe-evaluation helpers the generated code actually
+  // references. The helpers (__bs_get/__bs_numeric/__bs_literal/
+  // __bs_checkCondition) live in the runtime and are imported, not injected —
+  // and only when a conditional/expression field actually uses them, so a
+  // plain struct's output carries no dead import.
+  let body = "";
 
   // Generate context interface if schema requires it
   const contextInterface = generateContextInterface(schema);
   if (contextInterface) {
-    code += contextInterface;
+    body += contextInterface;
   }
 
   // Generate code for each type (skip generic templates like Optional<T>)
@@ -116,16 +118,25 @@ export function generateTypeScript(schema: BinarySchema, options?: GenerateTypeS
     }
 
     const sanitizedName = sanitizeTypeName(typeName);
-    code += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder, addTraceLogs, addEncoderLogs);
-    code += "\n\n";
+    body += generateTypeCode(sanitizedName, typeDef as TypeDef, schema, globalEndianness, globalBitOrder, addTraceLogs, addEncoderLogs);
+    body += "\n\n";
   }
 
   // Emit streaming wrapper functions (already imported above).
   if (streamingCode.length > 0) {
-    code += streamingCode + "\n";
+    body += streamingCode + "\n";
   }
 
-  return code;
+  // Import only the expression helpers the body references, keeping the
+  // import list minimal so strict-tsc (noUnusedLocals) stays satisfied.
+  const exprHelpers = ["__bs_get", "__bs_literal", "__bs_numeric", "__bs_checkCondition"]
+    .filter((h) => body.includes(`${h}(`));
+  if (exprHelpers.length > 0) {
+    code += `import { ${exprHelpers.join(", ")} } from "./expr-helpers.js";\n`;
+  }
+  code += "\n";
+
+  return code + body;
 }
 
 /**

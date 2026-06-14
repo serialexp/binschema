@@ -54,6 +54,7 @@ const RUNTIME_IMPORTS = [
   "crc32",
   "errors",
   "expression-evaluator",
+  "expr-helpers",
   "stream-decoder",
   "codecs",
 ];

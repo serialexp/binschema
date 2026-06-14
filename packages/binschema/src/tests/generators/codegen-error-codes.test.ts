@@ -32,6 +32,7 @@ function rewriteRuntimeImports(code: string): string {
     "./binary-reader.js": "../src/runtime/binary-reader.js",
     "./crc32.js": "../src/runtime/crc32.js",
     "./expression-evaluator.js": "../src/runtime/expression-evaluator.js",
+    "./expr-helpers.js": "../src/runtime/expr-helpers.js",
     "./errors.js": "../src/runtime/errors.js",
     "./stream-decoder.js": "../src/runtime/stream-decoder.js",
   };

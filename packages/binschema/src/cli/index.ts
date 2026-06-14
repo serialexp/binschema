@@ -247,6 +247,10 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
         "crc32.ts",
         "errors.ts",
         "expression-evaluator.ts",
+        // Safe conditional/expression evaluation helpers (__bs_*). Imported by
+        // generated code only when it has conditional/expression fields, but
+        // copied unconditionally so the import always resolves when present.
+        "expr-helpers.ts",
       ];
       // The codec registry (and its vendored fflate source) is only needed when
       // the schema actually uses a `compressed` region — the generated code
