@@ -2387,6 +2387,60 @@ function generateEncodeMethod(name: string, fields: Field[], defaultEndianness: 
  * Generates a CalculateSize method for a struct
  * Used for multi-pass encoding (from_after_field) and buffer pre-allocation
  */
+/**
+ * Fold consecutive constant `size += N` lines (Go syntax: no semicolon, tab
+ * indent) into a single addend, mirroring the TypeScript generator's pass.
+ * A fully-fixed struct collapses to one `size += <sum>`; the caller turns a
+ * sole addend into a bare `return <sum>`. Any non-constant line (a runtime
+ * `len(...)`/`.CalculateSize()` expression, a wrapper block, a blank line, or a
+ * constant at a different indent) breaks the run.
+ */
+function foldConstantSizeLinesGo(
+  inputLines: string[]
+): { lines: string[]; sole: { value: number; comment: string } | null } {
+  const CONST_RE = /^(\t*)size \+= (\d+)(?:\s*\/\/\s*(.*))?$/;
+  const out: string[] = [];
+  let runSum = 0;
+  let runComments: string[] = [];
+  let runIndent = "";
+  let runActive = false;
+
+  const flush = () => {
+    if (!runActive) return;
+    const comment = runComments.length > 0 ? ` // ${runComments.join(" + ")}` : "";
+    out.push(`${runIndent}size += ${runSum}${comment}`);
+    runActive = false;
+    runSum = 0;
+    runComments = [];
+    runIndent = "";
+  };
+
+  for (const line of inputLines) {
+    const m = line.match(CONST_RE);
+    if (m && (!runActive || m[1] === runIndent)) {
+      if (!runActive) {
+        runActive = true;
+        runIndent = m[1];
+      }
+      runSum += parseInt(m[2], 10);
+      if (m[3]) runComments.push(m[3]);
+    } else {
+      flush();
+      out.push(line);
+    }
+  }
+  flush();
+
+  const nonBlank = out.filter((l) => l.trim() !== "");
+  let sole: { value: number; comment: string } | null = null;
+  if (nonBlank.length === 1) {
+    const m = nonBlank[0].match(CONST_RE);
+    if (m) sole = { value: parseInt(m[2], 10), comment: m[3] ?? "" };
+  }
+
+  return { lines: out, sole };
+}
+
 function generateCalculateSizeMethod(name: string, fields: Field[], schema: BinarySchema): string[] {
   const lines: string[] = [];
 
@@ -2404,13 +2458,25 @@ function generateCalculateSizeMethod(name: string, fields: Field[], schema: Bina
     lines.push(`\tbytes, _ := m.Encode()`);
     lines.push(`\treturn len(bytes)`);
   } else {
+    // Generate per-field size lines, then fold constant runs so an all-fixed
+    // struct collapses to a single `size += N` / a bare `return N`.
+    const fieldLines: string[] = [];
+    for (const field of fields) {
+      fieldLines.push(...generateFieldSizeCalculation(field, schema, "\t"));
+    }
+    const { lines: folded, sole } = foldConstantSizeLinesGo(fieldLines);
+
+    if (sole !== null) {
+      const comment = sole.comment ? ` // ${sole.comment}` : "";
+      lines.push(`\treturn ${sole.value}${comment}`);
+      lines.push(`}`);
+      lines.push(``);
+      return lines;
+    }
+
     lines.push(`\tsize := 0`);
     lines.push(``);
-
-    // Generate size calculation for each field
-    for (const field of fields) {
-      lines.push(...generateFieldSizeCalculation(field, schema, "\t"));
-    }
+    lines.push(...folded);
 
     lines.push(``);
     lines.push(`\treturn size`);

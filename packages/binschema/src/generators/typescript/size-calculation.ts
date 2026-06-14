@@ -534,6 +534,81 @@ function getBuiltInTypeSize(typeName: string): number {
 /**
  * Generate a complete calculateSize() method for a composite type
  */
+/**
+ * Fold consecutive constant `size += N;` lines into a single addend.
+ *
+ * `generateFieldSizeCalculation` emits one `size += <n>;` line per fixed-size
+ * field (and richer multi-line blocks for variable-size fields). For a struct
+ * whose fields are all fixed, that produces a noisy ladder
+ * (`size += 2; size += 4; …`) that is equivalent to a single constant. This
+ * pass merges any run of pure-constant addends at the same indent into one
+ * `size += <sum>;` line, preserving the per-field provenance in the trailing
+ * comment. Any non-constant line (a wrapper `if`, a runtime expression, a
+ * blank line, or a constant at a different indent) breaks the run.
+ *
+ * Returns the folded body plus, when the entire body folds to exactly one
+ * constant addend, the `{ value, comment }` so the caller can emit a bare
+ * `return <n>;`.
+ */
+function foldConstantSizeLines(
+  body: string,
+  baseIndent: string
+): { code: string; sole: { value: number; comment: string } | null } {
+  // Match `<indent>size += <int>;` with an optional `// comment`.
+  const CONST_RE = /^(\s*)size \+= (\d+);(?:\s*\/\/\s*(.*))?$/;
+
+  const rawLines = body.split("\n");
+  // Drop a single trailing empty element produced by a final "\n".
+  if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+    rawLines.pop();
+  }
+
+  const out: string[] = [];
+  let runSum = 0;
+  let runComments: string[] = [];
+  let runIndent = "";
+  let runActive = false;
+
+  const flush = () => {
+    if (!runActive) return;
+    const comment = runComments.length > 0 ? ` // ${runComments.join(" + ")}` : "";
+    out.push(`${runIndent}size += ${runSum};${comment}`);
+    runActive = false;
+    runSum = 0;
+    runComments = [];
+    runIndent = "";
+  };
+
+  for (const line of rawLines) {
+    const m = line.match(CONST_RE);
+    // Only fold runs at a single indent level; a change in indent (e.g. a
+    // constant nested inside an `if {}` block) breaks the run so conditional
+    // additions never merge into the unconditional accumulator.
+    if (m && (!runActive || m[1] === runIndent)) {
+      if (!runActive) {
+        runActive = true;
+        runIndent = m[1];
+      }
+      runSum += parseInt(m[2], 10);
+      if (m[3]) runComments.push(m[3]);
+    } else {
+      flush();
+      out.push(line);
+    }
+  }
+  flush();
+
+  // Detect a body that is exactly one constant addend (the all-fixed struct).
+  const nonBlank = out.filter((l) => l.trim() !== "");
+  let sole: { value: number; comment: string } | null = null;
+  if (nonBlank.length === 1) {
+    const m = nonBlank[0].match(CONST_RE);
+    if (m) sole = { value: parseInt(m[2], 10), comment: m[3] ?? "" };
+  }
+
+  return { code: out.length > 0 ? out.join("\n") + "\n" : "", sole };
+}
+
 export function generateCalculateSizeMethod(
   typeName: string,
   fields: Field[],
@@ -564,20 +639,30 @@ export function generateCalculateSizeMethod(
     code += `    // This type uses from_after_field - encode to get exact size\n`;
     code += `    return this.encode(value${contextParam ? ', context' : ''}).length;\n`;
   } else {
-    // Normal size calculation
-    code += `    let size = 0;\n`;
-
+    // Normal size calculation.
     // For type aliases (single pseudo-field named 'value'), use empty prefix
     // For normal types, use "value." prefix to access fields
     const isTypeAlias = fields.length === 1 && (fields[0] as any).name === 'value';
     const valuePrefix = isTypeAlias ? "" : "value.";
 
-    // Generate size calculation for each field
+    // Generate size calculation for each field, then fold runs of constant
+    // addends so an all-fixed struct collapses to a single `size += N` / a
+    // bare `return N` instead of a per-field ladder.
+    let fieldBody = "";
     for (const field of fields) {
-      code += generateFieldSizeCalculation(field, schema, globalEndianness, "    ", valuePrefix, fields);
+      fieldBody += generateFieldSizeCalculation(field, schema, globalEndianness, "    ", valuePrefix, fields);
     }
+    const { code: folded, sole } = foldConstantSizeLines(fieldBody, "    ");
 
-    code += `    return size;\n`;
+    if (sole !== null) {
+      // Entire body is one constant — return it directly, keeping provenance.
+      const comment = sole.comment ? ` // ${sole.comment}` : "";
+      code += `    return ${sole.value};${comment}\n`;
+    } else {
+      code += `    let size = 0;\n`;
+      code += folded;
+      code += `    return size;\n`;
+    }
   }
 
   code += `  }\n`;
