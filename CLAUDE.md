@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-BinSchema is a binary protocol schema definition and code generation tool. It allows you to define binary formats in JSON5 and generates TypeScript, Go, and Rust parsers/serializers.
+BinSchema is a binary protocol schema definition and code generation tool. It allows you to define binary formats in JSON5 and generates TypeScript, Python, Go, Rust, and Zig parsers/serializers.
 
 **Core Features:**
 - Bit-level precision (1-64 bit fields)
@@ -568,7 +568,7 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
 
 ### Code Generation Flow
 1. Parse schema (JSON5 → Zod validation)
-2. Generate target language code (TypeScript/Go/Rust)
+2. Generate target language code (TypeScript/Python/Go/Rust/Zig)
 3. Generated code includes:
    - Type definitions (structs/interfaces)
    - Encode methods (value → bytes)
@@ -579,7 +579,7 @@ Tests are defined in TypeScript (`src/tests/**/*.test.ts`) and automatically exp
 
 ### Reference Implementation Priority
 
-**IMPORTANT:** The TypeScript generator (`src/generators/typescript.ts`) is the **reference implementation** and receives all new features first. When implementing features in Go or Rust generators:
+**IMPORTANT:** The TypeScript generator (`src/generators/typescript.ts`) is the **reference implementation** and receives all new features first. When implementing features in Go, Rust, Python, or Zig generators:
 
 1. **Always refer to the TypeScript generator** when unsure how to implement a feature
 2. The TypeScript generator has the most complete implementation and handles all edge cases

@@ -1,7 +1,7 @@
 # BinSchema Feature Gap Analysis
 
 Originally analyzed 2026-03-03. **Updated 2026-05-28** after a re-audit of the
-TypeScript/Go/Rust/Python generators, schema definitions, test suites, and a
+TypeScript/Go/Rust/Python/Zig generators, schema definitions, test suites, and a
 round of real-world pressure-testing against Apache Parquet/Thrift.
 
 > Source now lives under `packages/binschema/src/` (monorepo layout). Paths in
@@ -24,7 +24,7 @@ The type system is remarkably complete for binary format definition:
 - **Structural**: conditional fields, optional fields, back-references, padding/alignment, enums
 - **Random-access**: position fields with seekable parsing
 - **Streaming**: async-generator decode wrappers (`decode{Type}Stream`) for chunked inputs
-- **Generators**: TypeScript (reference), Go, Rust, Python
+- **Generators**: TypeScript (reference), Go, Rust, Python, Zig
 - **Real-world formats modeled**: DNS, ZIP, PNG, MIDI, PCF fonts, Kerberos
 
 ## Genuinely Missing Features
@@ -159,24 +159,28 @@ LEB128/EBML-sized fields can't calculate sizes.
 
 ## Implementation Status Across Generators
 
-| Feature | TypeScript | Go | Rust | Python |
-|---------|-----------|-----|------|--------|
-| Field-based discriminators (decode) | ✅ | ✅ | ✅ | ✅ |
-| Field-based discriminators (encode) | ✅ | ❌ Throws | ❌ Throws | ✅ |
-| Inline (in-array) field-based discriminators | ❌ Throws | ❌ | ❌ | ❌ |
-| Corresponding selectors in CRC32 | ✅ | ✅ | ✅ | ⚠️ Partial |
-| Inline choice in sequences | ✅ | ❌ | ✅ | ✅ |
-| Parent field references (../) | ✅ | ✅ | ✅ | ⚠️ Partial |
-| Context threading | ✅ Full | ⚠️ Partial | ✅ Full | ⚠️ Partial |
-| String type aliases | ✅ | ✅ | ✅ | ✅ |
-| Overall test pass rate | high* | high* | 100% (756/756) | ~93% (730/785) |
+| Feature | TypeScript | Go | Rust | Python | Zig |
+|---------|-----------|-----|------|--------|-----|
+| Field-based discriminators (decode) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Field-based discriminators (encode) | ✅ | ❌ Throws | ❌ Throws | ✅ | ✅ |
+| Inline (in-array) field-based discriminators | ❌ Throws | ❌ | ❌ | ❌ | ❌ |
+| Corresponding selectors in CRC32 | ✅ | ✅ | ✅ | ⚠️ Partial | ✅ |
+| Inline choice in sequences | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Parent field references (../) | ✅ | ✅ | ✅ | ⚠️ Partial | ✅ |
+| Context threading | ✅ Full | ⚠️ Partial | ✅ Full | ⚠️ Partial | ✅ Full |
+| String type aliases | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Overall test pass rate | high* | high* | 100% (817/817) | ~93% (730/785) | 100% (833/833) |
 
 \* TypeScript and Go were not freshly re-measured in this audit; both were
 near-perfect at last measurement and no regressions are documented. Rust pass
 rate jumped from ~70% (March) to 100%. Python is the newest generator and its
 remaining failures are tracked in `CURRENT_TASK.md` (encode-time context
 threading for selectors, corresponding correlations, multi-level parent refs,
-and DNS/ZIP/PCF integration).
+and DNS/ZIP/PCF integration). **Zig** was added as the fifth generator and
+passes the full shared corpus (354/354 codegen suites, 833/833 cases) with
+two-pass content-first encoding and full context threading from day one — see
+`docs/ADDING_A_LANGUAGE.md`. Its per-feature ✅ marks above are each backed by
+passing corpus suites (discriminator/choice/parent/CRC32 suites all green).
 
 ## Known Bugs
 

@@ -6,6 +6,8 @@ import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-go';
 import 'prismjs/components/prism-rust';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-zig';
 
 import { EditorView, basicSetup } from 'codemirror';
 import { json } from '@codemirror/lang-json';
@@ -17,6 +19,7 @@ import {
   generateGo,
   generateRust,
   generatePython,
+  generateZig,
   BinarySchemaSchema,
   validateSchema,
 } from 'binschema';
@@ -190,6 +193,17 @@ function generate() {
     setOutput('python', pythonOutputs.join('\n\n'));
   } catch (err) {
     setOutput('python', `# Generation error: ${err.message}`);
+  }
+
+  // Zig
+  try {
+    const zigOutputs = typeNames.map(name => {
+      const result = generateZig(schema, name);
+      return typeof result === 'string' ? result : result.code;
+    });
+    setOutput('zig', zigOutputs.join('\n\n'));
+  } catch (err) {
+    setOutput('zig', `// Generation error: ${err.message}`);
   }
 }
 

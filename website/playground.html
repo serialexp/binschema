@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BinSchema Playground - Interactive Binary Schema Editor</title>
-  <meta name="description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, and Rust code." />
+  <meta name="description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, Rust, and Zig code." />
 
   <!-- OpenGraph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="BinSchema Playground" />
-  <meta property="og:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, and Rust code." />
+  <meta property="og:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, Rust, and Zig code." />
   <meta property="og:url" content="https://binschema.net/playground.html" />
   <meta property="og:image" content="https://binschema.net/og-image.png" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="BinSchema Playground" />
-  <meta name="twitter:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, and Rust code." />
+  <meta name="twitter:description" content="Try BinSchema in your browser. Write a binary protocol schema and instantly see generated TypeScript, Python, Go, Rust, and Zig code." />
   <meta name="twitter:image" content="https://binschema.net/og-image.png" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -54,6 +54,7 @@
           <button class="tab-btn" data-tab="python">Python</button>
           <button class="tab-btn" data-tab="go">Go</button>
           <button class="tab-btn" data-tab="rust">Rust</button>
+          <button class="tab-btn" data-tab="zig">Zig</button>
         </div>
         <div class="output-panels">
           <div class="tab-panel" data-tab="typescript">
@@ -67,6 +68,9 @@
           </div>
           <div class="tab-panel" data-tab="rust" hidden>
             <pre><code id="output-rust" class="language-rust"></code></pre>
+          </div>
+          <div class="tab-panel" data-tab="zig" hidden>
+            <pre><code id="output-zig" class="language-zig"></code></pre>
           </div>
         </div>
       </div>

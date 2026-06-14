@@ -4,19 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BinSchema - Binary Protocol Schema Generator</title>
-  <meta name="description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, and Rust. Bit-level precision with computed fields, CRC32 checksums, and more." />
+  <meta name="description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, Rust, and Zig. Bit-level precision with computed fields, CRC32 checksums, and more." />
 
   <!-- OpenGraph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="BinSchema - Binary Protocol Schema Generator" />
-  <meta property="og:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, and Rust." />
+  <meta property="og:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, Rust, and Zig." />
   <meta property="og:url" content="https://binschema.net/" />
   <meta property="og:image" content="https://binschema.net/og-image.png" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="BinSchema - Binary Protocol Schema Generator" />
-  <meta name="twitter:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, and Rust." />
+  <meta name="twitter:description" content="Define binary protocols once, generate type-safe encoders, decoders, and documentation for TypeScript, Python, Go, Rust, and Zig." />
   <meta name="twitter:image" content="https://binschema.net/og-image.png" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -31,7 +31,7 @@
       <div class="container hero-content">
         <div>
           <h1>Define Binary Protocols Once, Generate Everywhere</h1>
-          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript, Python, Go, and Rust.</p>
+          <p>BinSchema turns declarative, bit-precise schemas into production-ready encoders, decoders, and documentation for TypeScript, Python, Go, Rust, and Zig.</p>
           <div class="cta-group">
             <a class="cta primary" href="#installation">Get Started</a>
             <a class="cta secondary" href="/playground.html">See It in Action</a>
@@ -58,7 +58,7 @@
           </div>
           <div class="feature">
             <h3>Multi-Language Output</h3>
-            <p>Generate type-safe encoders and decoders for TypeScript, Python, Go, and Rust from a single schema definition.</p>
+            <p>Generate type-safe encoders and decoders for TypeScript, Python, Go, Rust, and Zig from a single schema definition.</p>
           </div>
           <div class="feature">
             <h3>IDE Support</h3>
@@ -84,7 +84,7 @@
               <li>You're building a <strong>real-time protocol</strong> (games, chat, telemetry) over WebSockets or TCP and every byte counts</li>
               <li>You need <strong>both encoding and decoding</strong> &mdash; client and server, possibly in different languages</li>
               <li>Your format uses bit-packed flags, variable-length fields, computed lengths, or CRC checksums</li>
-              <li>You want <strong>one schema, multiple languages</strong> &mdash; TypeScript frontend, Python tooling, Go backend, Rust embedded</li>
+              <li>You want <strong>one schema, multiple languages</strong> &mdash; TypeScript frontend, Python tooling, Go backend, Rust or Zig on the metal</li>
             </ul>
           </div>
           <div class="comparison-card alt-tool">
@@ -175,6 +175,9 @@ binschema generate --language rust --schema protocol.bschema.json --out ./genera
 # Generate Python code
 binschema generate --language python --schema protocol.bschema.json --out ./generated
 
+# Generate Zig code
+binschema generate --language zig --schema protocol.bschema.json --out ./generated
+
 # Generate HTML documentation
 binschema docs build --schema protocol.bschema.json --out docs.html</code></pre>
           </div>
@@ -207,7 +210,7 @@ const goCode = generateGo(schema);</code></pre>
     <section id="usage-examples" class="content-section">
       <div class="container">
         <h2>See It in Action</h2>
-        <p class="section-lead">Define your schema once, generate type-safe encoders and decoders for TypeScript, Python, Go, and Rust.</p>
+        <p class="section-lead">Define your schema once, generate type-safe encoders and decoders for TypeScript, Python, Go, Rust, and Zig.</p>
 
         <div class="example-step">
           <h3>1. Define Your Schema</h3>
@@ -236,6 +239,7 @@ const goCode = generateGo(schema);</code></pre>
               <button class="tab-btn" data-tab="python">Python</button>
               <button class="tab-btn" data-tab="go">Go</button>
               <button class="tab-btn" data-tab="rust">Rust</button>
+              <button class="tab-btn" data-tab="zig">Zig</button>
             </div>
 
             <div class="tab-panel" data-tab="typescript">
@@ -533,6 +537,66 @@ impl SensorReadingOutput {
 }</code></pre>
               </details>
             </div>
+
+            <div class="tab-panel" data-tab="zig" hidden>
+              <pre><code class="language-zig">// Generated struct with encode/decode methods
+
+pub const SensorReading = struct {
+    device_id: u16,
+    temperature: f32,
+    humidity: u8,
+    timestamp: u32,
+
+    pub fn encode(self: SensorReading, allocator: std.mem.Allocator) binschema.Error![]u8 { ... }
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) binschema.Error!SensorReading { ... }
+};</code></pre>
+              <details>
+                <summary>View full generated code</summary>
+                <pre><code class="language-zig">// Generated by BinSchema — do not edit manually
+const std = @import("std");
+const binschema = @import("binschema");
+
+pub const SensorReading = struct {
+    device_id: u16,
+    temperature: f32,
+    humidity: u8,
+    timestamp: u32,
+
+    pub fn encode(self: SensorReading, allocator: std.mem.Allocator) binschema.Error![]u8 {
+        var enc = binschema.BitStreamEncoder.init(allocator, .msb_first);
+        errdefer enc.deinit();
+        var ctx = binschema.EncodeContext.init(allocator);
+        defer ctx.deinit();
+        try self.encodeInto(&amp;enc, &amp;ctx);
+        return enc.finish();
+    }
+
+    pub fn encodeInto(self: SensorReading, enc: *binschema.BitStreamEncoder, ctx: *binschema.EncodeContext) binschema.Error!void {
+        _ = ctx;
+        try enc.writeUint16(self.device_id, .big_endian);
+        try enc.writeFloat32(self.temperature, .big_endian);
+        try enc.writeUint8(self.humidity);
+        try enc.writeUint32(self.timestamp, .big_endian);
+    }
+
+    pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) binschema.Error!SensorReading {
+        var dec = binschema.BitStreamDecoder.init(bytes, .msb_first);
+        return decodeWith(allocator, &amp;dec, null);
+    }
+
+    pub fn decodeWith(allocator: std.mem.Allocator, dec: *binschema.BitStreamDecoder, root: ?*anyopaque) binschema.Error!SensorReading {
+        _ = allocator;
+        _ = root;
+        var result: SensorReading = undefined;
+        result.device_id = try dec.readUint16(.big_endian);
+        result.temperature = try dec.readFloat32(.big_endian);
+        result.humidity = try dec.readUint8();
+        result.timestamp = try dec.readUint32(.big_endian);
+        return result;
+    }
+};</code></pre>
+              </details>
+            </div>
           </div>
         </div>
 
@@ -544,6 +608,7 @@ impl SensorReadingOutput {
               <button class="tab-btn" data-tab="python">Python</button>
               <button class="tab-btn" data-tab="go">Go</button>
               <button class="tab-btn" data-tab="rust">Rust</button>
+              <button class="tab-btn" data-tab="zig">Zig</button>
             </div>
 
             <div class="tab-panel" data-tab="typescript">
@@ -634,6 +699,31 @@ fn main() -&gt; Result&lt;()&gt; {
     println!("{}", decoded.temperature); // 23.5
     println!("{}", decoded.device_id);   // 42
     Ok(())
+}</code></pre>
+            </div>
+
+            <div class="tab-panel" data-tab="zig" hidden>
+              <pre><code class="language-zig">const std = @import("std");
+const SensorReading = @import("generated.zig").SensorReading;
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // Encode a sensor reading to binary
+    const bytes = try SensorReading.encode(.{
+        .device_id = 42,
+        .temperature = 23.5,
+        .humidity = 65,
+        .timestamp = 1_700_000_000,
+    }, allocator);
+    defer allocator.free(bytes);
+    // bytes: []u8 — ready to send over the wire
+
+    // Decode binary back to a typed struct
+    const reading = try SensorReading.decode(allocator, bytes);
+    std.debug.print("{d}\n", .{reading.temperature}); // 23.5
+    std.debug.print("{d}\n", .{reading.device_id});   // 42
 }</code></pre>
             </div>
           </div>

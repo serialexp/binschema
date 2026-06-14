@@ -23,7 +23,7 @@ function main() {
     $schema: "http://json-schema.org/draft-07/schema#",
     $id: "https://binschema.net/schema.json",
     title: "BinSchema",
-    description: "Binary protocol schema definition for BinSchema. Define binary formats with bit-level precision and generate parsers for TypeScript, Go, and Rust.",
+    description: "Binary protocol schema definition for BinSchema. Define binary formats with bit-level precision and generate parsers for TypeScript, Python, Go, Rust, and Zig.",
     ...jsonSchema,
   };
 
