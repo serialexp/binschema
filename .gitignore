@@ -18,7 +18,13 @@ kerberos-rfc*.txt
 /type-reference.html
 /packages/binschema/type-reference.html
 
-# Generated website files (rebuilt by website build)
+# Generated website files (rebuilt by `prepare-docs.js` on every dev/build)
+# public/docs: README.md copied from root, type-reference.html generated
+# public/examples: schema JSON copied from /examples, *-docs.html generated
+# (.gitkeep in each dir stays tracked so the directories persist)
+website/public/docs/*.md
+website/public/docs/*.html
+website/public/examples/*.json
 website/public/examples/*-docs.html
 website/src/examples/*.generated.*
 
