@@ -34,6 +34,60 @@ suite you make pass beyond primitives MUST include **≥1 `from_after_field`,
 three don't pass early, the architecture is wrong — stop and fix the
 machinery, don't pile on coverage.
 
+### The commit-1 machinery manifest (what "two-pass + context threading" *concretely* is)
+
+"Thread context" and "go two-pass" are easy to nod along to and easy to
+under-build. Below is the **exact, enumerable** set of state and encoder/decoder
+API that must exist before feature work — verified present (under different
+names) in all five existing runtimes (TS/Go/Rust/Python/Zig). Every item is here
+because a *later* feature can't be retrofitted onto a generator that skipped it.
+Stand all of it up empty in Phase 1; most slots stay unused until the phase that
+needs them.
+
+**Encoder — two-pass core:**
+- **Emit-to-buffer.** Every struct encode produces its own `bytes`; the parent
+  writes that buffer in. Never write straight to a shared forward stream — you
+  must be able to "encode the tail, then prepend its length."
+- **Placeholder / patch-by-offset.** Reserve N zero bytes → get a handle; later
+  `patch(handle, value, endianness)` overwrites by offset. Explicit API in
+  Zig/Python (`placeholderU32`/`patchUint32`); inlined byte-array mutation in
+  TS/Go/Rust — but the *capability* is non-negotiable.
+- **Temp-encoder measure-then-splice.** Encode a not-yet-written region into a
+  scratch encoder, measure its byte length, write the (often `varlength`) length,
+  splice the bytes. This is a *distinct* capability from placeholder/patch and
+  both are needed.
+
+**Encoder — context state (the irreducible fields, common to all five langs):**
+- `parents` — ancestor struct field **values**, for `../field`. (Resolve by
+  captured **frame pointer**, never a relative level index — indices are invalid
+  after the frame pops. See `POSITION_TRACKING_ARCHITECTURE.md`.)
+- `positions` — recorded byte offsets keyed by (array, type), for
+  `first/last/corresponding` `position_of`/`length_of`/`crc32_of`.
+- `arrayIterations` + per-array `typeIndices` — occurrence counters, for
+  `corresponding<T>`.
+- `current_arrays` — a **stack** of the active array names, so occurrence is
+  counted in the **referencer's own innermost array** (unifies ZIP same-array
+  with sibling-array `../../` correlation; see pitfall #2).
+- `deferred_patches` + `resolveDeferredPatches(encoder)` — the queue of
+  position/length/crc32/sum patches resolved *after* the encode pass.
+- `compression_dict` (+ an absolute base offset) — `back_reference` / DNS-label
+  offsets, shared across nested encoders.
+- A frame **stack** plus (Zig's insight) an append-only `all_frames` history, so
+  an array loop can capture each element's frame for selector sub-field patches.
+
+**Decoder — threaded root, from commit 1 even while unused:**
+- A `_root` / context pointer **passed into every nested decode call** and seeded
+  to `self` at the top-level entry (`if root is None: root = result`). Decoders
+  are forward-only, but `../`, `_root.a.b`, bare ancestor-scope `length_field`/
+  `count_field`, and `instances` seeking all resolve through it. Retrofitting this
+  means touching every decode path you already wrote — so the param exists from
+  the first struct, even before anything reads it.
+- `seek` + `push/pop` position on the decoder, for `instances` (random access)
+  and `back_reference` following.
+
+If a slot above is missing when you reach the feature that needs it, you are in
+the rewrite that this whole document exists to prevent.
+
 ## The tests-first contract (CLAUDE.md, mandatory)
 
 - **TypeScript is the spec.** `packages/binschema/src/generators/typescript/`
@@ -79,10 +133,47 @@ changes. **Note:** the export step writes JSON but does not prune orphans — if
 you delete a test suite, delete its stale `.generated/tests-json/**/<name>.json`
 by hand or the harness keeps "failing" the ghost.
 
+## Feature → machinery dependency matrix (the "why" behind the order)
+
+The standard feature order is not a taste call — it falls out of which
+commit-1 machinery each feature consumes. Build the machinery first (Phase 1),
+then features in the order their dependencies become available. Tiers are
+cumulative: a tier may also use everything below it. The right-hand column maps
+to the phase that lands it.
+
+| Tier | Machinery it needs (beyond the previous tier) | Features unlocked | Phase |
+|---|---|---|---|
+| **0** | *None* — a bare forward emitter would do, **but still emit-to-buffer + thread the (unused) decode root**, so the next tiers aren't a rewrite | primitives/scalars, bit fields, `bitfield` groups, `enum` aliases, `const`, `padding`/`align_to`, `field_id_delta` | 2 (enum/bitfield: 4) |
+| **1** | emit-to-buffer used in earnest (nested buffers) | strings (all framings), bytes, nested struct refs, byte-aligned arrays (fixed/eof/null_terminated), `optional` | 2 |
+| **2** | `parents` threading (encode) + `_root`/context param (decode) | field-referenced arrays/strings, **conditional** fields, `count_of`/`length_of` (simple sibling), `../field` parent refs, `_root.a.b` refs, bare ancestor-scope field refs | 2–3a/3b |
+| **3** | placeholder/patch **and** temp-encoder measure-then-splice | `length_prefixed`/`length_prefixed_items` (per-item framing), **`from_after_field`**, `varlength` ints + varlength computed `length_of`/`count_of`, `length_of` over a struct/union target, `sum_of_sizes`/`sum_of_type_sizes`, `byte_length_prefixed` arrays, `compressed` regions, `computed_count` arrays | 3c–3d, 5 |
+| **4** | `positions` recording + `deferred_patches` selector ops + `arrayIterations`/`typeIndices` + `current_arrays` stack | `position_of`/`length_of`/`crc32_of` with `first<T>`/`last<T>`/`corresponding<T>` selectors | 3e (homogeneous), 4 (DU-flavored) |
+| **5** | `discriminated_union`/`choice` runtime (tagged union) | `discriminated_union`, `choice`, `byte_budget`, DU/choice-flavored selectors, non-struct DU variants | 4 |
+| **6** | `compression_dict` + absolute base offset + decode `seek` | `back_reference` / DNS-label compression, `variant_terminated`/`terminal_variants` framing | 5 |
+| **7** | decode `seek`/`push`/`pop` + threaded root | `instances` (random access), streaming, array transforms (`delta`) | 5 |
+
+**Non-obvious dependencies worth calling out (each cost real debugging once):**
+- **`first<T>`/`last<T>` are NOT cheap.** They need an encode-time **position
+  pre-pass** that records every matching element's offset *before* any byte is
+  written (TS walks the fields up front; the runtime stores it in `positions`).
+  This is tier 4 machinery, not a tier-0 "just read an index."
+- **`corresponding<T>` needs occurrence captured at ENCODE time**, stamped onto
+  the deferred patch — reading the aggregate count back at resolution collapses
+  every referencer onto the same target (pitfall #1).
+- **Decode-side root threading is real**, even though "decoders are forward-only."
+  `../`, `_root.`, ancestor field refs, and `instances` all resolve through it,
+  so the constructor param exists from the first struct (manifest above).
+- **A homogeneous `[]T` selector is not a degenerate `choice`** — the encode-path
+  value shape differs, so tier-4 features must be tested on *both* shapes
+  (pitfall #4). This is why **3e (homogeneous selectors) lands before Phase 4**:
+  the selector runtime is testable on plain arrays without any union.
+
 ## The phase order (and why each precedes the next)
 
 The ordering is driven by **dependency**, not difficulty. A feature is placed
 right after everything it needs to be *testable end-to-end* against the corpus.
+The matrix above is the dependency justification; the phases below are the
+operational sequencing (what to make pass, and the verification cadence).
 
 ### Phase 1 — Skeleton + machinery (NO features)
 Runtime (bitstream w/ placeholder/patch, context, errors), the 8-file module
