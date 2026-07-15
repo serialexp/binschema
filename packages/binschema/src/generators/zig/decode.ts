@@ -413,6 +413,8 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     lines.push(...emitLengthPrefixDecode(field.length_type || "uint8", lenVar, ctx, indent));
     const buf = uniqueVar("_buf");
     lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, @as(usize, ${lenVar}));`);
+    // Free the slice if any element decode below fails (e.g. a truncated buffer).
+    lines.push(`${indent}errdefer ${ALLOC}.free(${buf});`);
     const ilen = uniqueVar("_ilen");
     lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
     lines.push(...emitLengthPrefixDecode(field.item_length_type || "uint32", ilen, ctx, indent + "    "));
@@ -545,6 +547,8 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     lines.push(`${indent}var ${cnt}: usize = (@as(usize, ${hdr}) >> 4) & 0x0F;`);
     lines.push(`${indent}if (${cnt} == 0x0F) ${cnt} = @intCast(try ${DEC}.readVarlengthLeb128());`);
     lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, ${cnt});`);
+    // Free the slice if any element decode below fails (e.g. a truncated buffer).
+    lines.push(`${indent}errdefer ${ALLOC}.free(${buf});`);
     lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
     lines.push(...emitDecodeValue(itemField, ctx, `${buf}[${i}]`, structVar, indent + "    "));
     lines.push(`${indent}}`);
@@ -577,6 +581,8 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
     const it = uniqueVar("_dit");
     lines.push(`${indent}var ${runVar}: ${itemType} = 0;`);
     lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, ${countExpr});`);
+    // Free the slice if any element decode below fails (e.g. a truncated buffer).
+    lines.push(`${indent}errdefer ${ALLOC}.free(${buf});`);
     lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
     lines.push(`${indent}    var ${it}: ${itemType} = undefined;`);
     lines.push(...emitDecodeValue(itemField, ctx, it, structVar, indent + "    "));
@@ -588,6 +594,8 @@ function emitArrayDecode(field: any, ctx: EmitCtx, lhs: string, structVar: strin
   }
 
   lines.push(`${indent}const ${buf} = try ${ALLOC}.alloc(${itemType}, ${countExpr});`);
+  // Free the slice if any element decode below fails (e.g. a truncated buffer).
+  lines.push(`${indent}errdefer ${ALLOC}.free(${buf});`);
   lines.push(`${indent}for (0..${buf}.len) |${i}| {`);
   lines.push(...emitDecodeValue(itemField, ctx, `${buf}[${i}]`, structVar, indent + "    "));
   lines.push(`${indent}}`);
