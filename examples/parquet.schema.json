@@ -1,0 +1,101 @@
+{
+  "meta": {
+    "title": "Apache Parquet (container + page framing; Thrift metadata partially modeled)",
+    "version": "parquet-format 2.x / parquet.thrift",
+    "description": "Models the Apache Parquet file format in BinSchema. The OUTER CONTAINER and PAGE FRAMING map cleanly onto BinSchema's layout primitives (const magics, position_of offsets, length_of/crc32_of computed fields, opaque field-referenced payloads) — these are real and generate working codecs. The THRIFT TCompactProtocol metadata (page headers + footer) is only PARTIALLY expressible: BinSchema can emit the per-field header bytes as compile-time constants when the struct shape is fixed and fields are written in ascending field-id order, but it lacks two primitives Thrift needs, which are STUBBED below and called out explicitly:\n\n  STUB-1 (zigzag varint): Thrift encodes i16/i32/i64 as zigzag-then-LEB128. BinSchema's `varlength` has `leb128` but no signed/zigzag variant (see GAPS.md §4). We use `leb128`, which carries the correct VALUE but is NOT byte-identical to Thrift for the zigzag transform. Every such field is marked STUB-1.\n\n  STUB-2 (packed collection header): Thrift list/map headers pack `(count << 4) | element_type` into one byte with a 0xF escape for count>=15. That is a data-dependent shift-or with a conditional escape; BinSchema's `computed` system cannot express it. The footer's `schema` and `row_groups` lists therefore cannot be faithfully laid out; the footer BODY is modeled as one opaque `binary` blob (STUB-2) rather than field-by-field.\n\n  STUB-3 (compression/encoding): page bodies are RLE/dictionary/bit-packed then zstd/snappy-compressed. Those are algorithms, not layouts — BinSchema models the page body as an opaque length-prefixed byte array, exactly as it models ZIP's compressed `body`. This is by design, not a deficiency."
+  },
+  "config": {
+    "endianness": "little_endian",
+    "bit_order": "msb_first"
+  },
+  "types": {
+    "DataPageHeaderV1": {
+      "description": "Thrift DataPageHeader (parquet.thrift:678), nested inside PageHeader field 5. Fixed shape: all four required i32 fields, written in ascending field-id order, so each Thrift field-header byte is a compile-time constant 0x15 = (delta=1 << 4) | (type=I32=5). Terminated by a 0x00 stop byte.",
+      "sequence": [
+        { "name": "fh_num_values", "type": "uint8", "const": 21, "description": "Thrift field header: 0x15 = (delta 1 << 4) | I32(5). Field id 1 = num_values." },
+        { "name": "num_values", "type": "varlength", "encoding": "leb128", "description": "STUB-1: Thrift zigzag-i32; we emit LEB128 (value-correct, not byte-identical)." },
+        { "name": "fh_encoding", "type": "uint8", "const": 21, "description": "Thrift field header: 0x15. Field id 2 = encoding." },
+        { "name": "encoding", "type": "varlength", "encoding": "leb128", "description": "STUB-1: Encoding enum (PLAIN=0, RLE_DICTIONARY=8, ...) as zigzag-i32; emitted LEB128." },
+        { "name": "fh_def_level_encoding", "type": "uint8", "const": 21, "description": "Thrift field header: 0x15. Field id 3 = definition_level_encoding." },
+        { "name": "definition_level_encoding", "type": "varlength", "encoding": "leb128", "description": "STUB-1." },
+        { "name": "fh_rep_level_encoding", "type": "uint8", "const": 21, "description": "Thrift field header: 0x15. Field id 4 = repetition_level_encoding." },
+        { "name": "repetition_level_encoding", "type": "varlength", "encoding": "leb128", "description": "STUB-1." },
+        { "name": "stop", "type": "uint8", "const": 0, "description": "Thrift struct stop byte." }
+      ]
+    },
+    "PageHeader": {
+      "description": "Thrift PageHeader (parquet.thrift:809). Models a V1 data page: required type/uncompressed_page_size/compressed_page_size (ids 1-3, I32) followed by the nested data_page_header struct (id 5, type STRUCT=12). The id 3→5 jump makes the nested-struct field header 0x2C = (delta 2 << 4) | STRUCT(12). crc (id 4, optional) is omitted, which is exactly why delta is 2.",
+      "sequence": [
+        { "name": "fh_type", "type": "uint8", "const": 21, "description": "0x15 = (delta 1 << 4) | I32(5). Field id 1 = type (PageType: DATA_PAGE=0)." },
+        { "name": "page_type", "type": "varlength", "encoding": "leb128", "description": "STUB-1: PageType enum as zigzag-i32." },
+        { "name": "fh_uncompressed", "type": "uint8", "const": 21, "description": "0x15. Field id 2 = uncompressed_page_size." },
+        { "name": "uncompressed_page_size", "type": "varlength", "encoding": "leb128", "description": "STUB-1. Pre-compression size — not derivable from the container (the uncompressed bytes are not stored), so the writer must supply it; left as a plain LEB128 input value." },
+        { "name": "fh_compressed", "type": "uint8", "const": 21, "description": "0x15. Field id 3 = compressed_page_size." },
+        {
+          "name": "compressed_page_size",
+          "type": "varlength",
+          "encoding": "leb128",
+          "description": "STUB-1 for the wire form, but the VALUE is computed faithfully by BinSchema: the on-disk length of the page body. This is the real win — length_of works.",
+          "computed": { "type": "length_of", "target": "../body" }
+        },
+        { "name": "fh_data_page_header", "type": "uint8", "const": 44, "description": "0x2C = (delta 2 << 4) | STRUCT(12). Field id 5 = data_page_header (id 4 crc skipped)." },
+        { "name": "data_page_header", "type": "DataPageHeaderV1", "description": "Nested Thrift struct (real: BinSchema composes user types)." },
+        { "name": "stop", "type": "uint8", "const": 0, "description": "Thrift struct stop byte for PageHeader." }
+      ]
+    },
+    "Page": {
+      "description": "One page = its Thrift PageHeader followed by the page body. The body is the rep-levels + def-levels + encoded values, optionally dictionary/RLE/bit-packed and then zstd/snappy-compressed (STUB-3): opaque to the container, modeled as a field-referenced byte array whose length is the header's compressed_page_size — identical in spirit to ZIP's compressed `body`.",
+      "sequence": [
+        { "name": "header", "type": "PageHeader", "description": "Thrift page header (see PageHeader)." },
+        {
+          "name": "body",
+          "type": "array",
+          "kind": "field_referenced",
+          "length_field": "header.compressed_page_size",
+          "items": { "type": "uint8" },
+          "description": "STUB-3: opaque compressed+encoded page payload. BinSchema lays out the container; the codec/compressor produces these bytes externally."
+        }
+      ]
+    },
+    "ColumnChunk": {
+      "description": "A column chunk = its pages written back to back. Modeled here as a single data page for tractability (real Parquet may prepend a dictionary page and append more data pages — all the same Page shape). Real: BinSchema arrays compose this trivially; the count would come from the footer, which is STUB-2 below.",
+      "sequence": [
+        { "name": "page", "type": "Page", "description": "The (only, in this model) data page of the chunk." }
+      ]
+    },
+    "FooterBody": {
+      "description": "STUB-2: the Thrift TCompactProtocol-encoded FileMetaData body (parquet.thrift:1364). FileMetaData contains list<SchemaElement> and list<RowGroup>, whose Thrift encoding begins with a packed collection header byte = (count << 4) | element_type (with a 0xF escape for count>=15). That is a data-dependent shift-or with a conditional escape, which BinSchema's `computed` cannot express. So unlike the page headers — whose shape is fixed and whose field-header bytes are therefore compile-time constants — the footer's variable-length lists cannot be laid out field-by-field. We reserve the whole footer body as one opaque blob the writer supplies; BinSchema still frames it (offset, length, trailing magic) faithfully.",
+      "sequence": [
+        {
+          "name": "thrift_filemetadata",
+          "type": "array",
+          "kind": "eof_terminated",
+          "items": { "type": "uint8" },
+          "description": "STUB-2: opaque TCompact-encoded FileMetaData. (eof_terminated only as a placeholder; in the real file its length is pinned by footer_len below.)"
+        }
+      ]
+    },
+    "ParquetFile": {
+      "description": "Top-level Parquet layout (parquet-format README): leading magic, column chunks (each a sequence of pages), the Thrift FileMetaData footer, a 4-byte little-endian footer length, and the trailing magic. The framing — magics, the footer length via length_of, and (in a fuller model) per-chunk data_page_offset via position_of — is all REAL BinSchema. Only the footer's internal Thrift list layout is stubbed (STUB-2).",
+      "sequence": [
+        { "name": "magic_head", "type": "uint32", "const": 827474256, "description": "'PAR1' (0x50 0x41 0x52 0x31) read as little-endian u32 = 0x31524150." },
+        {
+          "name": "chunks",
+          "type": "array",
+          "kind": "fixed",
+          "length": 3,
+          "items": { "type": "ColumnChunk" },
+          "description": "One ColumnChunk per column. Modeled as scry's 3 metrics columns (fingerprint, ts, value). Real: BinSchema fixed array; the count in a fuller model is footer-driven."
+        },
+        { "name": "footer", "type": "FooterBody", "description": "Thrift FileMetaData (body stubbed — STUB-2)." },
+        {
+          "name": "footer_len",
+          "type": "uint32",
+          "description": "REAL: 4-byte little-endian length of the footer in bytes, computed by BinSchema.",
+          "computed": { "type": "length_of", "target": "footer" }
+        },
+        { "name": "magic_tail", "type": "uint32", "const": 827474256, "description": "Trailing 'PAR1'. Readers seek here, back up 4 bytes for footer_len, then back footer_len bytes to parse the footer." }
+      ]
+    }
+  }
+}

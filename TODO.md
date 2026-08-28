@@ -46,6 +46,57 @@ Completed historical work lives in `docs/finished/COMPLETED_TODO_ITEMS.md`.
   schema validator already permits these cycles (`findCircularDependency`
   skips weak edges through DU/choice/optional/array/conditional).
 
+## Rust generator: `From<Input> for Output` Shape 2 refactor
+
+**Status: complete for the cases the test corpus currently exercises.**
+Rust suite: 320/320 passing, 756/756 tests. The `via_into == decoded`
+assertion in `rust/tests/compile_batch.rs` runs unconditionally for
+every Input/Output-split type.
+
+What `generateComputeComputedValue` (in
+`packages/binschema/src/generators/rust.ts`) now populates from Input
+data when constructing Output via `.into()`:
+
+- `length_of` with simple `target` — primitive `.len()` for strings,
+  array `.len()`, composite `encode().map(|b| b.len()).unwrap_or(0)`.
+- `length_of` with `from_after_field` — delegates to a generated
+  `_post_<fieldName>_bytes(&self)` helper on the Input impl. The
+  helper reuses the full encode pipeline (const/computed/conditional
+  field encoders, arrays of every kind, recursive `from_after_field`),
+  so the From path stays a one-line read.
+- `count_of` — `target.len()`.
+- `crc32_of` — `binschema_runtime::crc32(&path)` (uint8 array) or
+  composite via `encode().map(...).unwrap_or(0)`.
+- `position_of` — sum of byte sizes of preceding fields. Static for
+  primitives/const/computed/fixed-array-of-primitives; dynamic for
+  strings (`.len()` / `.chars().count()`) and composites
+  (`.encode().map(|b| b.len()).unwrap_or(0)`).
+
+Array-of-choice / array-of-discriminated_union fields whose variant
+payloads have an Input/Output split now emit a per-variant refresh in
+`generateArrayVariantRefresh` — each `Variant(p)` is replaced with
+`Variant(<Payload>Output::from(<Payload>Input::from(p)))` so the
+payload's computed fields are recomputed instead of inheriting the
+test constructor's placeholder zeros.
+
+Cases the helper still returns null for (will surface as failures
+when a test schema uses them):
+
+- `sum_of_type_sizes`, `sum_of_sizes` — require parent context.
+- Parent refs (`../foo`), selectors (`first<T>`, `last<T>`,
+  `corresponding<T>`) — require runtime context.
+- `optional<choice>` and direct (non-array) choice/DU fields with
+  split variants — same refresh story as the array case above; the
+  refresher only handles arrays today.
+- `varlength` field sizes inside `position_of` sums — value-dependent.
+- Array kinds beyond fixed-with-primitive-items inside `position_of`
+  sums — would need to encode the field to measure.
+
+The encode pipeline is unchanged; encode still does the compute work
+inline. Pure cleanup follow-up: refactor encode to call the shared
+compute helper / `_post_<field>_bytes` helper where applicable, so
+the compute logic has one source of truth.
+
 ## Codegen quality-of-life (TypeScript generator)
 
 - Extract inline anonymous types to named interfaces.
@@ -258,3 +309,12 @@ exercised across the corpus. Remaining phases:
 - [ ] Standing performance benchmarks
 - [ ] Streaming support
 - [ ] Complete documentation pass
+
+## Pre-existing: calculateSize array-item encoder name bug (noticed during size-calc fold work)
+For a `field_referenced` array of a primitive (`items: "uint8"`), the TS
+calculateSize emits `new undefinedEncoder()` for the item — the item type isn't
+resolved to a primitive size in the array branch of `generateFieldSizeCalculation`
+(typescript/size-calculation.ts). Likely only latent because such schemas don't
+hit a `from_after_field` calculateSize path in the test corpus. Unrelated to the
+fold change; left as-is. Worth a real fix + a TestSuite that calls calculateSize
+on a primitive-item array.
