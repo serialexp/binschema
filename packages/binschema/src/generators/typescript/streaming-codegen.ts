@@ -19,7 +19,7 @@
  * caller-facing async generator shape is identical.
  */
 import { BinarySchema, Endianness, TypeDef } from "../../schema/binary-schema.js";
-import { sanitizeTypeName } from "./type-utils.js";
+import { sanitizeTypeName, decoderClassName } from "./type-utils.js";
 import { getTypeFields } from "./type-utils.js";
 
 const PRIMITIVE_READ: Record<string, (endianness: Endianness) => string> = {
@@ -199,7 +199,7 @@ export function generateStreamingWrapper(
     // Named struct: instantiate the per-item decoder over the slice starting
     // at the outer decoder's current position, then advance the outer
     // decoder by the number of bytes the inner decoder consumed.
-    const itemDecoder = `${sanitizeTypeName(info.itemTypeName!)}Decoder`;
+    const itemDecoder = `${decoderClassName(info.itemTypeName!)}`;
     decodeItem = [
       `(d) => {`,
       `      const inner = new ${itemDecoder}(d.bytes.subarray(d.position));`,

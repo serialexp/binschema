@@ -9,6 +9,7 @@
  */
 
 import type { Field, BinarySchema, Endianness } from "../../schema/binary-schema.js";
+import { encoderClassName } from "./type-utils.js";
 
 /**
  * Calculate the encoded size of a DER/BER length value
@@ -113,7 +114,7 @@ export function generateFieldSizeCalculation(
             if (isCompositeType) {
               // For composite types, call the encoder's calculateSize
               const typeName = (targetFieldDef as any).type;
-              code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+              code += `${indent}  const ${fieldName}_encoder = new ${encoderClassName(typeName)}();\n`;
               code += `${indent}  let ${fieldName}_targetSize = ${fieldName}_encoder.calculateSize(${valuePrefix}${target});\n`;
               if (offset !== 0) {
                 code += `${indent}  ${fieldName}_targetSize += ${offset}; // Apply offset\n`;
@@ -293,7 +294,7 @@ export function generateFieldSizeCalculation(
         } else {
           code += `${indent}else {\n`;
         }
-        code += `${indent}  const _enc = new ${v.type}Encoder();\n`;
+        code += `${indent}  const _enc = new ${encoderClassName(v.type)}();\n`;
         code += `${indent}  size += _enc.calculateSize(${duPath}.value);\n`;
         code += `${indent}}\n`;
       }
@@ -324,7 +325,7 @@ export function generateFieldSizeCalculation(
       // Assume this is a custom composite type
       // Call its encoder's calculateSize method
       code += `${indent}// ${fieldName}: custom type (${fieldType})\n`;
-      code += `${indent}const ${fieldName}_encoder = new ${fieldType}Encoder();\n`;
+      code += `${indent}const ${fieldName}_encoder = new ${encoderClassName(fieldType)}();\n`;
       code += `${indent}size += ${fieldName}_encoder.calculateSize(${valuePrefix}${fieldName});\n`;
       break;
     }
@@ -416,7 +417,7 @@ function generateArrayLikeSizeCalc(
           const choice = choices[i];
           const ifKeyword = i === 0 ? "if" : "} else if";
           code += `${indent}  ${ifKeyword} (item.type === '${choice.type}') {\n`;
-          code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
+          code += `${indent}    const itemEncoder = new ${encoderClassName(choice.type)}();\n`;
           code += `${indent}    ${itemsSizeVar} += itemEncoder.calculateSize(item as ${choice.type});\n`;
         }
         if (choices.length > 0) {
@@ -431,7 +432,7 @@ function generateArrayLikeSizeCalc(
         if (isBuiltInType(itemTypeName)) {
           code += `${indent}  ${itemsSizeVar} += ${getBuiltInTypeSize(itemTypeName)};\n`;
         } else {
-          code += `${indent}  const ${fieldName}_itemEncoder = new ${itemTypeName}Encoder();\n`;
+          code += `${indent}  const ${fieldName}_itemEncoder = new ${encoderClassName(itemTypeName)}();\n`;
           code += `${indent}  ${itemsSizeVar} += ${fieldName}_itemEncoder.calculateSize(item);\n`;
         }
         code += `${indent}}\n`;
@@ -455,7 +456,7 @@ function generateArrayLikeSizeCalc(
         const choice = choices[i];
         const ifKeyword = i === 0 ? "if" : "} else if";
         code += `${indent}  ${ifKeyword} (item.type === '${choice.type}') {\n`;
-        code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
+        code += `${indent}    const itemEncoder = new ${encoderClassName(choice.type)}();\n`;
         code += `${indent}    size += itemEncoder.calculateSize(item as ${choice.type});\n`;
       }
       if (choices.length > 0) {
@@ -470,7 +471,7 @@ function generateArrayLikeSizeCalc(
       if (isBuiltInType(itemTypeName)) {
         code += `${indent}  size += ${getBuiltInTypeSize(itemTypeName)};\n`;
       } else {
-        code += `${indent}  const ${fieldName}_itemEncoder = new ${itemTypeName}Encoder();\n`;
+        code += `${indent}  const ${fieldName}_itemEncoder = new ${encoderClassName(itemTypeName)}();\n`;
         code += `${indent}  size += ${fieldName}_itemEncoder.calculateSize(item);\n`;
       }
       code += `${indent}}\n`;

@@ -1,5 +1,5 @@
 import { BinarySchema, TypeDef, Field, isEnumType } from "../../schema/binary-schema.js";
-import { getTypeFields, sanitizeTypeName } from "./type-utils.js";
+import { getTypeFields, sanitizeTypeName, valueTypeName } from "./type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./documentation.js";
 
 /**
@@ -23,8 +23,9 @@ function isInlineDiscriminatedUnion(instanceType: any): instanceType is { discri
 function generateInlineDiscriminatedUnionType(unionDef: { discriminator: any; variants: any[] }, schema: BinarySchema, useInputTypes: boolean): string {
   const variants: string[] = [];
   for (const variant of unionDef.variants) {
-    const suffix = useInputTypes ? "Input" : "Output";
-    const variantType = schema.types[variant.type] ? `${variant.type}${suffix}` : variant.type;
+    const variantType = schema.types[variant.type]
+      ? valueTypeName(variant.type, useInputTypes)
+      : variant.type;
     variants.push(`{ type: '${variant.type}'; value: ${variantType} }`);
   }
   return variants.join(" | ");
@@ -186,10 +187,9 @@ function resolveTypeReference(typeRef: string | undefined, schema: BinarySchema,
   if (schema.types[typeRef]) {
     // Enum types don't have Input/Output variants
     if (isEnumType(schema.types[typeRef])) {
-      return typeRef;
+      return sanitizeTypeName(typeRef);
     }
-    const suffix = useInputTypes ? "Input" : "Output";
-    return `${typeRef}${suffix}`;
+    return valueTypeName(typeRef, useInputTypes);
   }
 
   // Unknown type - return as-is

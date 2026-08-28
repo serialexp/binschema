@@ -4,7 +4,7 @@
  */
 
 import { BinarySchema, Field, Endianness } from "../../schema/binary-schema.js";
-import { getTypeFields } from "./type-utils.js";
+import { getTypeFields, encoderClassName } from "./type-utils.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
 import { generateFieldSizeCalculation } from "./size-calculation.js";
 
@@ -32,7 +32,7 @@ function generateDiscriminatedUnionSizeDispatch(
       // Fallback variant (no when condition) — use else
       code += `${indent}else {\n`;
     }
-    code += `${indent}  const _enc = new ${variants[i].type}Encoder();\n`;
+    code += `${indent}  const _enc = new ${encoderClassName(variants[i].type)}();\n`;
     code += `${indent}  ${computedVar} = _enc.calculateSize(${targetPath}.value);\n`;
     code += `${indent}}`;
     if (i < variants.length - 1) {
@@ -184,7 +184,7 @@ function generateFieldEncodingToBytesCore(
     const typeName = fieldAny.type as string;
     code += `${indent}// Encode ${fieldName} (composite type: ${typeName})\n`;
     code += `${indent}{\n`;
-    code += `${indent}  const ${tempEncoderVar} = new ${typeName}Encoder();\n`;
+    code += `${indent}  const ${tempEncoderVar} = new ${encoderClassName(typeName)}();\n`;
     code += `${indent}  const ${bytesVar} = ${tempEncoderVar}.encode(${valuePath});\n`;
     code += `${indent}  ${lengthFieldName}_contentPieces.push(${bytesVar});\n`;
     code += `${indent}  ${computedVar} += ${bytesVar}.length;\n`;
@@ -214,7 +214,7 @@ function generateFieldEncodingToBytesCore(
       const isItemChoice = itemType === 'choice';
 
       if (isItemComposite) {
-        code += `${indent}    const itemEncoder = new ${itemType}Encoder();\n`;
+        code += `${indent}    const itemEncoder = new ${encoderClassName(itemType)}();\n`;
         code += `${indent}    const itemBytes = itemEncoder.encode(item);\n`;
         code += `${indent}    arrayTemp.writeBytes(itemBytes);\n`;
       } else if (isItemChoice) {
@@ -225,7 +225,7 @@ function generateFieldEncodingToBytesCore(
           const choice = choices[i];
           const ifKeyword = i === 0 ? "if" : "} else if";
           code += `${indent}    ${ifKeyword} (item.type === '${choice.type}') {\n`;
-          code += `${indent}      const itemEncoder = new ${choice.type}Encoder();\n`;
+          code += `${indent}      const itemEncoder = new ${encoderClassName(choice.type)}();\n`;
           code += `${indent}      const itemBytes = itemEncoder.encode(item);\n`;
           code += `${indent}      arrayTemp.writeBytes(itemBytes);\n`;
         }
@@ -694,8 +694,8 @@ export function generateEncodeComputedField(
     code += `${indent}  for (const item of ${targetPath}) {\n`;
     code += `${indent}    // Check if this item matches the target type\n`;
     code += `${indent}    if (!item.type || item.type === '${elementType}') {\n`;
-    code += `${indent}      // Encode item using ${elementType}Encoder to measure size (pass context for computed fields)\n`;
-    code += `${indent}      const encoder_${fieldName} = new ${elementType}Encoder();\n`;
+    code += `${indent}      // Encode item using ${encoderClassName(elementType)} to measure size (pass context for computed fields)\n`;
+    code += `${indent}      const encoder_${fieldName} = new ${encoderClassName(elementType)}();\n`;
     code += `${indent}      const encoded_${fieldName} = encoder_${fieldName}.encode(item as ${elementType}, context);\n`;
     code += `${indent}      ${computedVar} += encoded_${fieldName}.length;\n`;
     code += `${indent}    }\n`;
@@ -984,7 +984,7 @@ export function generateEncodeComputedField(
           if (isCompositeType) {
             const typeName = (targetFieldDef as any).type;
             code += `${indent}{\n`;
-            code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+            code += `${indent}  const ${fieldName}_encoder = new ${encoderClassName(typeName)}();\n`;
             code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
             code += `${indent}}\n`;
           } else {
@@ -1056,7 +1056,7 @@ export function generateEncodeComputedField(
           if (isCompositeType) {
             const typeName = (targetFieldDef as any).type;
             code += `${indent}{\n`;
-            code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+            code += `${indent}  const ${fieldName}_encoder = new ${encoderClassName(typeName)}();\n`;
             code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
             code += `${indent}}\n`;
           } else {
@@ -1121,7 +1121,7 @@ export function generateEncodeComputedField(
             // For composite types, use calculateSize()
             const typeName = (targetFieldDef as any).type;
             code += `${indent}{\n`;
-            code += `${indent}  const ${fieldName}_encoder = new ${typeName}Encoder();\n`;
+            code += `${indent}  const ${fieldName}_encoder = new ${encoderClassName(typeName)}();\n`;
             code += `${indent}  ${computedVar} = ${fieldName}_encoder.calculateSize(${targetPath});\n`;
             code += `${indent}}\n`;
           } else {

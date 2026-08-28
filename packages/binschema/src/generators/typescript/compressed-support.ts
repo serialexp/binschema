@@ -14,6 +14,7 @@
  */
 
 import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
+import { encoderClassName, decoderClassName } from "./type-utils.js";
 
 type SizeType = "uint8" | "uint16" | "uint32" | "uint64";
 
@@ -100,7 +101,7 @@ export function generateEncodeCompressed(
 
   let code = "";
   code += `${indent}// Compressed region: encode inner type, compress, frame\n`;
-  code += `${indent}const ${innerVar} = new ${innerType}Encoder().encode(${valuePath});\n`;
+  code += `${indent}const ${innerVar} = new ${encoderClassName(innerType)}().encode(${valuePath});\n`;
   code += `${indent}const ${compVar} = resolveCodec(${JSON.stringify(codec)}).compress(${innerVar});\n`;
   code += writeSizeStmt(sizeType, `${innerVar}.length`, globalEndianness, indent);
   code += writeSizeStmt(lengthType, `${compVar}.length`, globalEndianness, indent);
@@ -140,6 +141,6 @@ export function generateDecodeCompressed(
   code += `${indent}if (${decompVar}.length !== ${uSizeVar}) {\n`;
   code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_ENCODING, \`Decompressed size mismatch for ${suffix}: expected \${${uSizeVar}}, got \${${decompVar}.length}\`, { context: ${JSON.stringify(codec)} });\n`;
   code += `${indent}}\n`;
-  code += `${indent}${target} = new ${innerType}Decoder(${decompVar}).decode();\n`;
+  code += `${indent}${target} = new ${decoderClassName(innerType)}(${decompVar}).decode();\n`;
   return code;
 }

@@ -71,6 +71,40 @@ export function sanitizeTypeName(typeName: string): string {
 }
 
 /**
+ * The name of the generated encoder class for a schema type.
+ *
+ * Declaration and reference sites MUST both go through this. A type whose name
+ * collides with a JS global is renamed by `sanitizeTypeName` ("Error" →
+ * "Error_"), so a reference site that concatenates the raw schema name emits
+ * `new ErrorEncoder()` for a class declared as `Error_Encoder` — code that
+ * looks fine, typechecks under a loose config, and dies at runtime with
+ * `ReferenceError`. Idempotent: sanitizing an already-sanitized name is a
+ * no-op.
+ */
+export function encoderClassName(typeName: string): string {
+  return `${sanitizeTypeName(typeName)}Encoder`;
+}
+
+/** The name of the generated decoder class for a schema type. See
+ *  {@link encoderClassName}. */
+export function decoderClassName(typeName: string): string {
+  return `${sanitizeTypeName(typeName)}Decoder`;
+}
+
+/**
+ * The name of the generated `…Input`/`…Output` interface for a schema type.
+ *
+ * Same contract as {@link encoderClassName}: the declaration is sanitized, so
+ * a reference site must sanitize too or it names an interface that was never
+ * declared. Types are erased at runtime, so this one does not crash -- it just
+ * makes the emitted `.ts` fail to compile, which is only invisible because
+ * consumers vendor the output behind `@ts-nocheck`.
+ */
+export function valueTypeName(typeName: string, useInputTypes: boolean): string {
+  return `${sanitizeTypeName(typeName)}${useInputTypes ? "Input" : "Output"}`;
+}
+
+/**
  * Sanitize a variable/field name for TypeScript to avoid reserved keywords
  * Appends "_" to reserved keywords (e.g., "class" → "class_")
  */

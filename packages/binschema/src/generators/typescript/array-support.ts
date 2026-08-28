@@ -4,7 +4,7 @@
  */
 
 import { BinarySchema, Endianness, Field } from "../../schema/binary-schema.js";
-import { sanitizeVarName } from "./type-utils.js";
+import { sanitizeVarName, encoderClassName } from "./type-utils.js";
 import { detectCorrespondingTracking, detectFirstLastTracking, getVarlengthWriteMethod, getVarlengthReadMethod } from "./computed-fields.js";
 import { ARRAY_ITER_SUFFIX } from "./shared.js";
 import { generateArrayContextExtension, getContextParam, getContextVarName } from "./context-extension.js";
@@ -136,7 +136,7 @@ export function generateEncodeArray(
       code += `${indent}  // Determine item type and encode to measure size\n`;
       for (const choice of choices) {
         code += `${indent}  if (${itemVar}.type === '${choice.type}') {\n`;
-        code += `${indent}    const itemEncoder = new ${choice.type}Encoder();\n`;
+        code += `${indent}    const itemEncoder = new ${encoderClassName(choice.type)}();\n`;
         code += `${indent}    const itemBytes = itemEncoder.encode(${itemVar} as ${choice.type});\n`;
         code += `${indent}    ${tempEncoderVar}.writeBytes(itemBytes);\n`;
         code += `${indent}  }\n`;
@@ -147,7 +147,7 @@ export function generateEncodeArray(
       code += `${indent}  ${tempEncoderVar}.${writeMethod};\n`;
     } else {
       // Custom type: encode to measure size
-      code += `${indent}  const itemEncoder = new ${itemType}Encoder();\n`;
+      code += `${indent}  const itemEncoder = new ${encoderClassName(itemType)}();\n`;
       code += `${indent}  const itemBytes = itemEncoder.encode(${itemVar});\n`;
       code += `${indent}  ${tempEncoderVar}.writeBytes(itemBytes);\n`;
     }
@@ -273,7 +273,7 @@ export function generateEncodeArray(
         const ifOrElseIf = i === 0 ? "if" : "else if";
         code += `${indent}  ${ifOrElseIf} (${itemVar}.type === '${choice.type}') {\n`;
         code += `${indent}    // Encode to temporary encoder to measure size\n`;
-        code += `${indent}    const temp_encoder = new ${choice.type}Encoder();\n`;
+        code += `${indent}    const temp_encoder = new ${encoderClassName(choice.type)}();\n`;
         code += `${indent}    const temp_bytes = temp_encoder.encode(${itemVar} as ${choice.type}${getContextParam(schema, true, fieldName)});\n`;
         code += `${indent}    ${itemVar}_offset += temp_bytes.length;\n`;
         code += `${indent}  }\n`;
@@ -291,7 +291,7 @@ export function generateEncodeArray(
         }
         // Advance offset by item size
         code += `${indent}  // Encode to temporary encoder to measure size\n`;
-        code += `${indent}  const temp_encoder = new ${itemType}Encoder();\n`;
+        code += `${indent}  const temp_encoder = new ${encoderClassName(itemType)}();\n`;
         code += `${indent}  const temp_bytes = temp_encoder.encode(${itemVar}${getContextParam(schema, true, fieldName)});\n`;
         code += `${indent}  ${itemVar}_offset += temp_bytes.length;\n`;
       }

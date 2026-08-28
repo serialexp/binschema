@@ -1,7 +1,7 @@
 import { BinarySchema, TypeDef, Field, Endianness, isEnumType } from "../schema/binary-schema.js";
 import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
 import { ARRAY_ITER_SUFFIX } from "./typescript/shared.js";
-import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName } from "./typescript/type-utils.js";
+import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName, encoderClassName, decoderClassName } from "./typescript/type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation.js";
 import {
   generateEncodeBitfield,
@@ -240,7 +240,7 @@ function generateEnumTypeCode(
   code += `]);\n\n`;
 
   // Generate encoder class
-  code += `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  code += `export class ${encoderClassName(typeName)} extends BitStreamEncoder {\n`;
   code += `  constructor() { super("${globalBitOrder}"); }\n\n`;
   code += `  encode(value: ${typeName}): Uint8Array {\n`;
   code += generateEnumEncodeBody(repr, "value", "    ", globalEndianness);
@@ -249,7 +249,7 @@ function generateEnumTypeCode(
   code += `}\n\n`;
 
   // Generate decoder class
-  code += `export class ${typeName}Decoder extends SeekableBitStreamDecoder {\n`;
+  code += `export class ${decoderClassName(typeName)} extends SeekableBitStreamDecoder {\n`;
   code += `  constructor(input: Uint8Array | number[] | string, private context?: any) {\n`;
   code += `    const reader = createReader(input);\n`;
   code += `    super(reader, "${globalBitOrder}");\n`;
@@ -461,7 +461,7 @@ function generateInstanceClass(
           code += `            ${i === 0 ? 'if' : 'else if'} (${condition}) {\n`;
         }
 
-        code += `              const decoder = new ${variant.type}Decoder(this._decoder['bytes'].slice(Number(position)), { _root: this._root, _rootDecoder: this._decoder });\n`;
+        code += `              const decoder = new ${decoderClassName(variant.type)}(this._decoder['bytes'].slice(Number(position)), { _root: this._root, _rootDecoder: this._decoder });\n`;
         code += `              value = { type: '${variant.type}', value: decoder.decode() };\n`;
         code += `            }`;
 
@@ -476,7 +476,7 @@ function generateInstanceClass(
       code += `            this._lazyCache.set('${instance.name}', value);\n`;
     } else {
       // Simple type reference
-      code += `            const decoder = new ${instance.type}Decoder(this._decoder['bytes'].slice(Number(position)), { _root: this._root, _rootDecoder: this._decoder });\n`;
+      code += `            const decoder = new ${decoderClassName(instance.type)}(this._decoder['bytes'].slice(Number(position)), { _root: this._root, _rootDecoder: this._decoder });\n`;
       code += `            const value = decoder.decode();\n`;
       code += `            this._lazyCache.set('${instance.name}', value);\n`;
     }
@@ -644,7 +644,7 @@ function generateTypeAliasEncoder(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
-  let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  let code = `export class ${encoderClassName(typeName)} extends BitStreamEncoder {\n`;
   code += `  private compressionDict: Map<string, number> = new Map();\n\n`;
   code += `  constructor() {\n`;
   code += `    super("${globalBitOrder}");\n`;
@@ -683,7 +683,7 @@ function generateTypeAliasDecoder(
   globalEndianness: Endianness,
   globalBitOrder: string
 ): string {
-  let code = `export class ${typeName}Decoder extends SeekableBitStreamDecoder {\n`;
+  let code = `export class ${decoderClassName(typeName)} extends SeekableBitStreamDecoder {\n`;
   code += `  constructor(input: Uint8Array | number[] | string) {\n`;
   code += `    const reader = createReader(input);\n`;
   code += `    super(reader, "${globalBitOrder}");\n`;
@@ -988,7 +988,7 @@ function generateEncoder(
   addTraceLogs: boolean = false
 ): string {
   const fields = getTypeFields(typeDef);
-  let code = `export class ${typeName}Encoder extends BitStreamEncoder {\n`;
+  let code = `export class ${encoderClassName(typeName)} extends BitStreamEncoder {\n`;
   code += `  private compressionDict: Map<string, number> = new Map();\n`;
 
   // Detect if any fields need position tracking (corresponding, first/last) and declare tracking variables
@@ -1078,10 +1078,10 @@ function generateEncoder(
               code += `      arrayIterations: context.arrayIterations,\n`;
               code += `      positions: context.positions\n`;
               code += `    };\n`;
-              code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
+              code += `    const temp_${precedingField.name}_enc = new ${encoderClassName(precedingFieldType)}();\n`;
               code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}, ${prepassContextVarName}).length;\n`;
             } else {
-              code += `    const temp_${precedingField.name}_enc = new ${precedingFieldType}Encoder();\n`;
+              code += `    const temp_${precedingField.name}_enc = new ${encoderClassName(precedingFieldType)}();\n`;
               code += `    value_${fieldName}_offset += temp_${precedingField.name}_enc.encode(value.${precedingField.name}).length;\n`;
             }
           }
@@ -1116,7 +1116,7 @@ function generateEncoder(
 
             code += `      this._positions_${fieldName}_${itemType}.push(value_${fieldName}_offset);\n`;
             code += `      // Encode to temp to measure size\n`;
-            code += `      const temp_enc = new ${itemType}Encoder();\n`;
+            code += `      const temp_enc = new ${encoderClassName(itemType)}();\n`;
             const contextParam = schemaRequiresContext(schema) ? ', itemContext' : '';
             code += `      value_${fieldName}_offset += temp_enc.encode(item${contextParam}).length;\n`;
             code += `    }\n\n`;
@@ -1507,7 +1507,7 @@ function generateEncodeChoice(
 
     if (useEncoderClasses) {
       // Use encoder class to pass context properly
-      code += `${indent}  const encoder = new ${choice.type}Encoder();\n`;
+      code += `${indent}  const encoder = new ${encoderClassName(choice.type)}();\n`;
       code += `${indent}  const encoded = encoder.encode(${valuePath} as ${choice.type}, ${contextVarName});\n`;
       code += `${indent}  for (const byte of encoded) {\n`;
       code += `${indent}    this.writeUint8(byte);\n`;
@@ -1603,7 +1603,7 @@ function generateDecodeChoice(
     const baseObject = getOwnerObjectPath(target);
 
     // Choice uses flat structure - decode directly into target without wrapper
-    code += `${inner}  const decoder = new ${choice.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+    code += `${inner}  const decoder = new ${decoderClassName(choice.type)}(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
     code += `${inner}  const decodedValue = decoder.decode();\n`;
     code += `${inner}  this.byteOffset += decoder.byteOffset;\n`;
 
@@ -1842,14 +1842,14 @@ function generateEncodeTypeReference(
       code += generateNestedTypeContextExtension(fieldName, parentPath, indent, schema, baseContextVarName);
     }
 
-    code += `${indent}const ${encoderVarName} = new ${typeRef}Encoder();\n`;
+    code += `${indent}const ${encoderVarName} = new ${encoderClassName(typeRef)}();\n`;
     code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath}, ${contextToPass});\n`;
     code += `${indent}for (const byte of ${encodedVarName}) {\n`;
     code += `${indent}  this.writeUint8(byte);\n`;
     code += `${indent}}\n`;
   } else {
     // No context needed - call encode() without context parameter
-    code += `${indent}const ${encoderVarName} = new ${typeRef}Encoder();\n`;
+    code += `${indent}const ${encoderVarName} = new ${encoderClassName(typeRef)}();\n`;
     code += `${indent}const ${encodedVarName} = ${encoderVarName}.encode(${valuePath});\n`;
     code += `${indent}for (const byte of ${encodedVarName}) {\n`;
     code += `${indent}  this.writeUint8(byte);\n`;
@@ -1874,7 +1874,7 @@ function generateDecoder(
   const typeDefAny = typeDef as any;
   const hasInstances = typeDefAny.instances && Array.isArray(typeDefAny.instances) && typeDefAny.instances.length > 0;
 
-  let code = `export class ${typeName}Decoder extends SeekableBitStreamDecoder {\n`;
+  let code = `export class ${decoderClassName(typeName)} extends SeekableBitStreamDecoder {\n`;
   code += `  constructor(input: Uint8Array | number[] | string, private context?: any) {\n`;
   code += `    const reader = createReader(input);\n`;
   code += `    super(reader, "${globalBitOrder}");\n`;
@@ -2195,17 +2195,17 @@ function generateDecodeDiscriminatedUnion(
 
     if (byteBudget) {
       // byte_budget mode: decode from sub-slice, don't advance outer byteOffset
-      c += `${vi}const decoder = new ${variant.type}Decoder(new Uint8Array(_budgetSlice), ${baseObject});\n`;
+      c += `${vi}const decoder = new ${decoderClassName(variant.type)}(new Uint8Array(_budgetSlice), ${baseObject});\n`;
       c += `${vi}const ${resultVar} = decoder.decode();\n`;
     } else if (isBackReference) {
       // Back-reference variant: pass full bytes (may seek to earlier offsets)
-      c += `${vi}const decoder = new ${variant.type}Decoder(this.bytes, ${baseObject});\n`;
+      c += `${vi}const decoder = new ${decoderClassName(variant.type)}(this.bytes, ${baseObject});\n`;
       c += `${vi}decoder.byteOffset = this.byteOffset;\n`;
       c += `${vi}const ${resultVar} = decoder.decode();\n`;
       c += `${vi}this.byteOffset = decoder.byteOffset;\n`;
     } else {
       // Non-reference variant: pass sliced bytes (standard pattern)
-      c += `${vi}const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
+      c += `${vi}const decoder = new ${decoderClassName(variant.type)}(this.bytes.slice(this.byteOffset), ${baseObject});\n`;
       c += `${vi}const ${resultVar} = decoder.decode();\n`;
       c += `${vi}this.byteOffset += decoder.byteOffset;\n`;
     }
@@ -2345,12 +2345,12 @@ function generateDecodeDiscriminatedUnionInline(
         const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
 
         if (isBackReference) {
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, value);\n`;
+          code += `${indent}  const decoder = new ${decoderClassName(variant.type)}(this.bytes, value);\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), value);\n`;
+          code += `${indent}  const decoder = new ${decoderClassName(variant.type)}(this.bytes.slice(this.byteOffset), value);\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
         }
@@ -2366,12 +2366,12 @@ function generateDecodeDiscriminatedUnionInline(
         const isBackReference = variantTypeDef && (variantTypeDef as any).type === "back_reference";
 
         if (isBackReference) {
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes, value);\n`;
+          code += `${indent}  const decoder = new ${decoderClassName(variant.type)}(this.bytes, value);\n`;
           code += `${indent}  decoder.byteOffset = this.byteOffset;\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset = decoder.byteOffset;\n`;
         } else {
-          code += `${indent}  const decoder = new ${variant.type}Decoder(this.bytes.slice(this.byteOffset), value);\n`;
+          code += `${indent}  const decoder = new ${decoderClassName(variant.type)}(this.bytes.slice(this.byteOffset), value);\n`;
           code += `${indent}  const decodedValue = decoder.decode();\n`;
           code += `${indent}  this.byteOffset += decoder.byteOffset;\n`;
         }
@@ -2628,7 +2628,7 @@ function generateDecodeTypeReference(
   if (hasInstanceFields) {
     // Type has instance fields - must use standalone decoder to create instance with lazy getters
     // Cannot inline decode because we need the wrapper class
-    const decoderClass = `${typeRef}Decoder`;
+    const decoderClass = `${decoderClassName(typeRef)}`;
     let code = "";
 
     // Read all sequence fields to pass to decoder
