@@ -10,6 +10,50 @@
 
 import type { Field, BinarySchema, Endianness } from "../../schema/binary-schema.js";
 import { encoderClassName } from "./type-utils.js";
+import { assertNever, isBuiltinFieldType } from "../../schema/field-types.js";
+
+/**
+ * Emit a generated-code throw for a field whose width is not a whole number of
+ * bytes.
+ *
+ * `size` here is a running byte count, so a 3-bit field has no honest value to
+ * add. Neighbouring bit fields usually pack together into whole bytes, but this
+ * function sees one field at a time and cannot know that. Throwing in the
+ * generated code puts the failure at the call that actually needs a size, and
+ * says which field and how wide — rather than silently rounding, which would
+ * corrupt any `from_after_field` length computed from it.
+ */
+function generateSubByteUnsupported(
+  fieldName: string,
+  what: string,
+  bits: number,
+  indent: string
+): string {
+  return (
+    `${indent}throw new Error("calculateSize cannot size ${what} field '${fieldName}': ` +
+    `${bits} bit(s) is not a whole number of bytes");\n`
+  );
+}
+
+/**
+ * Size of a bit-width field (`bit`, `int`, `bitfield`), whose `size` is in bits.
+ *
+ * Whole bytes are exact; anything else is refused (see above).
+ */
+function generateBitWidthSizeCalc(
+  bits: number | undefined,
+  fieldName: string,
+  kind: string,
+  indent: string
+): string {
+  if (typeof bits !== "number") {
+    return `${indent}throw new Error("calculateSize: ${kind} field '${fieldName}' has no size");\n`;
+  }
+  if (bits % 8 !== 0) {
+    return generateSubByteUnsupported(fieldName, kind, bits, indent);
+  }
+  return `${indent}size += ${bits / 8}; // ${fieldName} (${kind}, ${bits} bits)\n`;
+}
 
 /**
  * Calculate the encoded size of a DER/BER length value
@@ -201,11 +245,20 @@ export function generateFieldSizeCalculation(
     indent += "  ";
   }
 
-  // Handle optional fields (check if defined)
-  const isOptional = fieldType === "optional";
-  if (isOptional) {
-    code += `${indent}if (${valuePrefix}${fieldName} !== undefined) {\n`;
-    indent += "  ";
+  // A field type is either a built-in keyword or a reference to a user-defined
+  // type, and nothing in the string distinguishes them. Peel the type reference
+  // off here so the switch below sees only keywords and can be exhaustive —
+  // letting a keyword fall through to the type-reference path is what produced
+  // `new optionalEncoder()`, a class that never existed, for five field types.
+  if (!isBuiltinFieldType(fieldType)) {
+    code += `${indent}// ${fieldName}: custom type (${fieldType})\n`;
+    code += `${indent}const ${fieldName}_encoder = new ${encoderClassName(fieldType)}();\n`;
+    code += `${indent}size += ${fieldName}_encoder.calculateSize(${valuePrefix}${fieldName});\n`;
+    if (fieldAny.if) {
+      indent = indent.substring(2);
+      code += `${indent}}\n`;
+    }
+    return code;
   }
 
   // Generate size calculation based on field type
@@ -321,20 +374,94 @@ export function generateFieldSizeCalculation(
       break;
     }
 
-    default: {
-      // Assume this is a custom composite type
-      // Call its encoder's calculateSize method
-      code += `${indent}// ${fieldName}: custom type (${fieldType})\n`;
-      code += `${indent}const ${fieldName}_encoder = new ${encoderClassName(fieldType)}();\n`;
-      code += `${indent}size += ${fieldName}_encoder.calculateSize(${valuePrefix}${fieldName});\n`;
+    case "bool":
+      // generateEncodeFieldCore writes a whole byte (`writeUint8(v ? 1 : 0)`),
+      // not a bit.
+      code += `${indent}size += 1; // ${fieldName} (bool)\n`;
+      break;
+
+    case "bit":
+    case "int":
+      code += generateBitWidthSizeCalc(fieldAny.size, fieldName, fieldType, indent);
+      break;
+
+    case "bitfield":
+      // `size` is the bitfield's total width in bits; the sub-fields carve it up
+      // and add nothing of their own.
+      code += generateBitWidthSizeCalc(fieldAny.size, fieldName, "bitfield", indent);
+      break;
+
+    case "optional": {
+      // The presence indicator is written unconditionally — 0 for absent, 1 for
+      // present (see generateEncodeOptional) — so it is counted outside the
+      // guard. Only the value itself is conditional.
+      const presenceType = fieldAny.presence_type || "uint8";
+      code += `${indent}// ${fieldName}: optional (presence: ${presenceType})\n`;
+      if (presenceType === "bit") {
+        code += generateSubByteUnsupported(fieldName, "optional with presence_type 'bit'", 1, indent);
+        break;
+      }
+      code += `${indent}size += 1; // ${fieldName} presence indicator\n`;
+      code += `${indent}if (${valuePrefix}${fieldName} !== undefined && ${valuePrefix}${fieldName} !== null) {\n`;
+      // Mirror generateEncodeOptional: the value is sized as a synthetic field
+      // built from value_type, so an inline `{type: "bytes", ...}` and a named
+      // type reference both take the path they would take on their own.
+      const valueType = fieldAny.value_type;
+      const syntheticField: any =
+        typeof valueType === "object"
+          ? { name: fieldName, ...valueType }
+          : { name: fieldName, type: valueType };
+      if (fieldAny.endianness) syntheticField.endianness = fieldAny.endianness;
+      code += generateFieldSizeCalculation(
+        syntheticField,
+        schema,
+        globalEndianness,
+        indent + "  ",
+        valuePrefix,
+        containingFields
+      );
+      code += `${indent}}\n`;
       break;
     }
-  }
 
-  // Close optional/conditional blocks
-  if (isOptional) {
-    indent = indent.substring(2);
-    code += `${indent}}\n`;
+    case "choice": {
+      // A choice is a flat discriminated union: the value carries a `.type` tag
+      // and no `.value` wrapper (see generateEncodeChoice).
+      const choices = fieldAny.choices || [];
+      const choicePath = `${valuePrefix}${fieldName}`;
+      for (let i = 0; i < choices.length; i++) {
+        const ifKw = i === 0 ? "if" : "else if";
+        code += `${indent}${ifKw} (${choicePath}.type === '${choices[i].type}') {\n`;
+        code += `${indent}  const _enc = new ${encoderClassName(choices[i].type)}();\n`;
+        code += `${indent}  size += _enc.calculateSize(${choicePath} as any);\n`;
+        code += `${indent}}\n`;
+      }
+      code += `${indent}else {\n`;
+      code += `${indent}  throw new BinSchemaError(ErrorCode.INVALID_VARIANT, \`Unknown variant type for ${fieldName}: \${(${choicePath} as any).type}\`);\n`;
+      code += `${indent}}\n`;
+      break;
+    }
+
+    case "back_reference": {
+      // Only the offset lands here; the referenced value lives elsewhere in the
+      // message and is counted where it is actually written.
+      const storage = fieldAny.storage;
+      const width = storage === "uint32" ? 4 : storage === "uint16" ? 2 : 1;
+      code += `${indent}size += ${width}; // ${fieldName} (back_reference offset, ${storage})\n`;
+      break;
+    }
+
+    case "compressed":
+      // The encoded length is whatever the compressor produces, which cannot be
+      // known without running it. Fail loudly rather than return a wrong number
+      // that a from_after_field length would then bake into the output.
+      code += `${indent}throw new Error("calculateSize is not supported for compressed field '${fieldName}' — its size is only known after compression");\n`;
+      break;
+
+    default:
+      // Every keyword above is handled; a new entry in BUILTIN_FIELD_TYPES makes
+      // this line a compile error until it is given a case.
+      assertNever(fieldType, `size calculation for field '${fieldName}'`);
   }
 
   if (fieldAny.if) {

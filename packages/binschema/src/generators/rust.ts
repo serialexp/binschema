@@ -2,6 +2,7 @@
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript and Go runtimes
 
 import { type BinarySchema, type Field, type Endianness, isEnumType, isSignedVarlengthEncoding } from "../schema/binary-schema.js";
+import { assertNever, isBuiltinFieldType } from "../schema/field-types.js";
 
 /**
  * Emit the encoder call for a varlength field. Signed encodings (zigzag,
@@ -5402,7 +5403,19 @@ function generateEncodeFieldWithValue(field: Field, valueVar: string, defaultEnd
   const rustEndianness = mapEndianness(endianness);
   const aligned = byteAligned === true;
 
-  switch (field.type) {
+  // User-defined type references resolve here so the switch stays exhaustive
+  // over the built-in keywords (see schema/field-types.ts). Previously a
+  // keyword with no case was assumed to be a nested struct and got
+  // `.encode_into(encoder)?` — valid TypeScript producing Rust that does not
+  // compile, with nothing pointing at the missing case.
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Type reference - nested struct, encode directly into encoder
+    lines.push(`${indent}${valueVar}.encode_into(encoder)?;`);
+    return lines;
+  }
+
+  switch (fieldType) {
     case "uint8":
     case "uint16":
     case "uint32":
@@ -5425,10 +5438,42 @@ function generateEncodeFieldWithValue(field: Field, valueVar: string, defaultEnd
       // Note: value is already a reference from if-let binding, use iter() to avoid double reference
       lines.push(...generateEncodeArrayWithRef(field as any, valueVar, endianness, rustEndianness, indent));
       break;
-    default:
-      // Type reference - nested struct, encode directly into encoder
-      lines.push(`${indent}${valueVar}.encode_into(encoder)?;`);
+    case "bit":
+    case "int": {
+      // Bit-width integers, mirroring the unconditional encoder.
+      const bitSize = (field as any).size || 1;
+      lines.push(`${indent}encoder.write_bits(*${valueVar} as u64, ${bitSize});`);
       break;
+    }
+    case "bool":
+      lines.push(`${indent}${aligned ? "encoder.write_byte" : "encoder.write_uint8"}(if *${valueVar} { 1 } else { 0 });`);
+      break;
+    case "varlength": {
+      const encoding = (field as any).encoding || "vlq";
+      lines.push(emitRustVarlengthWrite(indent, `*${valueVar}`, encoding));
+      break;
+    }
+
+    case "bytes":
+    case "optional":
+    case "bitfield":
+    case "discriminated_union":
+    case "back_reference":
+    case "choice":
+    case "padding":
+    case "compressed":
+      // This helper encodes the *unwrapped* value of an optional or
+      // conditional field and has no schema to resolve nested shapes with, so
+      // these cannot be emitted here. Before, they fell into the type-reference
+      // default and got `.encode_into(encoder)?` — Rust that does not compile,
+      // with nothing pointing at the real cause.
+      throw new Error(
+        `generateEncodeFieldWithValue: unsupported field type '${fieldType}' (expected an unwrapped optional/conditional value)`,
+      );
+
+    default:
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Rust encoding of an unwrapped field value");
   }
 
   return lines;
@@ -7234,6 +7279,83 @@ function generateDecodeField(field: Field, defaultEndianness: string, indent: st
 }
 
 /**
+ * Decode a field whose type is a reference to a user-defined type.
+ *
+ * Split out of the field-decode switch's `default:` arm so that arm could be
+ * made exhaustive. A `default:` that means both "user type" and "built-in
+ * keyword with no case" silently routes the second into type lookup, where it
+ * becomes a confusing "unknown type" (or worse, a plausible-looking identifier
+ * for a type that does not exist). See schema/field-types.ts.
+ */
+function generateDecodeTypeReferenceField(
+  field: any,
+  varName: string,
+  indent: string,
+  schema: BinarySchema,
+): string[] {
+  const lines: string[] = [];
+  // Type reference - nested struct
+  const typeName = toRustTypeName(field.type);
+  const typeDef = schema.types[field.type as string];
+
+  // Special case: the referenced type is a standalone discriminated_union
+  // with a FIELD-based discriminator. The DU's own decode_with_decoder
+  // can't run (it has no access to the parent's tag) — TS handles this by
+  // inlining the dispatch at the call site, so we do the same. The sibling
+  // discriminator field is already decoded into a local variable named
+  // after the field; we match it against each variant's `when`.
+  if (
+    typeDef &&
+    (typeDef as any).type === "discriminated_union" &&
+    (typeDef as any).discriminator?.field
+  ) {
+    const duName = typeName;
+    const discriminatorRustField = toRustFieldName((typeDef as any).discriminator.field);
+    const variants = ((typeDef as any).variants ?? []) as any[];
+    const fallback = variants.find((v) => !v.when);
+    const conditional = variants.filter((v) => v.when);
+
+    if (conditional.length === 0 && fallback) {
+      // Single fallback — emit the single decode directly, wrapped.
+      const vt = toRustTypeName(fallback.type);
+      const vd = typeNeedsInputOutputSuffix(fallback.type, schema) ? `${vt}Output` : vt;
+      lines.push(`${indent}let ${varName} = ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?);`);
+    } else {
+      // if/else if chain on the parent's discriminator, then fallback or error.
+      for (let i = 0; i < conditional.length; i++) {
+        const variant = conditional[i];
+        const vt = toRustTypeName(variant.type);
+        const vd = typeNeedsInputOutputSuffix(variant.type, schema) ? `${vt}Output` : vt;
+        const cond = translateConditionToRust(variant.when).replace(/\bvalue\b/g, discriminatorRustField);
+        const head = i === 0
+          ? `${indent}let ${varName} = if ${cond} {`
+          : `${indent}} else if ${cond} {`;
+        lines.push(head);
+        lines.push(`${indent}    ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`);
+      }
+      if (fallback) {
+        const vt = toRustTypeName(fallback.type);
+        const vd = typeNeedsInputOutputSuffix(fallback.type, schema) ? `${vt}Output` : vt;
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}    ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`);
+        lines.push(`${indent}};`);
+      } else {
+        lines.push(`${indent}} else {`);
+        lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
+        lines.push(`${indent}};`);
+      }
+    }
+    return lines;
+  }
+
+  const isComposite = typeDef && "sequence" in typeDef;
+  const needsSplit = isComposite && typeNeedsInputOutputSplit(field.type, schema);
+  const decodeName = needsSplit ? `${typeName}Output` : typeName;
+  lines.push(`${indent}let ${varName} = ${decodeName}::decode_with_decoder(decoder)?;`);
+  return lines;
+}
+
+/**
  * Generates decoding code for a field's inner value (used for conditional fields)
  * Uses a _inner suffix for the variable name to avoid conflicts
  */
@@ -7250,7 +7372,14 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
     return lines;
   }
 
-  switch (field.type) {
+  // User-defined type references resolve here so the switch below stays
+  // exhaustive over the built-in keywords (see schema/field-types.ts).
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    return generateDecodeTypeReferenceField(field, varName, indent, schema);
+  }
+
+  switch (fieldType) {
     case "uint8":
     case "uint16":
     case "uint32":
@@ -7341,67 +7470,17 @@ function generateDecodeFieldInner(field: Field, defaultEndianness: string, inden
       lines.push(`${indent}let ${varName} = ${innerEnumName}::decode_with_decoder(decoder)?;`);
       break;
     }
-    default: {
-      // Type reference - nested struct
-      const typeName = toRustTypeName(field.type);
-      const typeDef = schema.types[field.type as string];
+    case "compressed":
+      // The full field decoder handles `compressed`; this conditional-field
+      // variant never grew a case, and used to fall into the type-reference
+      // default where it would look up a schema type named "compressed".
+      throw new Error(
+        "Rust generator does not support a conditional `compressed` field (only unconditional ones)",
+      );
 
-      // Special case: the referenced type is a standalone discriminated_union
-      // with a FIELD-based discriminator. The DU's own decode_with_decoder
-      // can't run (it has no access to the parent's tag) — TS handles this by
-      // inlining the dispatch at the call site, so we do the same. The sibling
-      // discriminator field is already decoded into a local variable named
-      // after the field; we match it against each variant's `when`.
-      if (
-        typeDef &&
-        (typeDef as any).type === "discriminated_union" &&
-        (typeDef as any).discriminator?.field
-      ) {
-        const duName = typeName;
-        const discriminatorRustField = toRustFieldName((typeDef as any).discriminator.field);
-        const variants = ((typeDef as any).variants ?? []) as any[];
-        const fallback = variants.find((v) => !v.when);
-        const conditional = variants.filter((v) => v.when);
-
-        if (conditional.length === 0 && fallback) {
-          // Single fallback — emit the single decode directly, wrapped.
-          const vt = toRustTypeName(fallback.type);
-          const vd = typeNeedsInputOutputSuffix(fallback.type, schema) ? `${vt}Output` : vt;
-          lines.push(`${indent}let ${varName} = ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?);`);
-        } else {
-          // if/else if chain on the parent's discriminator, then fallback or error.
-          for (let i = 0; i < conditional.length; i++) {
-            const variant = conditional[i];
-            const vt = toRustTypeName(variant.type);
-            const vd = typeNeedsInputOutputSuffix(variant.type, schema) ? `${vt}Output` : vt;
-            const cond = translateConditionToRust(variant.when).replace(/\bvalue\b/g, discriminatorRustField);
-            const head = i === 0
-              ? `${indent}let ${varName} = if ${cond} {`
-              : `${indent}} else if ${cond} {`;
-            lines.push(head);
-            lines.push(`${indent}    ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`);
-          }
-          if (fallback) {
-            const vt = toRustTypeName(fallback.type);
-            const vd = typeNeedsInputOutputSuffix(fallback.type, schema) ? `${vt}Output` : vt;
-            lines.push(`${indent}} else {`);
-            lines.push(`${indent}    ${duName}::${vt}(${vd}::decode_with_decoder(decoder)?)`);
-            lines.push(`${indent}};`);
-          } else {
-            lines.push(`${indent}} else {`);
-            lines.push(`${indent}    return Err(binschema_runtime::BinSchemaError::InvalidVariant(format!("unknown discriminator value: {:?}", ${discriminatorRustField})));`);
-            lines.push(`${indent}};`);
-          }
-        }
-        break;
-      }
-
-      const isComposite = typeDef && "sequence" in typeDef;
-      const needsSplit = isComposite && typeNeedsInputOutputSplit(field.type, schema);
-      const decodeName = needsSplit ? `${typeName}Output` : typeName;
-      lines.push(`${indent}let ${varName} = ${decodeName}::decode_with_decoder(decoder)?;`);
-      break;
-    }
+    default:
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Rust conditional field decoding");
   }
 
   return lines;
@@ -8155,8 +8234,20 @@ function generateDecodeNestedStruct(field: Field, varName: string, indent: strin
  * Composite types get Input suffix, type aliases stay as-is
  */
 function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema, containingTypeName?: string): string {
+  // User-defined type references resolve before the switch; see the note in
+  // mapFieldToRustType.
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Type reference - check if composite or type alias
+    const typeName = toRustTypeName(fieldType);
+    const isComposite = isCompositeType(fieldType, schema);
+    // Only use Input suffix if the type needs the Input/Output split
+    const needsSplit = isComposite && typeNeedsInputOutputSplit(fieldType, schema);
+    return needsSplit ? `${typeName}Input` : typeName;
+  }
+
   // Handle primitive types first
-  switch (field.type) {
+  switch (fieldType) {
     case "uint8": return "u8";
     case "uint16": return "u16";
     case "uint32": return "u32";
@@ -8249,17 +8340,23 @@ function mapFieldToRustTypeForInput(field: Field, schema: BinarySchema, containi
       const needsSplit = isComposite && typeNeedsInputOutputSplit(vt, schema);
       return needsSplit ? `${typeName}Input` : (isComposite ? typeName : mapPrimitiveToRustType(vt));
     }
-    default: {
-      // Type reference - check if composite or type alias
-      const typeName = toRustTypeName(field.type);
-
-      // Check if this type is composite (has sequence) or is a type alias to a composite type
-      const isComposite = isCompositeType(field.type, schema);
-
-      // Only use Input suffix if the type needs the Input/Output split
-      const needsSplit = isComposite && typeNeedsInputOutputSplit(field.type, schema);
-      return needsSplit ? `${typeName}Input` : typeName;
+    case "int": {
+      // Arbitrary-width *signed* integer — the signed counterpart of `bit`.
+      // Mirrors mapFieldToRustType so the Input and Output structs agree.
+      const intSize = (field as any).size || 8;
+      if (intSize <= 8) return "i8";
+      if (intSize <= 16) return "i16";
+      if (intSize <= 32) return "i32";
+      return "i64";
     }
+    case "padding":
+      // Structural: no value, filtered out before the Input struct is emitted.
+      throw new Error(
+        "mapFieldToRustTypeForInput: alignment padding has no Rust type and must be filtered out by the caller",
+      );
+    default:
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Rust Input type mapping");
   }
 }
 
@@ -8341,7 +8438,24 @@ function getInstanceFieldRustType(instance: any, schema: BinarySchema): string {
  * The schema parameter is optional - when provided, composite types get Output suffix
  */
 function mapFieldToRustType(field: Field, schema?: BinarySchema, containingTypeName?: string): string {
-  switch (field.type) {
+  // User-defined type references resolve before the switch so the switch stays
+  // exhaustive over the built-in keywords (see schema/field-types.ts): sharing
+  // a `default:` between "user type" and "keyword I forgot" hides the second.
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Type reference (nested struct or type alias)
+    const typeName = toRustTypeName(fieldType);
+    if (schema) {
+      const typeDef = schema.types[fieldType];
+      const isComposite = typeDef && "sequence" in typeDef;
+      // Use Output suffix only for composite types that need the Input/Output split
+      const needsSplit = isComposite && typeNeedsInputOutputSplit(fieldType, schema);
+      return needsSplit ? `${typeName}Output` : typeName;
+    }
+    return typeName;
+  }
+
+  switch (fieldType) {
     case "uint8":
       return "u8";
     case "uint16":
@@ -8453,19 +8567,15 @@ function mapFieldToRustType(field: Field, schema?: BinarySchema, containingTypeN
       }
       return typeName;
     }
-    default: {
-      // Assume it's a type reference (nested struct or type alias)
-      const typeName = toRustTypeName(field.type);
-      // If schema is provided, check if the type is composite
-      if (schema) {
-        const typeDef = schema.types[field.type];
-        const isComposite = typeDef && "sequence" in typeDef;
-        // Use Output suffix only for composite types that need the Input/Output split
-        const needsSplit = isComposite && typeNeedsInputOutputSplit(field.type, schema);
-        return needsSplit ? `${typeName}Output` : typeName;
-      }
-      return typeName;
-    }
+    case "padding":
+      // Alignment padding occupies wire space but has no value in the struct;
+      // it is filtered out before the struct is emitted.
+      throw new Error(
+        "mapFieldToRustType: alignment padding has no Rust type and must be filtered out by the caller",
+      );
+    default:
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Rust type mapping");
   }
 }
 

@@ -2,6 +2,7 @@
 // ABOUTME: Produces byte-for-byte compatible code with TypeScript runtime
 
 import { type BinarySchema, type Field, type Endianness, isEnumType, isSignedVarlengthEncoding } from "../schema/binary-schema.js";
+import { assertNever, isBuiltinFieldType } from "../schema/field-types.js";
 
 /**
  * Get all field names for a type (only for struct types with sequence)
@@ -2643,6 +2644,13 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
   const lines: string[] = [];
   const fieldName = valueExpr.replace(/^m\./, "").replace(/^\*/, "");
 
+  // User-defined type references resolve here so the switch stays exhaustive
+  // over the built-in keywords (see schema/field-types.ts).
+  if (!isBuiltinFieldType(fieldType)) {
+    lines.push(...generateTypeReferenceSizeCalculation(fieldType, valueExpr, fieldName, schema, indent, fieldAny));
+    return lines;
+  }
+
   switch (fieldType) {
     case "uint8":
     case "int8":
@@ -2729,50 +2737,80 @@ function generateFieldSizeForType(fieldType: string, valueExpr: string, schema: 
       lines.push(`${indent}}`);
       break;
     }
-    default: {
-      // Assume custom composite type - call its CalculateSize method
-      if (schema.types[fieldType]) {
-        const typeDef = schema.types[fieldType] as any;
-        // Check if this is a string type alias — inline size calc
-        if (!('sequence' in typeDef) && typeDef.type === 'string') {
-          const syntheticField = { name: fieldType, ...typeDef };
-          lines.push(...generateFieldSizeForType('string', valueExpr, schema, indent, syntheticField));
-          break;
-        }
-        // Check if this is an enum type - inline the fixed size
-        if (isEnumType(typeDef)) {
-          const reprSize = typeDef.repr === "uint8" ? 1 : typeDef.repr === "uint16" ? 2 : 4;
-          lines.push(`${indent}size += ${reprSize} // ${fieldName} (enum)`);
-          break;
-        }
-        // Check if this is a discriminated union
-        if (typeDef.type === "discriminated_union" || typeDef.variants) {
-          // Discriminated union interface - encode to measure
-          lines.push(`${indent}// ${fieldName}: discriminated union (encode to measure)`);
-          lines.push(`${indent}if ${valueExpr} != nil {`);
-          lines.push(`${indent}\tsize += ${valueExpr}.CalculateSize()`);
-          lines.push(`${indent}}`);
-        } else {
-          lines.push(`${indent}size += ${valueExpr}.CalculateSize() // ${fieldName}`);
-        }
-      } else {
-        // Unknown type - might be interface{} for inline discriminated union
-        // Check if field has variants (inline discriminated union)
-        if (fieldAny.variants) {
-          lines.push(`${indent}// ${fieldName}: inline discriminated union (encode to measure)`);
-          lines.push(`${indent}if ${valueExpr} != nil {`);
-          lines.push(`${indent}\t${fieldName}_bytes, _ := ${valueExpr}.(interface{ Encode() ([]byte, error) }).Encode()`);
-          lines.push(`${indent}\tsize += len(${fieldName}_bytes)`);
-          lines.push(`${indent}}`);
-        } else {
-          // Try to call CalculateSize anyway
-          lines.push(`${indent}size += ${valueExpr}.CalculateSize() // ${fieldName} (type: ${fieldType})`);
-        }
-      }
-      break;
-    }
+    case "optional":
+    case "padding":
+    case "back_reference":
+    case "compressed":
+      // Handled before this function is reached: `optional` and `padding` by
+      // the guards in generateFieldSizeCalculation, `back_reference` and
+      // `compressed` by their own size paths. Arriving here means one of those
+      // callers changed without updating this switch.
+      throw new Error(
+        `generateFieldSizeForType: '${fieldType}' is handled by the caller and must not reach the per-type size switch`,
+      );
+
+    default:
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Go size calculation");
   }
 
+  return lines;
+}
+
+/**
+ * Size calculation for a reference to a user-defined type.
+ *
+ * Split out of `generateFieldSizeForType`'s `default:` arm so that arm could be
+ * made exhaustive: a `default:` that means both "user type" and "keyword I
+ * forgot" silently absorbs the second case (see schema/field-types.ts).
+ */
+function generateTypeReferenceSizeCalculation(
+  fieldType: string,
+  valueExpr: string,
+  fieldName: string,
+  schema: BinarySchema,
+  indent: string,
+  fieldAny: any,
+): string[] {
+  const lines: string[] = [];
+  if (schema.types[fieldType]) {
+    const typeDef = schema.types[fieldType] as any;
+    // Check if this is a string type alias — inline size calc
+    if (!('sequence' in typeDef) && typeDef.type === 'string') {
+      const syntheticField = { name: fieldType, ...typeDef };
+      return generateFieldSizeForType('string', valueExpr, schema, indent, syntheticField);
+    }
+    // Check if this is an enum type - inline the fixed size
+    if (isEnumType(typeDef)) {
+      const reprSize = typeDef.repr === "uint8" ? 1 : typeDef.repr === "uint16" ? 2 : 4;
+      lines.push(`${indent}size += ${reprSize} // ${fieldName} (enum)`);
+      return lines;
+    }
+    // Check if this is a discriminated union
+    if (typeDef.type === "discriminated_union" || typeDef.variants) {
+      // Discriminated union interface - encode to measure
+      lines.push(`${indent}// ${fieldName}: discriminated union (encode to measure)`);
+      lines.push(`${indent}if ${valueExpr} != nil {`);
+      lines.push(`${indent}\tsize += ${valueExpr}.CalculateSize()`);
+      lines.push(`${indent}}`);
+    } else {
+      lines.push(`${indent}size += ${valueExpr}.CalculateSize() // ${fieldName}`);
+    }
+    return lines;
+  }
+
+  // Unknown type - might be interface{} for inline discriminated union
+  // Check if field has variants (inline discriminated union)
+  if (fieldAny.variants) {
+    lines.push(`${indent}// ${fieldName}: inline discriminated union (encode to measure)`);
+    lines.push(`${indent}if ${valueExpr} != nil {`);
+    lines.push(`${indent}\t${fieldName}_bytes, _ := ${valueExpr}.(interface{ Encode() ([]byte, error) }).Encode()`);
+    lines.push(`${indent}\tsize += len(${fieldName}_bytes)`);
+    lines.push(`${indent}}`);
+  } else {
+    // Try to call CalculateSize anyway
+    lines.push(`${indent}size += ${valueExpr}.CalculateSize() // ${fieldName} (type: ${fieldType})`);
+  }
   return lines;
 }
 
@@ -3725,7 +3763,22 @@ function generateEncodeArrayWithBackReference(
 function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: string, runtimeEndianness: string, indent: string, schema?: BinarySchema): string[] {
   const lines: string[] = [];
 
-  switch (field.type) {
+  // Type references resolve here, leaving the switch exhaustive over keywords.
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Check if this is a string type alias — inline encoding
+    if (schema && isStringTypeAlias(fieldType, schema)) {
+      const typeDef = schema.types[fieldType] as any;
+      const syntheticField = { name: field.name, ...typeDef };
+      lines.push(...generateEncodeString(syntheticField, fieldName, endianness, indent));
+    } else {
+      // Type reference - nested struct
+      lines.push(...generateEncodeNestedStruct(field, fieldName, indent));
+    }
+    return lines;
+  }
+
+  switch (fieldType) {
     case "uint8":
       lines.push(`${indent}encoder.WriteUint8(${fieldName})`);
       break;
@@ -3840,17 +3893,19 @@ function generateEncodeFieldImpl(field: Field, fieldName: string, endianness: st
       lines.push(...generateEncodeCompressed(field, fieldName, runtimeEndianness, indent));
       break;
 
+    case "optional":
+    case "padding":
+      // Both are unwrapped by generateEncodeField before it delegates here —
+      // `optional` writes its presence indicator and recurses with a synthetic
+      // field for value_type, `padding` emits alignment bytes. Arriving with
+      // one of them means a caller bypassed that wrapper.
+      throw new Error(
+        `generateEncodeFieldImpl: '${fieldType}' must be unwrapped by generateEncodeField before reaching the field encoder`,
+      );
+
     default:
-      // Check if this is a string type alias — inline encoding
-      if (schema && isStringTypeAlias(field.type, schema)) {
-        const typeDef = schema.types[field.type] as any;
-        const syntheticField = { name: field.name, ...typeDef };
-        lines.push(...generateEncodeString(syntheticField, fieldName, endianness, indent));
-      } else {
-        // Type reference - nested struct
-        lines.push(...generateEncodeNestedStruct(field, fieldName, indent));
-      }
-      break;
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Go field encoding");
   }
 
   return lines;
@@ -4651,7 +4706,47 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
     return lines;
   }
 
-  switch (field.type) {
+  // Type references resolve here, leaving the switch exhaustive over keywords.
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Check if this is a string type alias — inline decoding
+    if (schema && isStringTypeAlias(fieldType, schema)) {
+      const typeDef = schema.types[fieldType] as any;
+      const syntheticField = { name: field.name, ...typeDef };
+      lines.push(...generateDecodeString(syntheticField, fieldName, varName, endianness, indent));
+      return lines;
+    }
+    // Special case: type reference to a standalone discriminated_union with a
+    // FIELD-based discriminator. The DU's own decodeWithDecoder can't run (it
+    // has no access to the parent's tag), so TS/Rust inline the dispatch at
+    // the call site. We do the same — match the previously-decoded sibling
+    // discriminator field against each variant's `when` and call the right
+    // variant's decoder directly. The result (`*Foo`) auto-satisfies the
+    // union interface, so we assign it directly without dereferencing.
+    if (schema) {
+      const refTypeDef = schema.types[fieldType] as any;
+      if (
+        refTypeDef &&
+        refTypeDef.type === "discriminated_union" &&
+        refTypeDef.discriminator?.field
+      ) {
+        lines.push(...generateDecodeStandaloneDUFieldDiscriminator(
+          field as any,
+          fieldName,
+          refTypeDef,
+          indent,
+          schema,
+          parentTypeName,
+        ));
+        return lines;
+      }
+    }
+    // Type reference - nested struct
+    lines.push(...generateDecodeNestedStruct(field, fieldName, varName, indent));
+    return lines; // Early return - nested struct handling includes assignment
+  }
+
+  switch (fieldType) {
     case "uint8":
       lines.push(`${indent}${varName}, err := decoder.ReadUint8()`);
       break;
@@ -4807,42 +4902,17 @@ function generateDecodeFieldImpl(field: Field, fieldName: string, varName: strin
       lines.push(...generateDecodeCompressed(field, fieldName, varName, runtimeEndianness, indent));
       return lines; // Early return - compressed handling includes assignment
 
+    case "optional":
+    case "padding":
+      // Unwrapped by generateDecodeField before it delegates here (presence
+      // indicator + synthetic value field, and alignment skip respectively).
+      throw new Error(
+        `generateDecodeFieldImpl: '${fieldType}' must be unwrapped by generateDecodeField before reaching the field decoder`,
+      );
+
     default:
-      // Check if this is a string type alias — inline decoding
-      if (schema && isStringTypeAlias(field.type, schema)) {
-        const typeDef = schema.types[field.type] as any;
-        const syntheticField = { name: field.name, ...typeDef };
-        lines.push(...generateDecodeString(syntheticField, fieldName, varName, endianness, indent));
-        return lines;
-      }
-      // Special case: type reference to a standalone discriminated_union with a
-      // FIELD-based discriminator. The DU's own decodeWithDecoder can't run (it
-      // has no access to the parent's tag), so TS/Rust inline the dispatch at
-      // the call site. We do the same — match the previously-decoded sibling
-      // discriminator field against each variant's `when` and call the right
-      // variant's decoder directly. The result (`*Foo`) auto-satisfies the
-      // union interface, so we assign it directly without dereferencing.
-      if (schema) {
-        const refTypeDef = schema.types[field.type as string] as any;
-        if (
-          refTypeDef &&
-          refTypeDef.type === "discriminated_union" &&
-          refTypeDef.discriminator?.field
-        ) {
-          lines.push(...generateDecodeStandaloneDUFieldDiscriminator(
-            field as any,
-            fieldName,
-            refTypeDef,
-            indent,
-            schema,
-            parentTypeName,
-          ));
-          return lines;
-        }
-      }
-      // Type reference - nested struct
-      lines.push(...generateDecodeNestedStruct(field, fieldName, varName, indent));
-      return lines; // Early return - nested struct handling includes assignment
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Go field decoding");
   }
 
   // Error handling (for primitives)
@@ -5896,7 +5966,20 @@ function goVarlengthSizeExpr(encoding: string | undefined, valueExpr: string): s
 }
 
 function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: BinarySchema): string {
-  switch (field.type) {
+  // User-defined type references are resolved before the switch so the switch
+  // can be exhaustive over the built-in keywords; see schema/field-types.ts for
+  // why sharing a `default:` between the two hides missing keywords.
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Check if it's a string type alias — use native string
+    if (schema && isStringTypeAlias(fieldType, schema)) {
+      return "string";
+    }
+    // Type reference (nested struct)
+    return toGoTypeName(fieldType);
+  }
+
+  switch (fieldType) {
     case "uint8":
       return "uint8";
     case "bool":
@@ -5985,13 +6068,16 @@ function mapFieldToGoType(field: Field, parentTypeName?: string, schema?: Binary
       // Back reference - use the target type
       const targetType = (field as any).target_type;
       return toGoTypeName(targetType);
+    case "padding":
+      // Alignment padding is written and skipped structurally; it is filtered
+      // out of the struct before this point (see the `type === "padding"`
+      // guards in the struct/encode/decode builders), so it has no Go type.
+      throw new Error(
+        "mapFieldToGoType: alignment padding has no Go type and must be filtered out by the caller",
+      );
     default:
-      // Check if it's a string type alias — use native string
-      if (schema && isStringTypeAlias(field.type, schema)) {
-        return "string";
-      }
-      // Assume it's a type reference (nested struct)
-      return toGoTypeName(field.type);
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Go type mapping");
   }
 }
 

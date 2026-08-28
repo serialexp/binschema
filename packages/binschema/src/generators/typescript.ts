@@ -3,6 +3,7 @@ import type { GeneratedCode, DocInput, DocBlock } from "./typescript/shared.js";
 import { ARRAY_ITER_SUFFIX } from "./typescript/shared.js";
 import { isTypeAlias, getTypeFields, isBackReferenceTypeDef, isBackReferenceType, sanitizeTypeName, sanitizeVarName, sanitizeEnumMemberName, encoderClassName, decoderClassName } from "./typescript/type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./typescript/documentation.js";
+import { assertNever, isBuiltinFieldType } from "../schema/field-types.js";
 import {
   generateEncodeBitfield,
   generateDecodeBitfield
@@ -813,8 +814,21 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
   }
 
   if ('type' in field) {
-    switch (field.type) {
+    // User-defined type references are peeled off before the switch, so the
+    // switch itself can be exhaustive over the keywords. See
+    // `schema/field-types.ts` for why the two cannot share a `default:`.
+    // Bound to a local so the `isBuiltinFieldType` narrowing survives into the
+    // switch: `field` is loosely typed, and TS will not carry a predicate
+    // through a property access on it.
+    const fieldType = field.type;
+    if (!isBuiltinFieldType(fieldType)) {
+      // Type reference (e.g., "Point", "Optional<uint64>", or a bare template
+      // parameter "T" during generic expansion).
+      return resolveTypeReference(fieldType, schema);
+    }
+    switch (fieldType) {
       case "bit":
+      case "int":
       case "uint8":
       case "uint16":
       case "uint32":
@@ -858,9 +872,19 @@ function getFieldTypeScriptType(field: Field, schema: BinarySchema): string {
         // Compressed region decodes to its inner type (the framing is consumed).
         return resolveTypeReference((field as any).value_type, schema);
       }
+      case "choice": {
+        // Flat discriminated union: one of the listed types, no `.value` wrapper.
+        const choices = (field as any).choices || [];
+        return choices.map((c: any) => resolveTypeReference(c.type, schema)).join(" | ");
+      }
+      case "padding":
+        // Alignment padding has no decoded value; callers are expected to skip
+        // it. `never` fails the generated file's own compile rather than
+        // emitting a type name that does not exist.
+        return "never";
       default:
-        // Type reference (e.g., "Point", "Optional<uint64>")
-        return resolveTypeReference(field.type, schema);
+        // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+        return assertNever(fieldType, "TypeScript type mapping");
     }
   }
   return "any";
@@ -1379,9 +1403,22 @@ function generateEncodeFieldCoreImpl(
     ? field.endianness
     : globalEndianness;
 
-  switch (field.type) {
+  // Type references are handled outside the switch so the switch can be
+  // exhaustive over the built-in keywords (see schema/field-types.ts).
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    return generateEncodeTypeReference(fieldType, schema, globalEndianness, valuePath, indent, contextVarName, baseContextVar);
+  }
+
+  switch (fieldType) {
     case "bit":
       return `${indent}this.writeBits(${valuePath}, ${field.size});\n`;
+
+    case "int":
+      // Arbitrary-width signed integer. `asUintN` is the two's-complement
+      // reinterpretation the bit writer needs, matching what the Go, Rust and
+      // Zig generators emit for this type.
+      return `${indent}this.writeBits(BigInt.asUintN(${(field as any).size}, BigInt(${valuePath})), ${(field as any).size});\n`;
 
     case "uint8":
       return `${indent}this.writeUint8(${valuePath});\n`;
@@ -1474,8 +1511,9 @@ function generateEncodeFieldCoreImpl(
     }
 
     default:
-      // Type reference - need to encode nested struct
-      return generateEncodeTypeReference(field.type, schema, globalEndianness, valuePath, indent, contextVarName, baseContextVar);
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here
+      // rather than silently taking the type-reference path.
+      return assertNever(fieldType, "TypeScript field encoding");
   }
 }
 
@@ -2058,13 +2096,30 @@ function generateDecodeFieldCoreImpl(
     return code;
   }
 
-  switch (field.type) {
+  // Type references are handled outside the switch so the switch can be
+  // exhaustive over the built-in keywords (see schema/field-types.ts).
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    return generateDecodeTypeReference(fieldType, schema, globalEndianness, fieldName, indent);
+  }
+
+  switch (fieldType) {
     case "bit":
       // Keep as bigint for > 53 bits to preserve precision (MAX_SAFE_INTEGER = 2^53 - 1)
       if (field.size > 53) {
         return `${indent}${target} = this.readBits(${field.size});\n`;
       }
       return `${indent}${target} = Number(this.readBits(${field.size}));\n`;
+
+    case "int": {
+      // Signed counterpart of `bit`: `asIntN` sign-extends the two's-complement
+      // bit pattern the encoder wrote.
+      const intSize = (field as any).size;
+      if (intSize > 53) {
+        return `${indent}${target} = BigInt.asIntN(${intSize}, this.readBits(${intSize}));\n`;
+      }
+      return `${indent}${target} = Number(BigInt.asIntN(${intSize}, this.readBits(${intSize})));\n`;
+    }
 
     case "uint8":
       return `${indent}${target} = this.readUint8();\n`;
@@ -2155,8 +2210,9 @@ function generateDecodeFieldCoreImpl(
     }
 
     default:
-      // Type reference
-      return generateDecodeTypeReference(field.type, schema, globalEndianness, fieldName, indent);
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here
+      // rather than silently taking the type-reference path.
+      return assertNever(fieldType, "TypeScript field decoding");
   }
 }
 

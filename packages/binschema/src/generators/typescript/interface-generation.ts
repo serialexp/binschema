@@ -1,6 +1,7 @@
 import { BinarySchema, TypeDef, Field, isEnumType } from "../../schema/binary-schema.js";
 import { getTypeFields, sanitizeTypeName, valueTypeName } from "./type-utils.js";
 import { getFieldDocumentation, generateJSDoc } from "./documentation.js";
+import { assertNever, isBuiltinFieldType } from "../../schema/field-types.js";
 
 /**
  * Check if field is conditional
@@ -100,8 +101,22 @@ export function getFieldTypeScriptType(
   }
 
   if ('type' in field) {
-    switch (field.type) {
+    // Peel off user-defined type references first so the switch below only ever
+    // sees keywords and can be checked for exhaustiveness. Letting a keyword
+    // reach the type-reference path is silent: it looks up a schema type that
+    // does not exist and emits whatever falls out.
+    // Bound to a local so the `isBuiltinFieldType` narrowing survives into the
+    // switch: `field` is loosely typed, and TS will not carry a predicate
+    // through a property access on it.
+    const fieldType = field.type;
+    if (!isBuiltinFieldType(fieldType)) {
+      // Type reference (e.g., "Point", "Optional<uint64>", or a bare template
+      // parameter "T" during generic expansion).
+      return resolveTypeReference(fieldType, schema, useInputTypes);
+    }
+    switch (fieldType) {
       case "bit":
+      case "int":
       case "uint8":
       case "uint16":
       case "uint32":
@@ -141,9 +156,26 @@ export function getFieldTypeScriptType(
           : resolveTypeReference(vt, schema, useInputTypes);
         return `${valueType} | undefined`;
       }
+      case "choice": {
+        // Flat discriminated union: the value is one of the listed types, with
+        // no `.value` wrapper (unlike `discriminated_union`).
+        const choices = (field as any).choices || [];
+        return choices
+          .map((c: any) => resolveTypeReference(c.type, schema, useInputTypes))
+          .join(" | ");
+      }
+      case "compressed":
+        // The framing is consumed on decode, so the value is just the inner type.
+        return resolveTypeReference((field as any).value_type, schema, useInputTypes);
+      case "padding":
+        // Alignment padding occupies wire space but has no decoded value, so it
+        // is filtered out of both interfaces by `isStructuralField`. Reaching
+        // here means a caller skipped that filter; `never` makes the generated
+        // interface fail to compile instead of naming a type that doesn't exist.
+        return "never";
       default:
-        // Type reference (e.g., "Point", "Optional<uint64>")
-        return resolveTypeReference(field.type, schema, useInputTypes);
+        // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+        return assertNever(fieldType, "TypeScript interface type mapping");
     }
   }
   return "any";

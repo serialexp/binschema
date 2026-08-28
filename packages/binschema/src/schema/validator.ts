@@ -11,6 +11,7 @@
 
 import { BinarySchema, Field, TypeDef, isEnumType } from "./binary-schema.js";
 import { ARRAY_ITER_SUFFIX } from "../generators/typescript/shared.js";
+import { BUILTIN_FIELD_TYPES } from "./field-types.js";
 
 export interface ValidationError {
   path: string;
@@ -23,14 +24,13 @@ export interface ValidationResult {
 }
 
 /**
- * Built-in types that don't need to be defined in schema.types
+ * Built-in types that don't need to be defined in schema.types.
+ *
+ * Aliased from the shared list rather than restated here — the generators
+ * dispatch on the same set, and a second copy is how they drift (see
+ * `schema/field-types.ts`).
  */
-const BUILT_IN_TYPES = [
-  "bit", "int", "bool", "uint8", "uint16", "uint32", "uint64",
-  "int8", "int16", "int32", "int64", "varlength", "float32", "float64",
-  "string", "array", "bytes", "optional", "bitfield", "discriminated_union", "back_reference", "choice",
-  "padding", "compressed"
-];
+const BUILT_IN_TYPES: readonly string[] = BUILTIN_FIELD_TYPES;
 
 /**
  * Reserved patterns that cannot appear in user-defined field names

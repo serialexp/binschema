@@ -29,6 +29,7 @@ import { emitBitfieldEncode } from "./bitfield.js";
 import { emitOptionalEncode } from "./optional.js";
 import { emitChoiceEncode, emitDuEncode, unionTypeSwitchExpr } from "./union.js";
 import { emitCompressedEncode } from "./compression.js";
+import { isBuiltinFieldType } from "../../schema/field-types.js";
 
 /** Thrown when a field shape isn't handled yet by the Zig generator. */
 export class ZigNotImplemented extends Error {
@@ -175,6 +176,15 @@ export function emitEncodeValue(field: any, value: string, ctx: EmitCtx, indent:
     case "discriminated_union": return emitDuEncode(field, value, ctx, indent);
     case "choice": return emitChoiceEncode(field, value, indent);
     case "compressed": return emitCompressedEncode(field, value, ctx, indent);
+  }
+
+
+  // A built-in keyword that falls past the switch above is a gap in this
+  // generator, not a type reference. Resolving it as one would report a
+  // confusing "unknown type" instead of the missing case (see
+  // schema/field-types.ts).
+  if (isBuiltinFieldType(field.type)) {
+    throw new ZigNotImplemented(`field type '${field.type}'`);
   }
 
   // Type reference: resolve alias chains and dispatch on the concrete shape.

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeMessageCode } from "./protocol-schema.js";
+import type { BuiltinFieldType } from "./field-types.js";
 
 /**
  * Binary Schema Definition
@@ -1995,37 +1996,48 @@ const ConditionalFieldSchema = z.object({
  * - Conditionals are detected by presence of 'conditional' property
  * - Type references are the fallback for user-defined types
  */
+/**
+ * Every built-in field type, as a zod union.
+ *
+ * Named (rather than inlined into `FieldTypeRefSchema`) so the
+ * `BUILTIN_FIELD_TYPES` list in `field-types.js` can be checked against it.
+ * The generators dispatch on that list, and a keyword present here but missing
+ * there falls into a generator's type-reference path, where it is silently
+ * turned into a bogus identifier instead of being rejected.
+ */
+export const BuiltinFieldSchema = z.union([
+  BitFieldSchema,
+  SignedIntFieldSchema,
+  Uint8FieldSchema,
+  BoolFieldSchema,
+  Uint16FieldSchema,
+  Uint32FieldSchema,
+  Uint64FieldSchema,
+  Int8FieldSchema,
+  Int16FieldSchema,
+  Int32FieldSchema,
+  Int64FieldSchema,
+  VarlengthFieldSchema,
+  Float32FieldSchema,
+  Float64FieldSchema,
+  OptionalFieldSchema,
+  ArrayFieldSchema,
+  BytesFieldSchema,
+  StringFieldSchema,
+  BitfieldFieldSchema,
+  DiscriminatedUnionFieldSchema,
+  ChoiceFieldSchema,
+  BackReferenceFieldSchema,
+  PaddingFieldSchema,
+  CompressedFieldSchema,
+]);
+
 const FieldTypeRefSchema: z.ZodType<any> = z.union([
   // First: Check for conditional fields (has 'conditional' property - unique identifier)
   ConditionalFieldSchema,
 
   // Second: Union of all built-in types (some are themselves unions for const/computed/plain variants)
-  z.union([
-    BitFieldSchema,
-    SignedIntFieldSchema,
-    Uint8FieldSchema,
-    BoolFieldSchema,
-    Uint16FieldSchema,
-    Uint32FieldSchema,
-    Uint64FieldSchema,
-    Int8FieldSchema,
-    Int16FieldSchema,
-    Int32FieldSchema,
-    Int64FieldSchema,
-    VarlengthFieldSchema,
-    Float32FieldSchema,
-    Float64FieldSchema,
-    OptionalFieldSchema,
-    ArrayFieldSchema,
-    BytesFieldSchema,
-    StringFieldSchema,
-    BitfieldFieldSchema,
-    DiscriminatedUnionFieldSchema,
-    ChoiceFieldSchema,
-    BackReferenceFieldSchema,
-    PaddingFieldSchema,
-    CompressedFieldSchema,
-  ]),
+  BuiltinFieldSchema,
 
   // Third: Fallback to type reference for user-defined types
   TypeRefFieldSchema,
@@ -2036,6 +2048,43 @@ const FieldTypeRefSchema: z.ZodType<any> = z.union([
  */
 export const FieldSchema = FieldTypeRefSchema;
 export type Field = z.infer<typeof FieldSchema>;
+
+// ============================================================================
+// Built-in field type list ↔ schema consistency
+// ============================================================================
+
+/**
+ * The `type` literals actually accepted by the built-in field schemas above.
+ *
+ * Note this cannot be read off `Field`: its last arm is `TypeRefFieldSchema`,
+ * whose `type` is `z.string()` (the uppercase-initial rule is a runtime
+ * `refine`, invisible to the type system). That `string` swallows every literal
+ * when unioned, which is exactly why generators cannot switch exhaustively on a
+ * raw field type and must call `isBuiltinFieldType` first.
+ */
+type ZodBuiltinFieldType = Extract<
+  z.infer<typeof BuiltinFieldSchema>,
+  { type: string }
+>["type"];
+
+/**
+ * Compile-time proof that `BUILTIN_FIELD_TYPES` and the zod arms describe the
+ * same set. If either grows a keyword the other lacks, one of these two
+ * assignments stops typechecking and names the offender in the error.
+ *
+ * Without this, adding a field type is a two-file change with no reminder for
+ * the second file — and forgetting the list half is precisely what routes a new
+ * keyword into every generator's type-reference path.
+ */
+type MissingFromList = Exclude<ZodBuiltinFieldType, BuiltinFieldType>;
+type MissingFromZodSchema = Exclude<BuiltinFieldType, ZodBuiltinFieldType>;
+
+const _assertListCoversSchema: MissingFromList extends never ? true : MissingFromList = true;
+const _assertSchemaCoversList: MissingFromZodSchema extends never
+  ? true
+  : MissingFromZodSchema = true;
+void _assertListCoversSchema;
+void _assertSchemaCoversList;
 
 // ============================================================================
 // Type Definitions

@@ -3,6 +3,7 @@
 // ABOUTME: Reference: src/generators/typescript.ts is the canonical implementation
 
 import { type BinarySchema, type Field, type Endianness, isEnumType } from "../schema/binary-schema.js";
+import { assertNever, isBuiltinFieldType } from "../schema/field-types.js";
 
 export interface GeneratedPythonCode {
   code: string;
@@ -122,8 +123,20 @@ function pythonPrimitiveDecodeExpr(type: string, endianness: string): string | n
 function mapFieldToPythonType(field: any, schema: BinarySchema): string {
   if (!field || typeof field !== 'object') return "Any";
 
-  switch (field.type) {
+  // User-defined type references resolve before the switch so the switch stays
+  // exhaustive over the built-in keywords (see schema/field-types.ts).
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Type reference - check if it's a known type in the schema
+    if (fieldType && schema.types[fieldType]) {
+      return toPascalCase(fieldType);
+    }
+    return "Any";
+  }
+
+  switch (fieldType) {
     case "bit":
+    case "int":
     case "uint8":
     case "uint16":
     case "uint32":
@@ -173,11 +186,8 @@ function mapFieldToPythonType(field: any, schema: BinarySchema): string {
     case "padding":
       return "None";
     default:
-      // Type reference - check if it's a known type in the schema
-      if (field.type && schema.types[field.type]) {
-        return toPascalCase(field.type);
-      }
-      return "Any";
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Python type mapping");
   }
 }
 
@@ -281,11 +291,25 @@ function generateFieldEncode(field: any, valuePath: string, indent: string, endi
     return code;
   }
 
-  switch (field.type) {
+  // User-defined type references resolve before the switch so the switch stays
+  // exhaustive over the built-in keywords (see schema/field-types.ts).
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Type reference - delegate to that type's encoder
+    if (fieldType && schema.types[fieldType]) {
+      code += generateTypeRefEncode(field, fieldAccess, indent, endianness, schema, bitOrder, valuePath);
+    } else {
+      code += `${indent}# TODO: unsupported type ${fieldType}\n`;
+    }
+    return code;
+  }
+
+  switch (fieldType) {
     case "padding":
       code += generatePaddingEncode(field, indent);
       break;
     case "bit":
+    case "int":
       code += `${indent}encoder.write_bits(${fieldAccess}, ${field.size || 1})\n`;
       break;
     case "bool":
@@ -364,13 +388,18 @@ function generateFieldEncode(field: any, valuePath: string, indent: string, endi
     case "compressed":
       code += generateCompressedEncode(field, fieldAccess, indent, endianness, schema);
       break;
+    case "back_reference":
+      // Not implemented in the Python generator. Previously this fell into the
+      // type-reference default and emitted `# TODO: unsupported type`, so the
+      // field vanished from the generated encoder and the output silently did
+      // not match the schema. Failing at generation time is the honest answer.
+      throw new Error(
+        "Python generator does not support 'back_reference' fields (offset/pointer semantics are unimplemented)",
+      );
+
     default:
-      // Type reference - delegate to that type's encoder
-      if (field.type && schema.types[field.type]) {
-        code += generateTypeRefEncode(field, fieldAccess, indent, endianness, schema, bitOrder, valuePath);
-      } else {
-        code += `${indent}# TODO: unsupported type ${field.type}\n`;
-      }
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Python field encoding");
   }
 
   return code;
@@ -416,7 +445,14 @@ function generateConstEncode(field: any, indent: string, endianness: string): st
       code += `${indent}encoder.write_bits(${value}, ${field.size || 1})\n`;
       break;
     default:
-      code += `${indent}# const encode for ${field.type}: ${value}\n`;
+      // A `const` field the const-encoder has no case for used to emit a bare
+      // comment, so the value was silently never written and the encoded bytes
+      // did not match the schema. Fail at generation time instead. (The schema
+      // allows `const` on uint8/uint16/uint32/bytes and on strings, which are
+      // handled above.)
+      throw new Error(
+        `Python generator cannot encode a const value for field type '${field.type}'`,
+      );
   }
   return code;
 }
@@ -1866,11 +1902,25 @@ function generateFieldDecode(field: any, resultPath: string, indent: string, end
   // Handle computed fields - read normally (the value is in the byte stream)
   // No special handling needed for decode
 
-  switch (field.type) {
+  // User-defined type references resolve before the switch so the switch stays
+  // exhaustive over the built-in keywords (see schema/field-types.ts).
+  const fieldType = field.type;
+  if (!isBuiltinFieldType(fieldType)) {
+    // Type reference
+    if (fieldType && schema.types[fieldType]) {
+      code += generateTypeRefDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
+    } else {
+      code += `${indent}# TODO: unsupported decode type ${fieldType}\n`;
+    }
+    return code;
+  }
+
+  switch (fieldType) {
     case "padding":
       code += generatePaddingDecode(field, indent);
       break;
     case "bit":
+    case "int":
       code += `${indent}${fieldAssign} = decoder.read_bits(${field.size || 1})\n`;
       break;
     case "bool":
@@ -1949,13 +1999,15 @@ function generateFieldDecode(field: any, resultPath: string, indent: string, end
     case "compressed":
       code += generateCompressedDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
       break;
+    case "back_reference":
+      // See the encode side: unimplemented, and silently dropped before.
+      throw new Error(
+        "Python generator does not support 'back_reference' fields (offset/pointer semantics are unimplemented)",
+      );
+
     default:
-      // Type reference
-      if (field.type && schema.types[field.type]) {
-        code += generateTypeRefDecode(field, fieldAssign, indent, endianness, schema, bitOrder);
-      } else {
-        code += `${indent}# TODO: unsupported decode type ${field.type}\n`;
-      }
+      // Exhaustive: a new BUILTIN_FIELD_TYPES entry breaks the build here.
+      return assertNever(fieldType, "Python field decoding");
   }
 
   return code;
@@ -1995,7 +2047,11 @@ function generateConstDecode(field: any, fieldAssign: string, indent: string, en
       code += `${indent}${fieldAssign} = decoder.read_bits(${field.size || 1})\n`;
       break;
     default:
-      code += `${indent}# const decode for ${field.type}\n`;
+      // See generateConstEncode: silently skipping a const field desynchronises
+      // the decoder from the byte stream, which is worse than refusing.
+      throw new Error(
+        `Python generator cannot decode a const value for field type '${field.type}'`,
+      );
   }
 
   return code;

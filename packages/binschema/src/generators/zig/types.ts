@@ -7,6 +7,7 @@ import { ZigNotImplemented } from "./encode.js";
 import { zigBitfieldType } from "./bitfield.js";
 import { zigOptionalType } from "./optional.js";
 import { zigUnionType } from "./union.js";
+import { isBuiltinFieldType } from "../../schema/field-types.js";
 
 /** Map a BinSchema endianness to the Zig runtime enum literal. */
 export function zigEndianness(endianness: string | undefined, fallback: string): string {
@@ -196,6 +197,14 @@ export function zigDeclaredType(field: any, schema: BinarySchema): string {
       // whatever the referenced `target_type` decodes to. The pointer framing is
       // consumed, not stored.
       return zigDeclaredType({ type: field.target_type }, schema);
+  }
+
+  // A built-in keyword that falls past the switch above is a gap in this
+  // generator, not a type reference. Resolving it as one would report a
+  // confusing "unknown type" instead of the missing case (see
+  // schema/field-types.ts).
+  if (isBuiltinFieldType(field.type)) {
+    throw new ZigNotImplemented(`field type '${field.type}'`);
   }
 
   // Type reference: resolve through alias chains.

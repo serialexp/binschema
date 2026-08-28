@@ -21,6 +21,7 @@ import { emitOptionalDecode } from "./optional.js";
 import { emitChoiceDecode, emitDuDecode } from "./union.js";
 import { emitCompressedDecode } from "./compression.js";
 import { FIELD_ID_ACC } from "./computed.js";
+import { isBuiltinFieldType } from "../../schema/field-types.js";
 
 /**
  * Emit statements to decode a single named field of `target` (e.g. "result")
@@ -148,6 +149,14 @@ export function emitDecodeValue(
     case "discriminated_union": return emitDuDecode(field, ctx, lhs, structVar, indent);
     case "choice": return emitChoiceDecode(field, ctx, lhs, indent);
     case "compressed": return emitCompressedDecode(field, ctx, lhs, indent);
+  }
+
+  // A built-in keyword that falls past the switch above is a gap in this
+  // generator, not a type reference. Resolving it as one would report a
+  // confusing "unknown type" instead of the missing case (see
+  // schema/field-types.ts).
+  if (isBuiltinFieldType(field.type)) {
+    throw new ZigNotImplemented(`field type '${field.type}'`);
   }
 
   const resolved = resolveAlias(ctx.schema, field.type);
