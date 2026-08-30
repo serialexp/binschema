@@ -129,7 +129,7 @@ impl BitStreamEncoder {
             // When a byte value crosses a bit boundary, the bits are written
             // starting from the LSB of the value.
             for i in 0..8u8 {
-                let bit = ((value >> i) & 1) as u8;
+                let bit = (value >> i) & 1;
                 self.write_single_bit(bit);
             }
         }
