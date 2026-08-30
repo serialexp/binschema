@@ -17,6 +17,7 @@ import {
 } from "./command-parser.js";
 import type { BinarySchema } from "../schema/binary-schema.js";
 import { transformProtocolToBinary } from "../schema/protocol-to-binary.js";
+import { copyRuntimeFile, vendoredRuntimeBanner } from "./vendored-runtime.js";
 
 async function main() {
   const argv = process.argv.slice(2);
@@ -268,10 +269,11 @@ async function handleGenerate(command: GenerateCommand): Promise<void> {
         );
       }
       for (const file of runtimeFiles) {
-        const srcPath = join(runtimeDir, file);
-        const destPath = join(absoluteOut, file);
-        const content = readFileSync(srcPath, "utf-8");
-        writeFileSync(destPath, content, "utf-8");
+        copyRuntimeFile(
+          join(runtimeDir, file),
+          join(absoluteOut, file),
+          "packages/binschema/src/runtime/",
+        );
       }
 
       console.log(`Generated TypeScript sources → ${outputPath}`);
@@ -415,8 +417,7 @@ async function runGoGenerator(opts: { schema: BinarySchema; typeName: string; ou
 
   const runtimeFiles = readdirSync(runtimeSrcDir).filter(f => f.endsWith(".go"));
   for (const file of runtimeFiles) {
-    const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
-    writeFileSync(join(runtimeDestDir, file), content, "utf-8");
+    copyRuntimeFile(join(runtimeSrcDir, file), join(runtimeDestDir, file), "go/runtime/");
   }
 
   // Determine the runtime import path
@@ -484,8 +485,7 @@ async function runRustGenerator(opts: { schema: BinarySchema; typeName: string; 
   // Copy runtime source files (exclude test_schema.rs which is test-only)
   const runtimeFiles = ["bitstream.rs", "context.rs", "codecs.rs"];
   for (const file of runtimeFiles) {
-    const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
-    writeFileSync(join(runtimeCrateSrcDir, file), content, "utf-8");
+    copyRuntimeFile(join(runtimeSrcDir, file), join(runtimeCrateSrcDir, file), "rust/src/");
   }
 
   // Write a lib.rs that excludes test_schema module
@@ -493,7 +493,11 @@ async function runRustGenerator(opts: { schema: BinarySchema; typeName: string; 
   const strippedLibRs = libRsContent
     .replace(/pub mod test_schema;\n?/, "")
     .replace(/pub use test_schema[^\n]*\n?/g, "");
-  writeFileSync(join(runtimeCrateSrcDir, "lib.rs"), strippedLibRs, "utf-8");
+  writeFileSync(
+    join(runtimeCrateSrcDir, "lib.rs"),
+    vendoredRuntimeBanner("rust/src/") + strippedLibRs,
+    "utf-8",
+  );
 
   // Write Cargo.toml for the runtime crate. flate2 backs the built-in
   // deflate/gzip codecs used by `compressed` regions.
@@ -581,8 +585,7 @@ async function runPythonGenerator(opts: { schema: BinarySchema; typeName: string
 
   const runtimeFiles = readdirSync(runtimeSrcDir).filter(f => f.endsWith(".py"));
   for (const file of runtimeFiles) {
-    const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
-    writeFileSync(join(runtimeDestDir, file), content, "utf-8");
+    copyRuntimeFile(join(runtimeSrcDir, file), join(runtimeDestDir, file), "python/runtime/", "#");
   }
 
   const { generatePython } = await import("../generators/python.js");
@@ -631,8 +634,7 @@ async function runZigGenerator(opts: { schema: BinarySchema; typeName: string; o
 
   const runtimeFiles = readdirSync(runtimeSrcDir).filter(f => f.endsWith(".zig"));
   for (const file of runtimeFiles) {
-    const content = readFileSync(join(runtimeSrcDir, file), "utf-8");
-    writeFileSync(join(runtimeDestDir, file), content, "utf-8");
+    copyRuntimeFile(join(runtimeSrcDir, file), join(runtimeDestDir, file), "zig/runtime/");
   }
 
   const { generateZig } = await import("../generators/zig/index.js");
