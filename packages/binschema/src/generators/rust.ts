@@ -1629,13 +1629,32 @@ function generateDiscriminatedUnion(name: string, unionDef: any, defaultEndianne
   // Generate impl block
   lines.push(`impl ${name} {`);
 
-  // Check if this union has back_reference variants (needs compression dict support)
+  // Encoding needs a context not only for direct back-reference variants, but
+  // also when a composite variant contains nested structs whose own encoders
+  // consume parent context. Previously those arms emitted `ctx.extend_with_parent`
+  // inside a context-free `encode_into`, producing uncompilable Rust.
   const hasBackRefVariants = unionHasBackReferenceVariant(unionDef, schema);
+  const anyVariantHasNestedStructNeedingContext = variants.some((variant: any) => {
+    const typeDef = schema.types[variant.type];
+    if (!typeDef || !("sequence" in typeDef)) return false;
+    return ((typeDef as any).sequence as Field[]).some((field: any) => {
+      if (!field.name || field.type === "padding" || field.computed || field.const != null) return false;
+      const nestedType = schema.types?.[field.type as string];
+      if (!nestedType || !("sequence" in nestedType)) return false;
+      const nestedSequence = (nestedType as any).sequence as Field[];
+      return typeHasParentReferences(nestedSequence) || hasNestedStructFields(nestedSequence, schema);
+    });
+  });
+  const anyVariantNeedsEncodeContext =
+    hasBackRefVariants ||
+    variants.some((variant: any) => variantTypeNeedsEncodeContext(variant.type, schema)) ||
+    anyVariantHasNestedStructNeedingContext ||
+    variants.some((variant: any) => typeTransitivelyContainsBackReference(variant.type, schema));
 
   // Generate encode method
   // For variants with simple types (no Input/Output separation), we can call encode() directly
   // For composite types wrapped in Output, encode all their fields inline
-  if (hasBackRefVariants) {
+  if (anyVariantNeedsEncodeContext) {
     lines.push(`    pub fn encode(&self) -> Result<Vec<u8>> {`);
     lines.push(`        let mut encoder = BitStreamEncoder::new(BitOrder::${bitOrder});`);
     lines.push(`        self.encode_into_with_context(&mut encoder, &EncodeContext::new())?;`);

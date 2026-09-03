@@ -456,6 +456,59 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     });
   }
 
+  // Regression: a union variant with nested struct fields must generate a
+  // context-bearing encoder before an arm refers to `ctx`. Wheat's immutable
+  // object union exposed the old context-free signature plus a dangling `ctx`.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Digest: { sequence: [{ name: "bytes", type: "bytes", kind: "fixed", length: 32 }] } as any,
+        ObjectId: { sequence: [{ name: "digest", type: "Digest" }] },
+        ObjectV1: {
+          sequence: [
+            { name: "tag", type: "uint8", const: 1 } as any,
+            { name: "id", type: "ObjectId" },
+          ],
+        },
+        Object: {
+          type: "discriminated_union",
+          discriminator: { peek: "uint8" },
+          variants: [{ type: "ObjectV1", when: "value == 1" }],
+        } as any,
+      },
+    };
+    const result = generateRust(schema, "Object");
+    const hasContextSignature = result.code.includes(
+      "pub fn encode_into_with_context(&self, encoder: &mut BitStreamEncoder, ctx: &EncodeContext)",
+    );
+    const wrapperDelegates = result.code.includes(
+      "self.encode_into_with_context(encoder, &EncodeContext::new())",
+    );
+    const hasDanglingContext =
+      result.code.includes("pub fn encode_into(&self, encoder: &mut BitStreamEncoder) -> Result<()> {\n        match self") &&
+      result.code.includes("ctx.extend_with_parent");
+
+    if (hasContextSignature && wrapperDelegates && !hasDanglingContext) {
+      passed++;
+      checks.push({ description: "Union nested-struct encode context", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Union nested-struct encode context",
+        passed: false,
+        message: `contextSignature=${hasContextSignature}, wrapper=${wrapperDelegates}, dangling=${hasDanglingContext}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Union nested-struct encode context",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
   // Test: String-kind alias newtype emits ergonomic trait impls
   // (From<&str>, From<std::string::String>, Deref, AsRef<str>, Display,
   // PartialEq<&str>/<str>/<std::string::String>). Without these, callers
