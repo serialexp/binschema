@@ -728,15 +728,28 @@ function fieldIsRecursive(containingType: string | undefined, field: Field, sche
  * Check if a type has any nested struct fields
  * Returns true if any field references another struct type
  */
-function hasNestedStructFields(fields: Field[], schema: BinarySchema): boolean {
+function hasNestedStructFields(
+  fields: Field[],
+  schema: BinarySchema,
+  visited: Set<string> = new Set(),
+): boolean {
   for (const field of fields) {
     const fieldType = field.type as string;
-    // Check if it's a reference to another type in the schema
+    // A nested struct only requires an encoding context when something below it
+    // consumes one. Treating every structural nesting as context-dependent makes
+    // ordinary generated encoders clone parent maps in their hot path.
     if (schema.types && schema.types[fieldType]) {
       const typeDef = schema.types[fieldType];
-      // It's a nested struct if it has a sequence
-      if ("sequence" in typeDef) {
-        return true;
+      if ("sequence" in typeDef && !visited.has(fieldType)) {
+        const nestedFields = (typeDef as any).sequence as Field[];
+        const nestedVisited = new Set(visited);
+        nestedVisited.add(fieldType);
+        if (
+          typeHasParentReferences(nestedFields) ||
+          hasNestedStructFields(nestedFields, schema, nestedVisited)
+        ) {
+          return true;
+        }
       }
     }
     // Check array items - if they reference types that need context
@@ -7925,6 +7938,10 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     }
   } else if (kind === "fixed") {
     const length = field.length || 0;
+    if (items.type === "uint8" && aligned) {
+      lines.push(`${indent}let ${varName} = decoder.read_bytes_vec(${length})?;`);
+      return lines;
+    }
     lines.push(`${indent}let mut ${varName} = Vec::with_capacity(${length});`);
     lines.push(`${indent}for _ in 0..${length} {`);
   } else if (kind === "null_terminated") {

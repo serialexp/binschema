@@ -163,9 +163,9 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
 
     const hasVecType = result.code.includes("pub magic: Vec<u8>");
     const hasLoopEncode = result.code.includes("for item in &self.magic");
-    const hasCapacity = result.code.includes("Vec::with_capacity(4)");
+    const hasBulkDecode = result.code.includes("let magic = decoder.read_bytes_vec(4)?;");
 
-    if (hasVecType && hasLoopEncode && hasCapacity) {
+    if (hasVecType && hasLoopEncode && hasBulkDecode) {
       passed++;
       checks.push({ description: "Fixed array generation", passed: true });
     } else {
@@ -173,7 +173,7 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
       checks.push({
         description: "Fixed array generation",
         passed: false,
-        message: `Missing array handling: vec=${hasVecType}, loop=${hasLoopEncode}, capacity=${hasCapacity}`
+        message: `Missing array handling: vec=${hasVecType}, loop=${hasLoopEncode}, bulkDecode=${hasBulkDecode}`
       });
     }
   } catch (error: any) {
@@ -456,19 +456,23 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     });
   }
 
-  // Regression: a union variant with nested struct fields must generate a
-  // context-bearing encoder before an arm refers to `ctx`. Wheat's immutable
-  // object union exposed the old context-free signature plus a dangling `ctx`.
+  // Regression: a union variant with a context-consuming nested struct must
+  // generate a context-bearing encoder before an arm refers to `ctx`.
   try {
     const schema: BinarySchema = {
       config: { endianness: "big_endian" },
       types: {
-        Digest: { sequence: [{ name: "bytes", type: "bytes", kind: "fixed", length: 32 }] } as any,
-        ObjectId: { sequence: [{ name: "digest", type: "Digest" }] },
+        Payload: { sequence: [{ name: "bytes", type: "bytes", kind: "fixed", length: 32 }] } as any,
+        Header: { sequence: [{ name: "payload", type: "Payload" }] },
         ObjectV1: {
           sequence: [
             { name: "tag", type: "uint8", const: 1 } as any,
-            { name: "id", type: "ObjectId" },
+            { name: "header", type: "Header" },
+            {
+              name: "payload_length",
+              type: "uint32",
+              computed: { type: "length_of", target: "../header" },
+            } as any,
           ],
         },
         Object: {
@@ -504,6 +508,97 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     failed++;
     checks.push({
       description: "Union nested-struct encode context",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
+  // Regression: context-free structural nesting must not allocate parent
+  // contexts. Only nested encoders that actually consume parent context should
+  // force the outer union onto its context-bearing path.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Digest: { sequence: [{ name: "bytes", type: "bytes", kind: "fixed", length: 32 }] } as any,
+        ObjectId: { sequence: [{ name: "digest", type: "Digest" }] },
+        ObjectV1: {
+          sequence: [
+            { name: "tag", type: "uint8", const: 1 } as any,
+            { name: "id", type: "ObjectId" },
+          ],
+        },
+        Object: {
+          type: "discriminated_union",
+          discriminator: { peek: "uint8" },
+          variants: [{ type: "ObjectV1", when: "value == 1" }],
+        } as any,
+      },
+    };
+    const result = generateRust(schema, "Object");
+    const hasContextSignature = result.code.includes(
+      "pub fn encode_into_with_context(&self, encoder: &mut BitStreamEncoder, ctx: &EncodeContext)",
+    );
+    const allocatesParentContext = result.code.includes("extend_with_parent");
+
+    if (!hasContextSignature && !allocatesParentContext) {
+      passed++;
+      checks.push({ description: "Context-free nested structs avoid parent contexts", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Context-free nested structs avoid parent contexts",
+        passed: false,
+        message: `contextSignature=${hasContextSignature}, parentContext=${allocatesParentContext}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Context-free nested structs avoid parent contexts",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
+  // Regression: byte-aligned fixed byte arrays should use the decoder's bulk
+  // copy instead of one checked read and push per byte.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Digest: {
+          sequence: [
+            {
+              name: "bytes",
+              type: "array",
+              kind: "fixed",
+              length: 32,
+              items: { type: "uint8" },
+            } as any,
+          ],
+        },
+      },
+    };
+    const result = generateRust(schema, "Digest");
+    const bulkRead = result.code.includes("let bytes = decoder.read_bytes_vec(32)?;");
+    const perByteLoop = result.code.includes("for _ in 0..32");
+
+    if (bulkRead && !perByteLoop) {
+      passed++;
+      checks.push({ description: "Fixed byte arrays decode in bulk", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Fixed byte arrays decode in bulk",
+        passed: false,
+        message: `bulkRead=${bulkRead}, perByteLoop=${perByteLoop}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Fixed byte arrays decode in bulk",
       passed: false,
       message: `Exception: ${error.message}`,
     });

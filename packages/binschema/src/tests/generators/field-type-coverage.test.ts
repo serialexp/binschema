@@ -281,6 +281,27 @@ async function testOptionalSizeAccountsForPresenceByte(): Promise<void> {
   }
 }
 
+
+/** A one-field struct is not a type alias: its size expression still dereferences the field. */
+async function testOneFieldBytesStructSizeUsesField(): Promise<void> {
+  const schema: BinarySchema = {
+    config: { endianness: "big_endian" },
+    types: {
+      Blob: {
+        sequence: [
+          { name: "value", type: "bytes", kind: "length_prefixed", length_type: "uint32" },
+        ],
+      },
+    },
+  } as unknown as BinarySchema;
+  const code = generateTypeScript(schema);
+  const calc = code.slice(code.indexOf("calculateSize(value: Blob"));
+  const body = calc.slice(0, calc.indexOf("\n  }"));
+  if (!body.includes("size += value.value.length;")) {
+    throw new Error(`one-field bytes struct lost its field dereference:\n${body}`);
+  }
+}
+
 export async function runFieldTypeCoverageTests(): Promise<{
   passed: number;
   failed: number;
@@ -303,6 +324,10 @@ export async function runFieldTypeCoverageTests(): Promise<{
     {
       name: "Optional size calculation counts the presence indicator",
       fn: testOptionalSizeAccountsForPresenceByte,
+    },
+    {
+      name: "One-field bytes struct size dereferences its field",
+      fn: testOneFieldBytesStructSizeUsesField,
     },
   ];
 

@@ -659,7 +659,7 @@ function generateTypeAliasEncoder(
 
   // Generate encoding logic for the aliased type
   // Create a pseudo-field with no name to use existing encoding logic
-  const pseudoField = { ...aliasedType, name: 'value' };
+  const pseudoField = { ...aliasedType, name: 'value', __typeAlias: true };
   code += generateEncodeFieldCoreImpl(pseudoField, schema, globalEndianness, 'value', '    ');
 
   code += `    return this.finish();\n`;

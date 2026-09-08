@@ -770,7 +770,7 @@ export function generateCalculateSizeMethod(
     // Normal size calculation.
     // For type aliases (single pseudo-field named 'value'), use empty prefix
     // For normal types, use "value." prefix to access fields
-    const isTypeAlias = fields.length === 1 && (fields[0] as any).name === 'value';
+    const isTypeAlias = fields.length === 1 && (fields[0] as any).__typeAlias === true;
     const valuePrefix = isTypeAlias ? "" : "value.";
 
     // Generate size calculation for each field, then fold runs of constant
