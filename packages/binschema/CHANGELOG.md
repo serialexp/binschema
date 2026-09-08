@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.8.0 (2026-09-08)
+
+### Features
+
+- add Zig generator — phases 1 & 2 (runtime, structs, strings, arrays)
+- phase 3a — same-struct computed fields + const
+- phase 3b — cross-struct ../ parent references
+- phase 3c — from_after_field + varlength integers
+- computed_count arrays
+- selectors over homogeneous arrays (length_of/crc32_of of selected sub-field)
+- enum types (Phase 4a)
+- bitfield fields (Phase 4b)
+- optional fields (Phase 4c)
+- discriminated_union + choice, byte_budget, and measured length_of
+- named union types + verified first/last selectors over choice arrays
+- sum_of_type_sizes and sum_of_sizes computed fields
+- corresponding<T> selector with per-element occurrence capture
+- length_prefixed_items array kind (Phase 5)
+- conditional fields (Phase 5)
+- signed varlength (zigzag / SLEB128) + harness varlength values
+- array transform delta (Phase 5)
+- terminated & framed array kinds (Phase 5)
+- latin1 & utf16 string encodings (Phase 5)
+- alignment padding field type (Phase 5)
+- const on fixed-length strings (Phase 5)
+- varlength computed length_of/count_of (Phase 5)
+- compressed regions (store/deflate/gzip) (Phase 5)
+- support variant_terminated arrays
+- support field_id_delta computed+conditional fields
+- instances (random-access position fields)
+- _root cross-struct decode references
+- DNS label compression — back_reference + non-struct DU variants
+- Kerberos ASN.1/DER — recursive content-first encoding
+- resolve bare ancestor-scope field refs via root pointer
+- resolve bare aliases to primitives (closes pcf_full)
+- bit-presence optionals (closes optional_builtin_bit)
+- stamp a "generated, do not edit" banner on every vendored runtime file
+
+### Bug Fixes
+
+- make generated decoders pass strict browser tsc
+- correct calculateSize for bytes/padding + add strict-tsc gate
+- free the element slice when an array decode is truncated
+- reference sanitized type names at use sites, not just declarations
+- make field-type dispatch exhaustive in all five generators
+- thread context through nested union variants
+- preserve efficient and correct nested codecs
+
+### Tests
+
+- pin sequential length-prefixed arrays (Go length-var collision)
+
+### Documentation
+
+- advertise Zig as a supported generator in docs + website
+
+### Refactoring
+
+- fold constant runs in calculateSize output
+- move __bs_* expression helpers into the runtime
+
+### Other
+
+- fix(go,rust): resolve sub-field selectors over homogeneous arrays
+- fix(typescript,go): correct nested named-field union decode + sequential array length vars
+
 ## 0.7.0 (2026-06-01)
 
 ### Features
