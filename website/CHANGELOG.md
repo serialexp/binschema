@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0 (2026-09-08)
+
+### Documentation
+
+- advertise Zig as a supported generator in docs + website
+
+### Chores
+
+- untrack prepare-docs build artifacts
+
 ## 0.7.0 (2026-06-01)
 
 ### Documentation
