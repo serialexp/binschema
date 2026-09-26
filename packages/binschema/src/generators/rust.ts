@@ -7659,11 +7659,7 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
       lines.push(`${innerInd}{`);
       if (kind === "fixed") {
         const length = (typeof rawValueType === "object" ? rawValueType.length : 0) || 0;
-        lines.push(`${innerInd}    let mut buf: Vec<u8> = Vec::with_capacity(${length});`);
-        lines.push(`${innerInd}    for _ in 0..${length} {`);
-        lines.push(`${innerInd}        buf.push(decoder.read_byte()?);`);
-        lines.push(`${innerInd}    }`);
-        lines.push(`${innerInd}    Some(buf)`);
+        lines.push(`${innerInd}    Some(decoder.read_bytes_vec(${length})?)`);
       } else if (kind === "length_prefixed") {
         const lengthType = (typeof rawValueType === "object" ? rawValueType.length_type : undefined) || "uint8";
         let readLen: string;
@@ -7684,11 +7680,9 @@ function generateDecodeOptional(field: any, varName: string, endianness: string,
             readLen = "decoder.read_uint8()? as usize";
         }
         lines.push(`${innerInd}    let len = ${readLen};`);
-        lines.push(`${innerInd}    let mut buf: Vec<u8> = Vec::with_capacity(len);`);
-        lines.push(`${innerInd}    for _ in 0..len {`);
-        lines.push(`${innerInd}        buf.push(decoder.read_byte()?);`);
-        lines.push(`${innerInd}    }`);
-        lines.push(`${innerInd}    Some(buf)`);
+        // One bounds-checked read: the length is checked against the input
+        // before anything is allocated.
+        lines.push(`${innerInd}    Some(decoder.read_bytes_vec(len)?)`);
       } else if (kind === "null_terminated") {
         lines.push(`${innerInd}    let mut buf: Vec<u8> = Vec::new();`);
         lines.push(`${innerInd}    loop {`);
@@ -7765,7 +7759,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
         // Read byte count, then read code_units = byte_count / 2
         lines.push(`${indent}let byte_length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
         lines.push(`${indent}let num_units = byte_length / 2;`);
-        lines.push(`${indent}let mut code_units = Vec::with_capacity(num_units);`);
+        lines.push(`${indent}let mut code_units = Vec::with_capacity(decoder.capacity_hint(num_units));`);
         lines.push(`${indent}for _ in 0..num_units {`);
         lines.push(`${indent}    code_units.push(${emitDecoderRead("uint16", stringRustEndianness, aligned)});`);
         lines.push(`${indent}}`);
@@ -7806,7 +7800,7 @@ function generateDecodeString(field: any, varName: string, endianness: string, i
         const lengthField = field.length_field;
         const lengthFieldRust = toRustFieldName(lengthField);
         lines.push(`${indent}let num_units = ${lengthFieldRust} as usize / 2;`);
-        lines.push(`${indent}let mut code_units = Vec::with_capacity(num_units);`);
+        lines.push(`${indent}let mut code_units = Vec::with_capacity(decoder.capacity_hint(num_units));`);
         lines.push(`${indent}for _ in 0..num_units {`);
         lines.push(`${indent}    code_units.push(${emitDecoderRead("uint16", stringRustEndianness, aligned)});`);
         lines.push(`${indent}}`);
@@ -7898,10 +7892,24 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     lines.push(`${indent}let mut item_delta_run: i64 = 0;`);
   }
 
+  // A byte-aligned run of plain bytes with a known count is one bounds-checked
+  // read_bytes_vec instead of a push per byte. It also checks the count against
+  // the input before allocating anything. Delta-transformed bytes still need
+  // the per-item running sum.
+  const bulkBytes = items.type === "uint8" && aligned && !isDeltaTransform;
+  const readBulkBytes = (count: string): string[] => [
+    `${indent}let ${varName} = decoder.read_bytes_vec(${count})?;`,
+  ];
+
+  // Counts read from the input are untrusted, so reservations go through
+  // capacity_hint, which caps them at the bytes left in the input.
   if (kind === "length_prefixed") {
     const lengthType = field.length_type || "uint8";
     lines.push(`${indent}let length = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
-    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(length);`);
+    if (bulkBytes) {
+      return [...lines, ...readBulkBytes("length")];
+    }
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(decoder.capacity_hint(length));`);
     lines.push(`${indent}for _ in 0..length {`);
   } else if (kind === "field_referenced") {
     const lengthField = field.length_field;
@@ -7920,7 +7928,10 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
       // Field is local - access directly. Safe to compute the Rust identifier
       // here because _root references take the parent-context branch below.
       const lengthFieldRust = toRustFieldName(lengthField);
-      lines.push(`${indent}let mut ${varName} = Vec::with_capacity(${lengthFieldRust} as usize);`);
+      if (bulkBytes) {
+        return [...lines, ...readBulkBytes(`${lengthFieldRust} as usize`)];
+      }
+      lines.push(`${indent}let mut ${varName} = Vec::with_capacity(decoder.capacity_hint(${lengthFieldRust} as usize));`);
       lines.push(`${indent}for _ in 0..${lengthFieldRust} {`);
     } else {
       // Field is in parent context - look it up from ctx. Strip the `_root.`
@@ -7933,15 +7944,18 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
       lines.push(`${indent}    .and_then(|c| c.get("${ctxKey}"))`);
       lines.push(`${indent}    .copied()`);
       lines.push(`${indent}    .ok_or_else(|| binschema_runtime::BinSchemaError::ContextMissing("${ctxKey}".to_string()))? as usize;`);
-      lines.push(`${indent}let mut ${varName} = Vec::with_capacity(${varName}_length);`);
+      if (bulkBytes) {
+        return [...lines, ...readBulkBytes(`${varName}_length`)];
+      }
+      lines.push(`${indent}let mut ${varName} = Vec::with_capacity(decoder.capacity_hint(${varName}_length));`);
       lines.push(`${indent}for _ in 0..${varName}_length {`);
     }
   } else if (kind === "fixed") {
     const length = field.length || 0;
-    if (items.type === "uint8" && aligned) {
-      lines.push(`${indent}let ${varName} = decoder.read_bytes_vec(${length})?;`);
-      return lines;
+    if (bulkBytes) {
+      return [...lines, ...readBulkBytes(`${length}`)];
     }
+    // The length is a schema constant, not input, so it is reserved as is.
     lines.push(`${indent}let mut ${varName} = Vec::with_capacity(${length});`);
     lines.push(`${indent}for _ in 0..${length} {`);
   } else if (kind === "null_terminated") {
@@ -7986,7 +8000,7 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     // Each item has a length prefix
     const lengthType = field.length_type || "uint8";
     lines.push(`${indent}let count = ${emitDecoderRead(lengthType, rustEndianness, aligned)} as usize;`);
-    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(decoder.capacity_hint(count));`);
     lines.push(`${indent}for _ in 0..count {`);
   } else if (kind === "computed_count") {
     // Count is computed from another expression
@@ -7994,7 +8008,7 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     // Wrap the whole expression in parentheses before casting to usize,
     // otherwise `as usize` only applies to the last operand
     lines.push(`${indent}let count = (${countExpr}) as usize;`);
-    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(decoder.capacity_hint(count));`);
     lines.push(`${indent}for _ in 0..count {`);
   } else if (kind === "packed_count") {
     // Thrift packed collection header: high nibble is the count (low nibble is
@@ -8007,7 +8021,7 @@ function generateDecodeArray(field: any, varName: string, endianness: string, ru
     lines.push(`${indent}} else {`);
     lines.push(`${indent}    ((packed_header >> 4) & 0x0F) as usize`);
     lines.push(`${indent}};`);
-    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(count);`);
+    lines.push(`${indent}let mut ${varName} = Vec::with_capacity(decoder.capacity_hint(count));`);
     lines.push(`${indent}for _ in 0..count {`);
   } else if (kind === "signature_terminated") {
     // Read until a specific signature value is encountered by peeking ahead
@@ -8218,7 +8232,7 @@ function generateDecodeArrayItem(items: any, endianness: string, rustEndianness:
       }
 
       // Decode inner items
-      lines.push(`${indent}let mut item = Vec::with_capacity(inner_len);`);
+      lines.push(`${indent}let mut item = Vec::with_capacity(decoder.capacity_hint(inner_len));`);
       lines.push(`${indent}for _ in 0..inner_len {`);
       const innerLines = generateDecodeArrayItem(innerItems, endianness, rustEndianness, `${indent}    `, schema, containingTypeName, arrayFieldName, byteAligned);
       // Rename 'item' to 'inner_item' in the inner lines to avoid shadowing

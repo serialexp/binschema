@@ -5,6 +5,14 @@ Completed historical work lives in `docs/finished/COMPLETED_TODO_ITEMS.md`.
 
 ## Known bugs / paper cuts
 
+- **Rust `compressed` decode trusts the input's sizes.** `DeflateCodec` and
+  `GzipCodec` in `rust/src/codecs.rs` call `Vec::with_capacity(expected_size)`
+  with a size read from the input, and `read_to_end` has no output limit, so a
+  forged size or a small compression bomb can ask for gigabytes. Cap the
+  reservation (as `BitStreamDecoder::capacity_hint` does for arrays) and stop
+  reading past `expected_size`. Found 2026-09-26 while capping array
+  reservations; the Go/Python/Zig/TS decoders were not checked.
+
 - **TypeScript test runner `.generated/` path mismatch.** `setupRuntimeLibrary`
   in `packages/binschema/src/run-tests.ts` copies runtime files into
   `<package>/.generated/`, but `runTestSuite` in

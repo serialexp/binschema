@@ -555,7 +555,9 @@ impl<'a> BitStreamDecoder<'a> {
         if self.bit_offset != 0 {
             return Err(BinSchemaError::AlignmentRequired("read_bytes_vec requires byte alignment".to_string()));
         }
-        if self.byte_offset + n > self.bytes.len() {
+        // Compare against what is left rather than adding to the offset: `n`
+        // often comes straight from the input and could overflow the sum.
+        if n > self.remaining_bytes() {
             return Err(BinSchemaError::UnexpectedEof);
         }
         let vec = self.bytes[self.byte_offset..self.byte_offset + n].to_vec();
@@ -971,6 +973,24 @@ impl<'a> BitStreamDecoder<'a> {
         self.bytes.len()
     }
 
+    /// Returns the number of bytes not yet read. A partly read byte counts as
+    /// unread.
+    #[inline]
+    pub fn remaining_bytes(&self) -> usize {
+        self.bytes.len().saturating_sub(self.byte_offset)
+    }
+
+    /// How many items to reserve room for when the input says `claimed` items
+    /// follow. The count comes from the input, so it is not trusted: a forged
+    /// `0xFFFFFFFF` must not reserve gigabytes before a single item is read.
+    /// Items of a byte or more can never outnumber the bytes left, so the
+    /// reservation is capped there. Items smaller than a byte (bit fields)
+    /// still decode; the collection just grows past this hint.
+    #[inline]
+    pub fn capacity_hint(&self, claimed: usize) -> usize {
+        claimed.min(self.remaining_bytes())
+    }
+
     /// Seeks to a specific byte position in the stream
     /// Note: This resets the bit offset to 0
     #[inline]
@@ -1050,6 +1070,39 @@ impl<'a> BitStreamDecoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capacity_hint_is_capped_by_the_bytes_left() {
+        let bytes = [1u8, 2, 3, 4];
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
+        assert_eq!(decoder.remaining_bytes(), 4);
+        assert_eq!(decoder.capacity_hint(2), 2);
+        assert_eq!(decoder.capacity_hint(u32::MAX as usize), 4);
+        assert_eq!(decoder.capacity_hint(usize::MAX), 4);
+
+        decoder.read_byte().unwrap();
+        assert_eq!(decoder.capacity_hint(usize::MAX), 3);
+        // A partly read byte still counts as left.
+        decoder.read_bits(3).unwrap();
+        assert_eq!(decoder.remaining_bytes(), 3);
+    }
+
+    #[test]
+    fn read_bytes_vec_rejects_lengths_past_the_end_without_overflowing() {
+        let bytes = [1u8, 2, 3];
+        let mut decoder = BitStreamDecoder::new(&bytes, BitOrder::MsbFirst);
+        decoder.read_byte().unwrap();
+        assert!(matches!(
+            decoder.read_bytes_vec(usize::MAX),
+            Err(BinSchemaError::UnexpectedEof)
+        ));
+        assert!(matches!(
+            decoder.read_bytes_vec(3),
+            Err(BinSchemaError::UnexpectedEof)
+        ));
+        assert_eq!(decoder.read_bytes_vec(2).unwrap(), vec![2, 3]);
+        assert_eq!(decoder.remaining_bytes(), 0);
+    }
 
     #[test]
     fn test_uint8_roundtrip() {

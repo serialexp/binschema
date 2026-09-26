@@ -789,5 +789,55 @@ export function runRustGeneratorTests(): { passed: number; failed: number; check
     });
   }
 
+  // Counts read from the input must not size a reservation directly: a forged
+  // 0xFFFFFFFF would otherwise reserve gigabytes before one item is read.
+  try {
+    const schema: BinarySchema = {
+      config: { endianness: "big_endian" },
+      types: {
+        Item: {
+          sequence: [{ name: "v", type: "uint32" }],
+        },
+        Lists: {
+          sequence: [
+            { name: "count", type: "uint16" },
+            { name: "prefixed", type: "array", kind: "length_prefixed", length_type: "uint32", items: { type: "Item" } },
+            { name: "referenced", type: "array", kind: "field_referenced", length_field: "count", items: { type: "uint16" } },
+            { name: "blob", type: "array", kind: "length_prefixed", length_type: "uint32", items: { type: "uint8" } },
+            { name: "deltas", type: "array", kind: "fixed", length: 3, items: { type: "uint8" }, transform: "delta" },
+          ],
+        },
+      },
+    } as any;
+
+    const result = generateRust(schema, "Lists");
+    const cappedPrefixed = result.code.includes("Vec::with_capacity(decoder.capacity_hint(length))");
+    const cappedReferenced = result.code.includes("Vec::with_capacity(decoder.capacity_hint(count as usize))");
+    const bulkBlob = result.code.includes("let blob = decoder.read_bytes_vec(length)?;");
+    // Delta-transformed bytes keep the per-item running sum.
+    const deltaNotBulk = !result.code.includes("let deltas = decoder.read_bytes_vec")
+      && result.code.includes("item_delta_run");
+    const uncapped = /Vec::with_capacity\((length|count as usize)\)/.test(result.code);
+
+    if (cappedPrefixed && cappedReferenced && bulkBlob && deltaNotBulk && !uncapped) {
+      passed++;
+      checks.push({ description: "Input-sized reservations are capped", passed: true });
+    } else {
+      failed++;
+      checks.push({
+        description: "Input-sized reservations are capped",
+        passed: false,
+        message: `prefixed=${cappedPrefixed}, referenced=${cappedReferenced}, bulkBlob=${bulkBlob}, deltaNotBulk=${deltaNotBulk}, uncapped=${uncapped}`,
+      });
+    }
+  } catch (error: any) {
+    failed++;
+    checks.push({
+      description: "Input-sized reservations are capped",
+      passed: false,
+      message: `Exception: ${error.message}`,
+    });
+  }
+
   return { passed, failed, checks };
 }
